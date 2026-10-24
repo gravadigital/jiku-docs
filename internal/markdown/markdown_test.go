@@ -112,6 +112,7 @@ func TestRenderShare(t *testing.T) {
 	other := "01JBX7Q2M4N8P6R3T5V9W1Y0ZB"
 	doc := "---\njiku:\n  projects: [12]\n---\n# Título\n\n![diagrama](https://web.example/docs/attachments/" + att + ")\n" +
 		"[otro adjunto](/docs/attachments/" + other + ")\n[doc](../infra/x.md) y [web](https://example.com/x)\n" +
+		"[ref](https://web.example/docs/01JBX7Q2M4N8P6R3T5V9W1Y0ZC) fin\n" +
 		"<script>alert(1)</script>\n[js](javascript:alert(1))\n"
 	html, err := RenderShare(doc, ShareRender{AttachmentURL: func(id string) string {
 		if id == att {
@@ -122,12 +123,12 @@ func TestRenderShare(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{`src="/p/docs/TOKEN/attachments/` + att + `"`, "otro adjunto", "doc y", `href="https://example.com/x"`} {
+	for _, want := range []string{`src="/p/docs/TOKEN/attachments/` + att + `"`, "otro adjunto", "doc y", `href="https://example.com/x"`, "ref fin"} {
 		if !strings.Contains(html, want) {
 			t.Errorf("missing %q in %s", want, html)
 		}
 	}
-	for _, bad := range []string{"projects", "<script", "javascript:", "/docs/attachments/" + other, "../infra"} {
+	for _, bad := range []string{"projects", "<script", "javascript:", "/docs/attachments/" + other, "../infra", "01JBX7Q2M4N8P6R3T5V9W1Y0ZC"} {
 		if strings.Contains(html, bad) {
 			t.Errorf("unexpected %q in %s", bad, html)
 		}

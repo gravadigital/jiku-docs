@@ -258,7 +258,7 @@ func Run(ctx context.Context, o Options, svc *service.Service, log *slog.Logger)
 	importedLink := map[string]string{}
 	for _, p := range plan {
 		if p.status == "pending" {
-			importedLink[p.note.ID] = webURL + "/docs/documents/" + p.docID
+			importedLink[p.note.ID] = webURL + "/docs/" + p.docID
 		}
 	}
 	// File names: unique per folder, stable across runs.

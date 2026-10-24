@@ -198,7 +198,7 @@ go run ./cmd/jiku-docs import hedgedoc --mapping .local/hedgedoc-mapping.csv
   `docs.grava.io/uploads/`) se descargan y suben como adjuntos por el servicio de archivos de core (D-3); el
   markdown queda con `{JIKU_WEB_URL}/docs/attachments/{id}`.
 - **Enlaces entre notas** (`{--hedgedoc-url}/{alias|shortid|id}`, `/s/…`, `/p/…`) se reescriben a
-  `{JIKU_WEB_URL}/docs/documents/{id}`; los que no resuelven quedan como estaban y se informan.
+  `{JIKU_WEB_URL}/docs/{id}`; los que no resuelven quedan como estaban y se informan.
 - **Idempotente**: ids deterministas (ULID con la fecha de la nota); reimportar no duplica.
 - **Informe** (`--report`, default `.local/hedgedoc-import-report.csv`): estado por nota, ruta destino,
   adjuntos, enlaces sin resolver y **posibles secretos** (regla y línea, nunca el valor). Esas notas fueron

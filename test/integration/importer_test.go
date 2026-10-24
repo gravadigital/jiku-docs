@@ -80,7 +80,7 @@ func TestHedgeDocImport(t *testing.T) {
 	if len(atts) != 1 || !strings.Contains(content, "http://web.test/docs/attachments/"+atts[0].(map[string]any)["id"].(string)) {
 		t.Fatalf("asset not migrated: %v\n%s", atts, content)
 	}
-	if !strings.Contains(content, "http://web.test/docs/documents/"+docs[0]["id"].(string)) || strings.Contains(content, "hd.test") {
+	if !strings.Contains(content, "http://web.test/docs/"+docs[0]["id"].(string)) || strings.Contains(content, "hd.test") {
 		t.Fatalf("note link not rewritten:\n%s", content)
 	}
 	if !strings.Contains(content, "hedgedoc:") || toStrings(g["topics"])[0] != "infra" {

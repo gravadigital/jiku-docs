@@ -68,8 +68,8 @@ func TestBuildContentAndLinks(t *testing.T) {
 		t.Errorf("body %q", body)
 	}
 	r := NewResolver(ns)
-	rewritten, unresolved := RewriteNoteLinks(content, "https://hd.example", r, func(n *Note) string { return "https://web/docs/documents/" + n.ShortID })
-	if !strings.Contains(rewritten, "https://web/docs/documents/xyz987 ") || !strings.Contains(rewritten, "https://web/docs/documents/abcDEF123#paso-2") {
+	rewritten, unresolved := RewriteNoteLinks(content, "https://hd.example", r, func(n *Note) string { return "https://web/docs/" + n.ShortID })
+	if !strings.Contains(rewritten, "https://web/docs/xyz987 ") || !strings.Contains(rewritten, "https://web/docs/abcDEF123#paso-2") {
 		t.Errorf("links not rewritten:\n%s", rewritten)
 	}
 	if len(unresolved) != 0 {

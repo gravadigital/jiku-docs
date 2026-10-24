@@ -60,6 +60,9 @@ var policy = func() *bluemonday.Policy {
 	return p
 }()
 
+// documentRoute is the web route of a document: `/docs/{id}` with a ULID id.
+var documentRoute = regexp.MustCompile(`/docs/[0-9A-HJKMNP-TV-Z]{26}/?$`)
+
 // isDocumentLink reports a link that points to another document of the tree: a relative `.md`
 // path, or a jiku-docs document route. Those are shown as plain text in a shared page.
 func isDocumentLink(dest string) bool {
@@ -76,7 +79,7 @@ func isDocumentLink(dest string) bool {
 	if u.Scheme != "http" && u.Scheme != "https" {
 		return false
 	}
-	return strings.Contains(u.Path, "/docs/documents/") || strings.HasSuffix(strings.ToLower(u.Path), ".md")
+	return documentRoute.MatchString(u.Path) || strings.HasSuffix(strings.ToLower(u.Path), ".md")
 }
 
 // RenderShare renders the body of a document (frontmatter removed) to sanitised HTML for a

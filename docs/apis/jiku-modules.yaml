@@ -62,7 +62,7 @@ operations:
   registerModule:
     action: send
     channel: { $ref: '#/channels/moduleRecord' }
-    description: El módulo escribe su clave al arrancar. Rol docs-service, solo la clave `docs`.
+    description: El módulo escribe su clave al arrancar. Rol `docs`, solo la clave `docs`.
   watchModules:
     action: receive
     channel: { $ref: '#/channels/moduleRecord' }
