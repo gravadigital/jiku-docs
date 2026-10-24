@@ -50,6 +50,8 @@ services:
   jiku-docs:
     image: gravadigital/jiku-docs:local
     container_name: jiku-docs-local
+    # Corre con el uid del host: las creds del sentinel de Jiku son 0600 del usuario que las generó.
+    user: "${LOCAL_UID:-1000}:${LOCAL_GID:-1000}"
     env_file: .env
     environment:
       - DATABASE_URL=postgres://jiku_docs:${DOCS_DATABASE_PASSWORD}@docs-database:5432/jiku_docs?sslmode=disable
