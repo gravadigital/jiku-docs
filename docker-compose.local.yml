@@ -1,0 +1,77 @@
+# jiku-docs junto al stack local de Jiku (D-7).
+#
+# Requisitos: el stack de Jiku levantado (jiku/deploy/local.sh up), que crea la red
+# `jiku-local_jiku`, NATS con el auth-callout, MinIO y el KV JIKU_MODULES. Este compose no toca
+# nada de Jiku: suma un Postgres propio, un init que crea el bucket de contenido en el MinIO de
+# Jiku y el servicio.
+#
+#   cp .env.dist .env   # completar la key del machine user y DOCS_SECRET_KEY
+#   docker compose -f docker-compose.local.yml up -d --build
+#
+# Puertos en el host (sin chocar con Jiku: 5432, 4222, 9000, 3000-3100):
+#   5442 -> Postgres de jiku-docs, 8090 -> /healthz, /readyz, /metrics
+
+name: jiku-docs-local
+
+services:
+  docs-database:
+    image: postgres:16-alpine
+    container_name: jiku-docs-local-database
+    environment:
+      - POSTGRES_DB=jiku_docs
+      - POSTGRES_USER=jiku_docs
+      - POSTGRES_PASSWORD=${DOCS_DATABASE_PASSWORD:?definí DOCS_DATABASE_PASSWORD en .env}
+    ports:
+      - "127.0.0.1:5442:5432"
+    volumes:
+      - jiku-docs-local-db:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U jiku_docs -d jiku_docs"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    networks:
+      - jiku
+
+  # Crea (idempotente) el bucket jiku-docs-content con versionado en el MinIO de Jiku.
+  docs-storage-init:
+    build:
+      context: .
+      args:
+        VERSION: local
+    image: gravadigital/jiku-docs:local
+    container_name: jiku-docs-local-storage-init
+    command: ["storage", "init"]
+    env_file: .env
+    restart: "no"
+    networks:
+      - jiku
+
+  jiku-docs:
+    image: gravadigital/jiku-docs:local
+    container_name: jiku-docs-local
+    env_file: .env
+    environment:
+      - DATABASE_URL=postgres://jiku_docs:${DOCS_DATABASE_PASSWORD}@docs-database:5432/jiku_docs?sslmode=disable
+      - NATS_URL=nats://nats:4222
+      - NATS_CREDS=/run/secrets/nats.creds
+    volumes:
+      - ${JIKU_DEPLOY_DIR:-../../jiku/deploy}/nats/creds/sentinel-client.creds:/run/secrets/nats.creds:ro
+    ports:
+      - "127.0.0.1:8090:8080"
+    depends_on:
+      docs-database:
+        condition: service_healthy
+      docs-storage-init:
+        condition: service_completed_successfully
+    restart: unless-stopped
+    networks:
+      - jiku
+
+volumes:
+  jiku-docs-local-db:
+
+networks:
+  jiku:
+    external: true
+    name: jiku-local_jiku
