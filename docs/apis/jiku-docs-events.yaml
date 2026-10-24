@@ -1,7 +1,7 @@
 asyncapi: 3.0.0
 info:
   title: jiku-docs — eventos y notificaciones
-  version: 1.0.0
+  version: 1.1.0
   description: |
     Dos canales salen del changelog de jiku-docs (outbox, misma transacción que el comando):
 
@@ -17,6 +17,17 @@ info:
     confirmado queda sin evento (a diferencia de JIKU_EVENTS de core, que es best-effort).
     Los eventos nunca llevan contenido de documentos ni URLs prefirmadas.
     Un campo nuevo dentro de v1 no es un cambio incompatible: los consumidores deben tolerarlo.
+
+    Notas de implementación (1.1.0):
+    - `folder.updated` (renombrar, mover o cambiar marcas cambia rutas y visibilidad) también se
+      notifica como `access.changed` a las personas internas, igual que `folder.acl.changed`.
+    - `document.unlocked` lleva `changes.reason`: `released` (unlock de la sesión), `forced`
+      (unlock con force) o `expired` (vencimiento; el actor es el servicio jiku-docs).
+    - `document.moved` lleva `changes.path` y, si cambió de carpeta, `changes.folderId`.
+    - Los subjects `docs-events` y `docs-notify` son fijos: NO derivan de `serviceName` del registro
+      de módulos (que solo nombra los servicios micro `{serviceName}-commands` / `-queries`). El
+      stream se llama siempre `JIKU_DOCS_EVENTS`.
+    - `actor.via` es siempre `service` cuando el actor es un servicio.
 defaultContentType: application/json
 
 servers:
@@ -192,6 +203,9 @@ components:
                     removed: { type: array, items: { type: string } }
                 restoredFrom: { type: integer }
                 message: { type: [string, 'null'] }
+                folderId: { type: object, properties: { from: { type: string }, to: { type: string } } }
+                reason: { type: string, enum: [released, forced, expired], description: Solo en document.unlocked. }
+                lock: { type: object, description: 'En document.unlocked: el lock que terminó ({ from: lock, to: null }).' }
 
     FolderEventEnvelope:
       allOf:
@@ -216,6 +230,7 @@ components:
                 path: { type: string }
                 inheritAcl: { type: boolean }
                 externalBlocked: { type: boolean }
+                sharingBlocked: { type: boolean }
             changes: { type: object }
 
     AttachmentEventEnvelope:

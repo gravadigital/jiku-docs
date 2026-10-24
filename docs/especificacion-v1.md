@@ -172,10 +172,10 @@ Como el frontmatter es parte del contenido, cambiar relaciones, temas o visibili
 
 ### Enlaces a adjuntos
 
-Los adjuntos se enlazan con una URL estable de la `api` de Jiku, nunca con la URL de S3:
+Los adjuntos se enlazan con una URL estable de la web de Jiku (D-5: `{JIKU_WEB_URL}/docs/attachments/{id}`, que la web atiende con su sesión y reenvía a la `api`), nunca con la URL de S3:
 
 ```markdown
-![Diagrama de red]({JIKU_API_URL}/docs/attachments/01JBX7Q2M4N8P6R3T5V9W1Y0ZA)
+![Diagrama de red]({JIKU_WEB_URL}/docs/attachments/01JBX7Q2M4N8P6R3T5V9W1Y0ZA)
 ```
 
 La `api` resuelve esa ruta verificando permisos y redirige a una URL prefirmada de corta duración (sección 9).
@@ -418,7 +418,7 @@ Notas:
 | `attachments.{id}.request-download` | vacío | `{ id, downloadUrl, expiresIn }` | `read` en el documento | `attachment_not_found` |
 | `attachments.{id}.delete` | vacío | `{ id }` | `write` en el documento | `attachment_not_found` |
 
-`link` es la URL estable para pegar en el markdown (`{JIKU_API_URL}/docs/attachments/{id}`). Un adjunto queda en estado `pending` hasta `confirm`; los pendientes de más de 24 h se borran. La política de tipos y tamaños (default: imágenes, PDF, planillas, comprimidos; 50 MiB) se configura en el servicio.
+`link` es la URL estable para pegar en el markdown (`{JIKU_WEB_URL}/docs/attachments/{id}`, D-5). Un adjunto queda en estado `pending` hasta `confirm`; los pendientes de más de 24 h se borran. La política de tipos y tamaños (default: imágenes, PDF, planillas, comprimidos; 50 MiB) se configura en el servicio.
 
 ### Links compartidos
 
@@ -648,7 +648,7 @@ Si en el paso 5 llega `version_conflict` (alguien escribió sin lock, por ejempl
 2. Hace `PUT` del archivo a `uploadUrl`, directo a S3.
 3. Llama a `attachments.{id}.confirm`; el servicio verifica que el objeto existe y que el checksum coincide.
 4. Inserta `link` en el markdown y guarda el documento con `update`.
-5. Al abrir el enlace, la `api` de Jiku recibe `GET /docs/attachments/{id}`, autentica a la persona con su sesión web, llama a `attachments.{id}.request-download` como `actor` y responde 302 a la URL prefirmada.
+5. Al abrir el enlace (`{JIKU_WEB_URL}/docs/attachments/{id}`, D-5), la web lo reenvía con la sesión de la persona a la `api` (`GET /api/docs/attachments/{id}`), que la autentica, llama a `attachments.{id}.request-download` como `actor` y responde 302 a la URL prefirmada.
 
 ### 9.6 Documentos de un proyecto en Jiku
 

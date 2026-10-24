@@ -1,13 +1,30 @@
 asyncapi: 3.0.0
 info:
   title: jiku-docs — comandos
-  version: 1.0.0
+  version: 1.1.0
   description: |
     Plano de escritura de jiku-docs (servicio NATS micro `jiku-docs-commands`).
     Request/reply sin persistencia. La identidad del caller es el `user-id` del subject,
     garantizado por el auth-callout de Jiku. Solo la `api` de Jiku puede enviar `actor`.
     Todos los esquemas rechazan claves desconocidas (additionalProperties: false).
     Todos los comandos son seguros de reintentar (ids de cliente y `baseVersion`).
+
+    Notas de implementación (1.1.0):
+    - Adjuntos (D-3): los bytes viven en el servicio de archivos de core. `attachments.request-upload`
+      pide `files.request-upload` a core como el servicio jiku-docs y devuelve su `uploadUrl`;
+      `confirm` descarga el objeto y verifica el SHA-256 declarado. La política de tipos y tamaños es
+      la de core; sus errores se traducen a `attachment_type_not_allowed` / `attachment_too_large`, y
+      core caído es `upstream_unavailable`. `attachments_not_configured` no se emite en v1.
+    - `content` inline de más de 256 KiB y `size` de más de 5 MiB responden `content_too_large`
+      (no `invalid_fields`), y un `fileName` fuera del patrón responde `file_name_invalid`.
+    - Un comando de una persona externa responde `caller_not_authorized`.
+    - `via`: para callers de clase servicio el origen registrado en versiones y en `actor.via` de los
+      eventos es siempre `service`. En `documents.lock` el `via` del lock (`human`/`agent`) se guarda
+      tal como lo manda el caller, también si es un servicio (jiku-go manda `agent`); el evento
+      `document.locked` igual lleva `actor.via: service`.
+    - Subida de contenido grande: `uploadUrl` es un `PUT` prefirmado de S3 (300 s) del contenido crudo.
+      La firma solo cubre el host: `Content-Type` no forma parte de ella; se recomienda
+      `text/markdown; charset=utf-8`, que es lo que manda jiku-go.
 defaultContentType: application/json
 
 servers:
@@ -145,10 +162,10 @@ operations:
   documentsLock:       { action: receive, channel: { $ref: '#/channels/documents.lock' },       reply: { channel: { $ref: '#/channels/documents.lock' } },       x-permission: write, x-error-codes: [document_not_found, document_locked, permission_denied] }
   documentsUnlock:     { action: receive, channel: { $ref: '#/channels/documents.unlock' },     reply: { channel: { $ref: '#/channels/documents.unlock' } },     x-permission: write (force exige manage), x-error-codes: [document_not_found, lock_not_held, permission_denied] }
   contentUpload:       { action: receive, channel: { $ref: '#/channels/documents.request-content-upload' }, reply: { channel: { $ref: '#/channels/documents.request-content-upload' } }, x-permission: persona interna o servicio, x-error-codes: [content_too_large, caller_not_authorized] }
-  attachmentsUpload:   { action: receive, channel: { $ref: '#/channels/attachments.request-upload' },   reply: { channel: { $ref: '#/channels/attachments.request-upload' } },   x-permission: write (documento), x-error-codes: [attachments_not_configured, document_not_found, attachment_type_not_allowed, attachment_too_large, already_exists, permission_denied] }
-  attachmentsConfirm:  { action: receive, channel: { $ref: '#/channels/attachments.confirm' },  reply: { channel: { $ref: '#/channels/attachments.confirm' } },  x-permission: el mismo caller que pidió la subida, x-error-codes: [attachments_not_configured, attachment_not_found, upload_not_found, checksum_mismatch] }
-  attachmentsDownload: { action: receive, channel: { $ref: '#/channels/attachments.request-download' }, reply: { channel: { $ref: '#/channels/attachments.request-download' } }, x-permission: read (documento), x-error-codes: [attachments_not_configured, attachment_not_found] }
-  attachmentsDelete:   { action: receive, channel: { $ref: '#/channels/attachments.delete' },   reply: { channel: { $ref: '#/channels/attachments.delete' } },   x-permission: write (documento), x-error-codes: [attachments_not_configured, attachment_not_found, permission_denied] }
+  attachmentsUpload:   { action: receive, channel: { $ref: '#/channels/attachments.request-upload' },   reply: { channel: { $ref: '#/channels/attachments.request-upload' } },   x-permission: write (documento), x-error-codes: [document_not_found, attachment_type_not_allowed, attachment_too_large, already_exists, permission_denied, upstream_unavailable] }
+  attachmentsConfirm:  { action: receive, channel: { $ref: '#/channels/attachments.confirm' },  reply: { channel: { $ref: '#/channels/attachments.confirm' } },  x-permission: el mismo caller que pidió la subida, x-error-codes: [attachment_not_found, upload_not_found, checksum_mismatch, permission_denied, upstream_unavailable] }
+  attachmentsDownload: { action: receive, channel: { $ref: '#/channels/attachments.request-download' }, reply: { channel: { $ref: '#/channels/attachments.request-download' } }, x-permission: read (documento), x-error-codes: [attachment_not_found, upstream_unavailable] }
+  attachmentsDelete:   { action: receive, channel: { $ref: '#/channels/attachments.delete' },   reply: { channel: { $ref: '#/channels/attachments.delete' } },   x-permission: write (documento), x-error-codes: [attachment_not_found, permission_denied] }
 
   sharesNew:           { action: receive, channel: { $ref: '#/channels/shares.new' },           reply: { channel: { $ref: '#/channels/shares.new' } },           x-permission: manage (carpeta del documento), x-error-codes: [document_not_found, permission_denied, sharing_blocked, share_expiry_invalid, secret_warning_not_acknowledged, already_exists] }
   sharesRevoke:        { action: receive, channel: { $ref: '#/channels/shares.revoke' },        reply: { channel: { $ref: '#/channels/shares.revoke' } },        x-permission: manage (carpeta) o creador del link, x-error-codes: [share_not_found, permission_denied] }
@@ -315,7 +332,7 @@ components:
       properties:
         actor: { $ref: '#/components/schemas/Actor' }
         sessionId: { $ref: '#/components/schemas/Ulid' }
-        via: { type: string, enum: [human, agent] }
+        via: { type: string, enum: [human, agent], description: 'Se guarda tal cual en el lock, también para servicios.' }
         ttlSeconds: { type: integer, minimum: 30, maximum: 300, default: 120 }
     DocumentsUnlock:
       type: object
@@ -358,7 +375,7 @@ components:
         id: { $ref: '#/components/schemas/Ulid' }
         documentId: { $ref: '#/components/schemas/Ulid' }
         mode: { type: string, enum: [latest, pinned] }
-        version: { type: integer, minimum: 1, description: Obligatorio con mode pinned. }
+        version: { type: integer, minimum: 1, description: 'Obligatorio con mode pinned; con mode latest es invalid_fields.' }
         expiresAt: { type: string, format: date-time, description: 'Futuro y como máximo 180 días desde ahora.' }
         includeAttachments: { type: boolean, default: true }
         note: { type: string, maxLength: 300, description: 'Para quién o para qué es el link. Solo visible internamente.' }
@@ -393,7 +410,7 @@ components:
           required: [status, data]
           properties:
             status: { const: success }
-            data: { type: object, required: [id, path], properties: { id: { $ref: '#/components/schemas/Ulid' }, path: { type: string } } }
+            data: { type: object, required: [id, path], properties: { id: { $ref: '#/components/schemas/Ulid' }, path: { type: string, description: 'Ruta de la carpeta, siempre con / al principio y al final.' } } }
         - $ref: '#/components/schemas/Failure'
     ReplyAcl:
       oneOf:
@@ -451,7 +468,7 @@ components:
               required: [contentUploadId, uploadUrl, expiresIn]
               properties:
                 contentUploadId: { $ref: '#/components/schemas/Ulid' }
-                uploadUrl: { type: string, format: uri }
+                uploadUrl: { type: string, format: uri, description: 'PUT del contenido crudo. Content-Type no está firmado (recomendado text/markdown; charset=utf-8).' }
                 expiresIn: { type: integer, description: Segundos }
         - $ref: '#/components/schemas/Failure'
     ReplyAttachmentUpload:
@@ -467,7 +484,7 @@ components:
                 id: { $ref: '#/components/schemas/Ulid' }
                 uploadUrl: { type: string, format: uri }
                 expiresIn: { type: integer }
-                link: { type: string, format: uri, description: 'URL estable para el markdown: {JIKU_API_URL}/docs/attachments/{id}' }
+                link: { type: string, format: uri, description: 'URL estable para el markdown: {JIKU_WEB_URL}/docs/attachments/{id} (D-5).' }
         - $ref: '#/components/schemas/Failure'
     ReplyAttachmentConfirm:
       oneOf:

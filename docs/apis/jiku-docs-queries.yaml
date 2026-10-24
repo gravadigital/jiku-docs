@@ -1,7 +1,7 @@
 asyncapi: 3.0.0
 info:
   title: jiku-docs — consultas
-  version: 1.0.0
+  version: 1.1.0
   description: |
     Plano de lectura de jiku-docs (servicio NATS micro `jiku-docs-queries`).
     Misma gramática que `jiku-queries` de core: filter / sort / page / fields / include / count.
@@ -9,6 +9,20 @@ info:
     Lo no visible responde `*_not_found` (no se distingue de "no existe").
     Un nombre no declarado en filter, sort, fields o include es `invalid_fields`.
     `meta.describe` es la fuente autoritativa de campos, filtros, órdenes y enums.
+
+    Notas de implementación (1.1.0):
+    - `page.limit` por encima de 200 se recorta en silencio a 200, igual que core (`meta.describe`
+      lo publica como `defaults.maxLimit`).
+    - Los clientes externos (`person-external`) no ven carpetas: `folders.list` les devuelve
+      `items: []` y `folders.get`, `folder_not_found`. Ven documentos, no el árbol.
+    - `documents.search` devuelve el mejor fragmento de cada documento (un resultado por documento).
+    - Formato de rutas: la `path` de una carpeta empieza y termina con `/` (la raíz es `/`, una
+      subcarpeta `/clientes/acme/`); la de un documento es la ruta de su carpeta más el nombre de
+      archivo (`/clientes/acme/acta.md`). El filtro `path` (exacto, sin distinguir mayúsculas) de
+      `folders.list` acepta la ruta con o sin la `/` final; `filter.path: "/"` trae la raíz.
+    - `documents.get` con `version` devuelve los metadatos de esa versión (`version`, `checksum`,
+      `sizeBytes`, `title`, `updatedAt` y `updatedBy` son los de la versión pedida); relaciones,
+      temas, lock y adjuntos son siempre los actuales.
 defaultContentType: application/json
 
 servers:
@@ -24,7 +38,7 @@ channels:
     address: '{instance}.{userId}.jiku-docs-queries.v1.meta.describe'
     parameters: &p { instance: { $ref: '#/components/parameters/instance' }, userId: { $ref: '#/components/parameters/userId' } }
     messages:
-      request: { payload: { $ref: '#/components/schemas/Empty' } }
+      request: { payload: { $ref: '#/components/schemas/DescribeQuery' } }
       reply: { payload: { $ref: '#/components/schemas/ReplyAny' } }
   folders.list:
     address: '{instance}.{userId}.jiku-docs-queries.v1.folders.list'
@@ -105,7 +119,7 @@ channels:
 operations:
   metaDescribe:      { action: receive, channel: { $ref: '#/channels/meta.describe' },           reply: { channel: { $ref: '#/channels/meta.describe' } } }
   foldersList:       { action: receive, channel: { $ref: '#/channels/folders.list' },            reply: { channel: { $ref: '#/channels/folders.list' } },            x-error-codes: [invalid_fields, invalid_cursor, query_timeout] }
-  foldersGet:        { action: receive, channel: { $ref: '#/channels/folders.get' },             reply: { channel: { $ref: '#/channels/folders.get' } },             x-error-codes: [invalid_fields, folder_not_found] }
+  foldersGet:        { action: receive, channel: { $ref: '#/channels/folders.get' },             reply: { channel: { $ref: '#/channels/folders.get' } },             x-error-codes: [invalid_fields, folder_not_found, permission_denied] }
   documentsList:     { action: receive, channel: { $ref: '#/channels/documents.list' },          reply: { channel: { $ref: '#/channels/documents.list' } },          x-error-codes: [invalid_fields, invalid_cursor, query_timeout, upstream_unavailable] }
   documentsGet:      { action: receive, channel: { $ref: '#/channels/documents.get' },           reply: { channel: { $ref: '#/channels/documents.get' } },           x-error-codes: [invalid_fields, document_not_found] }
   versionsList:      { action: receive, channel: { $ref: '#/channels/documents.versions.list' }, reply: { channel: { $ref: '#/channels/documents.versions.list' } }, x-error-codes: [invalid_fields, invalid_cursor, document_not_found] }
@@ -145,12 +159,29 @@ components:
       type: object
       additionalProperties: false
       properties:
-        limit: { type: integer, minimum: 1, maximum: 200, default: 50 }
+        limit: { type: integer, minimum: 1, default: 50, description: 'Máximo efectivo 200: un valor mayor se recorta en silencio, como en core.' }
         cursor: { type: [string, 'null'] }
     Empty:
       type: object
       additionalProperties: false
       properties: { actor: { $ref: '#/components/schemas/Actor' } }
+    DescribeQuery:
+      type: object
+      additionalProperties: false
+      description: 'Igual que core: `resources` es opcional; omitido describe todos; una lista vacía o un nombre desconocido es invalid_fields.'
+      properties:
+        actor: { $ref: '#/components/schemas/Actor' }
+        resources:
+          type: array
+          minItems: 1
+          items: { type: string, enum: [folders, documents, documents.versions, topics, attachments, shares] }
+    ClientInfo:
+      type: object
+      additionalProperties: false
+      description: 'Datos del navegador que la api reenvía para auditar el acceso al link. La IP se guarda solo como HMAC; el agente de usuario se trunca a 200 caracteres.'
+      properties:
+        ip: { type: string, maxLength: 100 }
+        userAgent: { type: string, maxLength: 2000 }
 
     # ---------- carpetas ----------
     FoldersListQuery:
@@ -164,6 +195,7 @@ components:
           properties:
             id: { oneOf: [{ $ref: '#/components/schemas/Ulid' }, { type: array, items: { $ref: '#/components/schemas/Ulid' } }] }
             parentId: { $ref: '#/components/schemas/Ulid' }
+            path: { type: string, description: 'Ruta exacta, sin distinguir mayúsculas; con o sin la / final. "/" es la raíz.' }
             pathPrefix: { type: string }
         sort: { type: array, items: { type: string, enum: [path, -path, name, -name, createdAt, -createdAt] } }
         page: { $ref: '#/components/schemas/Page' }
@@ -178,7 +210,7 @@ components:
         actor: { $ref: '#/components/schemas/Actor' }
         id: { $ref: '#/components/schemas/Ulid' }
         fields: { type: array, items: { type: string } }
-        include: { type: array, items: { type: string, enum: [acl, effectivePermission] }, description: '`acl` solo con permiso manage.' }
+        include: { type: array, items: { type: string, enum: [acl, effectivePermission] }, description: '`acl` solo con permiso manage; sin él responde permission_denied.' }
 
     # ---------- documentos ----------
     DocumentsFilter:
@@ -187,6 +219,7 @@ components:
       properties:
         id: { oneOf: [{ $ref: '#/components/schemas/Ulid' }, { type: array, items: { $ref: '#/components/schemas/Ulid' }, maxItems: 200 }] }
         folderId: { $ref: '#/components/schemas/Ulid' }
+        path: { type: string, description: 'Ruta exacta del documento (carpeta + nombre de archivo), sin distinguir mayúsculas.' }
         pathPrefix: { type: string }
         clientId: { $ref: '#/components/schemas/IntOrList' }
         projectId: { $ref: '#/components/schemas/IntOrList', description: Incluye documentos vinculados a requisitos o tareas del proyecto. }
@@ -262,7 +295,7 @@ components:
       required: [sinceSeq]
       properties:
         actor: { $ref: '#/components/schemas/Actor' }
-        sinceSeq: { type: integer, minimum: 0, description: 'Último seq aplicado. 0 = desde el inicio de la retención.' }
+        sinceSeq: { type: integer, minimum: 0, description: 'Último seq aplicado. 0 = desde el inicio de la retención y nunca responde invalid_cursor; un valor más viejo que la retención (30 días) sí.' }
         limit: { type: integer, minimum: 1, maximum: 500, default: 200 }
         filter:
           type: object
@@ -310,7 +343,7 @@ components:
       properties:
         id: { $ref: '#/components/schemas/Ulid' }
         name: { type: string }
-        path: { type: string }
+        path: { type: string, description: 'Empieza y termina con /: "/" es la raíz, "/clientes/acme/" una subcarpeta.' }
         parentId: { type: [string, 'null'] }
         inheritAcl: { type: boolean }
         externalBlocked: { type: boolean }
@@ -379,7 +412,8 @@ components:
         type: { type: string, description: 'Tipo de evento (document.updated, document.moved, ...).' }
         documentId: { $ref: '#/components/schemas/Ulid' }
         version: { type: [integer, 'null'] }
-        path: { type: string }
+        path: { type: string, description: Ruta del documento en el momento del evento. }
+        checksum: { type: [string, 'null'], description: 'Checksum de la versión del evento (sha256:<hex>), para que un cliente sincronizado compare sin pedir el documento.' }
         occurredAt: { type: string, format: date-time }
     Attachment:
       type: object
@@ -389,7 +423,7 @@ components:
         fileName: { type: string }
         mimeType: { type: string }
         sizeBytes: { type: integer }
-        link: { type: string, format: uri }
+        link: { type: string, format: uri, description: '{JIKU_WEB_URL}/docs/attachments/{id} (D-5).' }
         uploadedBy: { type: string }
         createdAt: { type: string, format: date-time }
 
@@ -415,14 +449,16 @@ components:
       additionalProperties: false
       required: [token]
       properties:
-        token: { type: string, pattern: '^jds_[A-Za-z0-9_-]{43}$' }
+        token: { type: string, maxLength: 200, description: 'Formato jds_ + 43 caracteres base64url. Un token mal formado responde share_not_found, como cualquier link inválido.' }
+        client: { $ref: '#/components/schemas/ClientInfo' }
     ShareAttachmentQuery:
       type: object
       additionalProperties: false
       required: [token, attachmentId]
       properties:
-        token: { type: string, pattern: '^jds_[A-Za-z0-9_-]{43}$' }
+        token: { type: string, maxLength: 200 }
         attachmentId: { $ref: '#/components/schemas/Ulid' }
+        client: { $ref: '#/components/schemas/ClientInfo' }
     Share:
       type: object
       description: Nunca incluye el token ni su hash.
@@ -514,7 +550,7 @@ components:
               required: [items, nextSeq, hasMore]
               properties:
                 items: { type: array, items: { $ref: '#/components/schemas/Change' } }
-                nextSeq: { type: integer }
+                nextSeq: { type: integer, description: 'Último seq examinado (aunque su cambio no fuera visible para el caller); igual a sinceSeq si no hubo nada nuevo. Nunca menor que sinceSeq: es el sinceSeq del próximo pedido.' }
                 hasMore: { type: boolean }
         - $ref: '#/components/schemas/Failure'
     ReplyTopics:
