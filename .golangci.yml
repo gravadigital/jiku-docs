@@ -1,0 +1,39 @@
+version: "2"
+run:
+  timeout: 5m
+linters:
+  default: standard
+  enable:
+    - bodyclose
+    - errorlint
+    - gosec
+    - unconvert
+  settings:
+    errcheck:
+      exclude-functions:
+        - (io.Closer).Close
+        - (*os.File).Close
+        - (*database/sql.DB).Close
+        - (*database/sql.Rows).Close
+        - (*github.com/gravadigital/jiku-go.Client).Close
+        - (*github.com/minio/minio-go/v7.Object).Close
+        - (*github.com/jackc/pgx/v5.Conn).Close
+        - (*github.com/gravadigital/jiku-docs/internal/protocol.Error).With
+    gosec:
+      excludes:
+        - G304 # paths come from the operator's command line, not from requests
+        - G118 # shutdown deliberately uses a fresh context
+        - G115 # integer conversions are bounded by validation
+        - G202 # SQL is built from whitelisted fragments; values always travel as parameters
+        - G201
+  exclusions:
+    rules:
+      - path: _test\.go
+        linters: [gosec, errcheck, bodyclose]
+      - path: internal/testutil/
+        linters: [gosec]
+      - path: internal/protocol/errors.go
+        text: G101
+formatters:
+  enable:
+    - gofmt
