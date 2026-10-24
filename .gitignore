@@ -3,3 +3,10 @@
 *-su.json
 .local/
 .env
+_research/
+
+# Build and test artefacts
+/bin/
+/dist/
+*.test
+coverage.out
