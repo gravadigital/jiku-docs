@@ -42,6 +42,11 @@ copian a otro repo.
 - `person-internal.yaml`: pub comandos y consultas de docs bajo su `user_id`, sub
   `{instance}.{user_id}.docs-notify.v1.>`, leer/observar el KV.
 - `person-external.yaml`: solo consultas de docs bajo su `user_id`, leer/observar el KV. Sin notify.
+- Permisos exactos de lectura/observación del KV que necesita jiku-go (lo verificó su implementación):
+  `$JS.API.STREAM.INFO.KV_JIKU_MODULES`, `$JS.API.DIRECT.GET.KV_JIKU_MODULES.$KV.JIKU_MODULES.>`,
+  `$JS.API.CONSUMER.CREATE.KV_JIKU_MODULES` y `$JS.API.CONSUMER.CREATE.KV_JIKU_MODULES.>`,
+  `$JS.FC.KV_JIKU_MODULES.>` (pub) y `$SRV.PING.jiku-docs-queries` (request). Van en `connector.yaml`,
+  `person-internal.yaml`, `person-external.yaml` y `docs.yaml`.
 - **La api se distingue por `user-id`**: jiku-docs recibe `JIKU_API_USER_ID` (local: `390014149763006466`,
   el `userId` de `jiku/local/api-su.json`). Solo ese caller puede mandar `actor` y usar `shares.resolve` /
   `shares.attachment`.
