@@ -1,0 +1,586 @@
+asyncapi: 3.0.0
+info:
+  title: jiku-docs — consultas
+  version: 1.0.0
+  description: |
+    Plano de lectura de jiku-docs (servicio NATS micro `jiku-docs-queries`).
+    Misma gramática que `jiku-queries` de core: filter / sort / page / fields / include / count.
+    Todas las consultas filtran por permisos antes de devolver o paginar.
+    Lo no visible responde `*_not_found` (no se distingue de "no existe").
+    Un nombre no declarado en filter, sort, fields o include es `invalid_fields`.
+    `meta.describe` es la fuente autoritativa de campos, filtros, órdenes y enums.
+defaultContentType: application/json
+
+servers:
+  jiku-nats:
+    host: '{natsHost}'
+    protocol: nats
+    variables:
+      natsHost:
+        default: nats.jiku.local:4222
+
+channels:
+  meta.describe:
+    address: '{instance}.{userId}.jiku-docs-queries.v1.meta.describe'
+    parameters: &p { instance: { $ref: '#/components/parameters/instance' }, userId: { $ref: '#/components/parameters/userId' } }
+    messages:
+      request: { payload: { $ref: '#/components/schemas/Empty' } }
+      reply: { payload: { $ref: '#/components/schemas/ReplyAny' } }
+  folders.list:
+    address: '{instance}.{userId}.jiku-docs-queries.v1.folders.list'
+    parameters: *p
+    messages:
+      request: { payload: { $ref: '#/components/schemas/FoldersListQuery' } }
+      reply: { payload: { $ref: '#/components/schemas/ReplyFolderPage' } }
+  folders.get:
+    address: '{instance}.{userId}.jiku-docs-queries.v1.folders.get'
+    parameters: *p
+    messages:
+      request: { payload: { $ref: '#/components/schemas/FoldersGetQuery' } }
+      reply: { payload: { $ref: '#/components/schemas/ReplyFolder' } }
+  documents.list:
+    address: '{instance}.{userId}.jiku-docs-queries.v1.documents.list'
+    parameters: *p
+    messages:
+      request: { payload: { $ref: '#/components/schemas/DocumentsListQuery' } }
+      reply: { payload: { $ref: '#/components/schemas/ReplyDocumentPage' } }
+  documents.get:
+    address: '{instance}.{userId}.jiku-docs-queries.v1.documents.get'
+    parameters: *p
+    messages:
+      request: { payload: { $ref: '#/components/schemas/DocumentsGetQuery' } }
+      reply: { payload: { $ref: '#/components/schemas/ReplyDocument' } }
+  documents.versions.list:
+    address: '{instance}.{userId}.jiku-docs-queries.v1.documents.versions.list'
+    parameters: *p
+    messages:
+      request: { payload: { $ref: '#/components/schemas/VersionsListQuery' } }
+      reply: { payload: { $ref: '#/components/schemas/ReplyVersionPage' } }
+  documents.search:
+    address: '{instance}.{userId}.jiku-docs-queries.v1.documents.search'
+    parameters: *p
+    messages:
+      request: { payload: { $ref: '#/components/schemas/SearchQuery' } }
+      reply: { payload: { $ref: '#/components/schemas/ReplySearch' } }
+  documents.changes:
+    address: '{instance}.{userId}.jiku-docs-queries.v1.documents.changes'
+    parameters: *p
+    messages:
+      request: { payload: { $ref: '#/components/schemas/ChangesQuery' } }
+      reply: { payload: { $ref: '#/components/schemas/ReplyChanges' } }
+  topics.list:
+    address: '{instance}.{userId}.jiku-docs-queries.v1.topics.list'
+    parameters: *p
+    messages:
+      request: { payload: { $ref: '#/components/schemas/TopicsListQuery' } }
+      reply: { payload: { $ref: '#/components/schemas/ReplyTopics' } }
+  attachments.list:
+    address: '{instance}.{userId}.jiku-docs-queries.v1.attachments.list'
+    parameters: *p
+    messages:
+      request: { payload: { $ref: '#/components/schemas/AttachmentsListQuery' } }
+      reply: { payload: { $ref: '#/components/schemas/ReplyAttachments' } }
+
+  shares.list:
+    address: '{instance}.{userId}.jiku-docs-queries.v1.shares.list'
+    parameters: *p
+    messages:
+      request: { payload: { $ref: '#/components/schemas/SharesListQuery' } }
+      reply: { payload: { $ref: '#/components/schemas/ReplyShares' } }
+  shares.resolve:
+    address: '{instance}.{userId}.jiku-docs-queries.v1.shares.resolve'
+    description: Solo la api de Jiku, sin actor. Cualquier otro caller recibe caller_not_authorized.
+    parameters: *p
+    messages:
+      request: { payload: { $ref: '#/components/schemas/ShareResolveQuery' } }
+      reply: { payload: { $ref: '#/components/schemas/ReplyShareResolve' } }
+  shares.attachment:
+    address: '{instance}.{userId}.jiku-docs-queries.v1.shares.attachment'
+    description: Solo la api de Jiku, sin actor.
+    parameters: *p
+    messages:
+      request: { payload: { $ref: '#/components/schemas/ShareAttachmentQuery' } }
+      reply: { payload: { $ref: '#/components/schemas/ReplyShareAttachment' } }
+
+operations:
+  metaDescribe:      { action: receive, channel: { $ref: '#/channels/meta.describe' },           reply: { channel: { $ref: '#/channels/meta.describe' } } }
+  foldersList:       { action: receive, channel: { $ref: '#/channels/folders.list' },            reply: { channel: { $ref: '#/channels/folders.list' } },            x-error-codes: [invalid_fields, invalid_cursor, query_timeout] }
+  foldersGet:        { action: receive, channel: { $ref: '#/channels/folders.get' },             reply: { channel: { $ref: '#/channels/folders.get' } },             x-error-codes: [invalid_fields, folder_not_found] }
+  documentsList:     { action: receive, channel: { $ref: '#/channels/documents.list' },          reply: { channel: { $ref: '#/channels/documents.list' } },          x-error-codes: [invalid_fields, invalid_cursor, query_timeout, upstream_unavailable] }
+  documentsGet:      { action: receive, channel: { $ref: '#/channels/documents.get' },           reply: { channel: { $ref: '#/channels/documents.get' } },           x-error-codes: [invalid_fields, document_not_found] }
+  versionsList:      { action: receive, channel: { $ref: '#/channels/documents.versions.list' }, reply: { channel: { $ref: '#/channels/documents.versions.list' } }, x-error-codes: [invalid_fields, invalid_cursor, document_not_found] }
+  documentsSearch:   { action: receive, channel: { $ref: '#/channels/documents.search' },        reply: { channel: { $ref: '#/channels/documents.search' } },        x-error-codes: [invalid_fields, query_timeout, upstream_unavailable, semantic_search_not_configured] }
+  documentsChanges:  { action: receive, channel: { $ref: '#/channels/documents.changes' },       reply: { channel: { $ref: '#/channels/documents.changes' } },       x-error-codes: [invalid_fields, invalid_cursor] }
+  topicsList:        { action: receive, channel: { $ref: '#/channels/topics.list' },             reply: { channel: { $ref: '#/channels/topics.list' } },             x-error-codes: [invalid_fields] }
+  attachmentsList:   { action: receive, channel: { $ref: '#/channels/attachments.list' },        reply: { channel: { $ref: '#/channels/attachments.list' } },        x-error-codes: [invalid_fields, document_not_found] }
+
+  sharesList:        { action: receive, channel: { $ref: '#/channels/shares.list' },             reply: { channel: { $ref: '#/channels/shares.list' } },             x-permission: manage (carpeta del documento), x-error-codes: [invalid_fields, invalid_cursor, document_not_found, permission_denied] }
+  sharesResolve:     { action: receive, channel: { $ref: '#/channels/shares.resolve' },          reply: { channel: { $ref: '#/channels/shares.resolve' } },          x-permission: solo caller api sin actor, x-error-codes: [share_not_found, caller_not_authorized] }
+  sharesAttachment:  { action: receive, channel: { $ref: '#/channels/shares.attachment' },       reply: { channel: { $ref: '#/channels/shares.attachment' } },       x-permission: solo caller api sin actor, x-error-codes: [share_not_found, caller_not_authorized] }
+
+components:
+  parameters:
+    instance: { enum: [dev, prod] }
+    userId: { description: '`sub` de Zitadel del caller.' }
+
+  schemas:
+    Ulid: { type: string, pattern: '^[0-9A-HJKMNP-TV-Z]{26}$' }
+    Actor:
+      type: object
+      additionalProperties: false
+      required: [id]
+      properties: { id: { type: string } }
+    DateRange:
+      type: object
+      additionalProperties: false
+      minProperties: 1
+      properties:
+        gte: { type: string, format: date-time }
+        lte: { type: string, format: date-time }
+    IntOrList:
+      oneOf: [{ type: integer }, { type: array, items: { type: integer }, maxItems: 200 }]
+    StrOrList:
+      oneOf: [{ type: string }, { type: array, items: { type: string }, maxItems: 200 }]
+    Page:
+      type: object
+      additionalProperties: false
+      properties:
+        limit: { type: integer, minimum: 1, maximum: 200, default: 50 }
+        cursor: { type: [string, 'null'] }
+    Empty:
+      type: object
+      additionalProperties: false
+      properties: { actor: { $ref: '#/components/schemas/Actor' } }
+
+    # ---------- carpetas ----------
+    FoldersListQuery:
+      type: object
+      additionalProperties: false
+      properties:
+        actor: { $ref: '#/components/schemas/Actor' }
+        filter:
+          type: object
+          additionalProperties: false
+          properties:
+            id: { oneOf: [{ $ref: '#/components/schemas/Ulid' }, { type: array, items: { $ref: '#/components/schemas/Ulid' } }] }
+            parentId: { $ref: '#/components/schemas/Ulid' }
+            pathPrefix: { type: string }
+        sort: { type: array, items: { type: string, enum: [path, -path, name, -name, createdAt, -createdAt] } }
+        page: { $ref: '#/components/schemas/Page' }
+        fields: { type: array, items: { type: string, enum: [id, name, path, parentId, inheritAcl, externalBlocked, sharingBlocked, createdAt, createdBy] } }
+        include: { type: array, items: { type: string, enum: [effectivePermission] } }
+        count: { oneOf: [{ type: boolean }, { const: only }] }
+    FoldersGetQuery:
+      type: object
+      additionalProperties: false
+      required: [id]
+      properties:
+        actor: { $ref: '#/components/schemas/Actor' }
+        id: { $ref: '#/components/schemas/Ulid' }
+        fields: { type: array, items: { type: string } }
+        include: { type: array, items: { type: string, enum: [acl, effectivePermission] }, description: '`acl` solo con permiso manage.' }
+
+    # ---------- documentos ----------
+    DocumentsFilter:
+      type: object
+      additionalProperties: false
+      properties:
+        id: { oneOf: [{ $ref: '#/components/schemas/Ulid' }, { type: array, items: { $ref: '#/components/schemas/Ulid' }, maxItems: 200 }] }
+        folderId: { $ref: '#/components/schemas/Ulid' }
+        pathPrefix: { type: string }
+        clientId: { $ref: '#/components/schemas/IntOrList' }
+        projectId: { $ref: '#/components/schemas/IntOrList', description: Incluye documentos vinculados a requisitos o tareas del proyecto. }
+        requirementId: { $ref: '#/components/schemas/IntOrList' }
+        taskId: { $ref: '#/components/schemas/IntOrList' }
+        topic: { $ref: '#/components/schemas/StrOrList' }
+        visibility: { type: string, enum: [internal, public] }
+        createdBy: { $ref: '#/components/schemas/StrOrList' }
+        updatedBy: { $ref: '#/components/schemas/StrOrList' }
+        createdAt: { $ref: '#/components/schemas/DateRange' }
+        updatedAt: { $ref: '#/components/schemas/DateRange' }
+        fileName: { type: string, description: Prefijo, sin distinguir mayúsculas. }
+        deleted: { type: boolean, default: false }
+        or:
+          type: array
+          maxItems: 10
+          description: Un solo nivel. Cada elemento acepta los mismos filtros, sin `or`.
+          items: { type: object }
+    DocumentsListQuery:
+      type: object
+      additionalProperties: false
+      properties:
+        actor: { $ref: '#/components/schemas/Actor' }
+        filter: { $ref: '#/components/schemas/DocumentsFilter' }
+        sort: { type: array, items: { type: string, enum: [updatedAt, -updatedAt, createdAt, -createdAt, title, -title, path, -path] } }
+        page: { $ref: '#/components/schemas/Page' }
+        fields:
+          type: array
+          items: { type: string, enum: [id, title, path, folderId, fileName, version, checksum, sizeBytes, visibility, createdAt, createdBy, updatedAt, updatedBy, deletedAt] }
+          description: 'Default: id, title, path, folderId, version, visibility, updatedAt, updatedBy.'
+        include: { type: array, items: { type: string, enum: [relations, topics, lock] } }
+        count: { oneOf: [{ type: boolean }, { const: only }] }
+    DocumentsGetQuery:
+      type: object
+      additionalProperties: false
+      required: [id]
+      properties:
+        actor: { $ref: '#/components/schemas/Actor' }
+        id: { $ref: '#/components/schemas/Ulid' }
+        version: { type: integer, minimum: 1, description: Default la versión actual. }
+        fields: { type: array, items: { type: string } }
+        include: { type: array, items: { type: string, enum: [content, relations, topics, lock, attachments] } }
+    VersionsListQuery:
+      type: object
+      additionalProperties: false
+      required: [filter]
+      properties:
+        actor: { $ref: '#/components/schemas/Actor' }
+        filter:
+          type: object
+          additionalProperties: false
+          required: [documentId]
+          properties:
+            documentId: { $ref: '#/components/schemas/Ulid' }
+            author: { $ref: '#/components/schemas/StrOrList' }
+            via: { type: string, enum: [human, agent, service] }
+            createdAt: { $ref: '#/components/schemas/DateRange' }
+        sort: { type: array, items: { type: string, enum: [version, -version] } }
+        page: { $ref: '#/components/schemas/Page' }
+    SearchQuery:
+      type: object
+      additionalProperties: false
+      required: [query]
+      properties:
+        actor: { $ref: '#/components/schemas/Actor' }
+        query: { type: string, minLength: 2, maxLength: 1000, description: 'Sintaxis de websearch_to_tsquery: frases entre comillas, OR y -palabra para excluir.' }
+        mode: { type: string, enum: [text, semantic, hybrid], default: text, description: 'En la v1 solo text. semantic e hybrid quedan reservados y responden semantic_search_not_configured.' }
+        filter: { $ref: '#/components/schemas/DocumentsFilter' }
+        limit: { type: integer, minimum: 1, maximum: 50, default: 20 }
+    ChangesQuery:
+      type: object
+      additionalProperties: false
+      required: [sinceSeq]
+      properties:
+        actor: { $ref: '#/components/schemas/Actor' }
+        sinceSeq: { type: integer, minimum: 0, description: 'Último seq aplicado. 0 = desde el inicio de la retención.' }
+        limit: { type: integer, minimum: 1, maximum: 500, default: 200 }
+        filter:
+          type: object
+          additionalProperties: false
+          properties:
+            pathPrefix: { type: string }
+    TopicsListQuery:
+      type: object
+      additionalProperties: false
+      properties:
+        actor: { $ref: '#/components/schemas/Actor' }
+        filter: { type: object, additionalProperties: false, properties: { prefix: { type: string } } }
+        page: { $ref: '#/components/schemas/Page' }
+    AttachmentsListQuery:
+      type: object
+      additionalProperties: false
+      required: [filter]
+      properties:
+        actor: { $ref: '#/components/schemas/Actor' }
+        filter:
+          type: object
+          additionalProperties: false
+          required: [documentId]
+          properties: { documentId: { $ref: '#/components/schemas/Ulid' } }
+
+    # ---------- recursos ----------
+    Relations:
+      type: object
+      additionalProperties: false
+      properties:
+        clients: { type: array, items: { type: integer } }
+        projects: { type: array, items: { type: integer } }
+        requirements: { type: array, items: { type: integer } }
+        tasks: { type: array, items: { type: integer } }
+    Lock:
+      type: [object, 'null']
+      additionalProperties: false
+      properties:
+        sessionId: { $ref: '#/components/schemas/Ulid' }
+        holder: { type: string }
+        via: { type: string, enum: [human, agent] }
+        expiresAt: { type: string, format: date-time }
+    Folder:
+      type: object
+      properties:
+        id: { $ref: '#/components/schemas/Ulid' }
+        name: { type: string }
+        path: { type: string }
+        parentId: { type: [string, 'null'] }
+        inheritAcl: { type: boolean }
+        externalBlocked: { type: boolean }
+        sharingBlocked: { type: boolean, description: Valor efectivo (incluye herencia). }
+        createdAt: { type: string, format: date-time }
+        createdBy: { type: string }
+        effectivePermission: { type: [string, 'null'], enum: [read, write, manage, null] }
+        acl:
+          type: array
+          items:
+            type: object
+            properties:
+              principalType: { type: string, enum: [role, user] }
+              principal: { type: string }
+              permission: { type: string, enum: [read, write, manage] }
+    Document:
+      type: object
+      properties:
+        id: { $ref: '#/components/schemas/Ulid' }
+        title: { type: string }
+        path: { type: string }
+        folderId: { $ref: '#/components/schemas/Ulid' }
+        fileName: { type: string }
+        version: { type: integer }
+        checksum: { type: string }
+        sizeBytes: { type: integer }
+        visibility: { type: string, enum: [internal, public] }
+        createdAt: { type: string, format: date-time }
+        createdBy: { type: string }
+        updatedAt: { type: string, format: date-time }
+        updatedBy: { type: string }
+        deletedAt: { type: [string, 'null'], format: date-time }
+        content: { type: string, description: 'Solo con include content y tamaño <= 256 KiB.' }
+        contentUrl: { type: string, format: uri, description: 'En lugar de content si supera 256 KiB. Vence a los 300 s.' }
+        relations: { $ref: '#/components/schemas/Relations' }
+        topics: { type: array, items: { type: string } }
+        lock: { $ref: '#/components/schemas/Lock' }
+        attachments: { type: array, items: { $ref: '#/components/schemas/Attachment' } }
+    Version:
+      type: object
+      properties:
+        version: { type: integer }
+        checksum: { type: string }
+        sizeBytes: { type: integer }
+        author: { type: string }
+        via: { type: string, enum: [human, agent, service] }
+        sessionId: { type: [string, 'null'] }
+        message: { type: [string, 'null'] }
+        createdAt: { type: string, format: date-time }
+    SearchHit:
+      type: object
+      properties:
+        documentId: { $ref: '#/components/schemas/Ulid' }
+        version: { type: integer }
+        title: { type: string }
+        path: { type: string }
+        headingPath: { type: array, items: { type: string } }
+        snippet: { type: string, maxLength: 500 }
+        score: { type: number }
+        updatedAt: { type: string, format: date-time }
+        updatedBy: { type: string }
+    Change:
+      type: object
+      properties:
+        seq: { type: integer }
+        type: { type: string, description: 'Tipo de evento (document.updated, document.moved, ...).' }
+        documentId: { $ref: '#/components/schemas/Ulid' }
+        version: { type: [integer, 'null'] }
+        path: { type: string }
+        occurredAt: { type: string, format: date-time }
+    Attachment:
+      type: object
+      properties:
+        id: { $ref: '#/components/schemas/Ulid' }
+        documentId: { $ref: '#/components/schemas/Ulid' }
+        fileName: { type: string }
+        mimeType: { type: string }
+        sizeBytes: { type: integer }
+        link: { type: string, format: uri }
+        uploadedBy: { type: string }
+        createdAt: { type: string, format: date-time }
+
+    # ---------- links compartidos ----------
+    SharesListQuery:
+      type: object
+      additionalProperties: false
+      required: [filter]
+      properties:
+        actor: { $ref: '#/components/schemas/Actor' }
+        filter:
+          type: object
+          additionalProperties: false
+          required: [documentId]
+          properties:
+            documentId: { $ref: '#/components/schemas/Ulid' }
+            status: { type: string, enum: [active, revoked, expired] }
+            createdBy: { $ref: '#/components/schemas/StrOrList' }
+        sort: { type: array, items: { type: string, enum: [createdAt, -createdAt, expiresAt, -expiresAt] } }
+        page: { $ref: '#/components/schemas/Page' }
+    ShareResolveQuery:
+      type: object
+      additionalProperties: false
+      required: [token]
+      properties:
+        token: { type: string, pattern: '^jds_[A-Za-z0-9_-]{43}$' }
+    ShareAttachmentQuery:
+      type: object
+      additionalProperties: false
+      required: [token, attachmentId]
+      properties:
+        token: { type: string, pattern: '^jds_[A-Za-z0-9_-]{43}$' }
+        attachmentId: { $ref: '#/components/schemas/Ulid' }
+    Share:
+      type: object
+      description: Nunca incluye el token ni su hash.
+      properties:
+        id: { $ref: '#/components/schemas/Ulid' }
+        documentId: { $ref: '#/components/schemas/Ulid' }
+        mode: { type: string, enum: [latest, pinned] }
+        version: { type: [integer, 'null'] }
+        includeAttachments: { type: boolean }
+        note: { type: [string, 'null'] }
+        status: { type: string, enum: [active, revoked, expired] }
+        createdBy: { type: string }
+        createdAt: { type: string, format: date-time }
+        expiresAt: { type: string, format: date-time }
+        revokedAt: { type: [string, 'null'], format: date-time }
+        revokedBy: { type: [string, 'null'] }
+        revokeReason: { type: [string, 'null'], enum: [manual, document_deleted, null] }
+        accessCount: { type: integer }
+        lastAccessAt: { type: [string, 'null'], format: date-time }
+
+    # ---------- respuestas ----------
+    PageInfo:
+      type: object
+      properties:
+        limit: { type: integer }
+        returned: { type: integer }
+        cursor: { type: string, description: 'Su ausencia es la única señal de fin.' }
+        total: { type: integer, description: 'Solo con count: true u "only".' }
+    Failure:
+      type: object
+      required: [status, errorCode, errorMessage]
+      properties:
+        status: { const: failure }
+        errorCode: { type: string, examples: [invalid_fields, invalid_cursor, document_not_found, folder_not_found, share_not_found, permission_denied, query_timeout, unknown_caller, caller_not_authorized, upstream_unavailable, internal_error] }
+        errorMessage: { type: string }
+        errorDetails: { type: object }
+    ReplyAny:
+      oneOf:
+        - { type: object, required: [status, data], properties: { status: { const: success }, data: { type: object } } }
+        - $ref: '#/components/schemas/Failure'
+    ReplyFolderPage:
+      oneOf:
+        - type: object
+          required: [status, data]
+          properties:
+            status: { const: success }
+            data: { type: object, properties: { items: { type: array, items: { $ref: '#/components/schemas/Folder' } }, page: { $ref: '#/components/schemas/PageInfo' } } }
+        - $ref: '#/components/schemas/Failure'
+    ReplyFolder:
+      oneOf:
+        - { type: object, required: [status, data], properties: { status: { const: success }, data: { $ref: '#/components/schemas/Folder' } } }
+        - $ref: '#/components/schemas/Failure'
+    ReplyDocumentPage:
+      oneOf:
+        - type: object
+          required: [status, data]
+          properties:
+            status: { const: success }
+            data: { type: object, properties: { items: { type: array, items: { $ref: '#/components/schemas/Document' } }, page: { $ref: '#/components/schemas/PageInfo' } } }
+        - $ref: '#/components/schemas/Failure'
+    ReplyDocument:
+      oneOf:
+        - { type: object, required: [status, data], properties: { status: { const: success }, data: { $ref: '#/components/schemas/Document' } } }
+        - $ref: '#/components/schemas/Failure'
+    ReplyVersionPage:
+      oneOf:
+        - type: object
+          required: [status, data]
+          properties:
+            status: { const: success }
+            data: { type: object, properties: { items: { type: array, items: { $ref: '#/components/schemas/Version' } }, page: { $ref: '#/components/schemas/PageInfo' } } }
+        - $ref: '#/components/schemas/Failure'
+    ReplySearch:
+      oneOf:
+        - type: object
+          required: [status, data]
+          properties:
+            status: { const: success }
+            data: { type: object, properties: { items: { type: array, items: { $ref: '#/components/schemas/SearchHit' } } } }
+        - $ref: '#/components/schemas/Failure'
+    ReplyChanges:
+      oneOf:
+        - type: object
+          required: [status, data]
+          properties:
+            status: { const: success }
+            data:
+              type: object
+              required: [items, nextSeq, hasMore]
+              properties:
+                items: { type: array, items: { $ref: '#/components/schemas/Change' } }
+                nextSeq: { type: integer }
+                hasMore: { type: boolean }
+        - $ref: '#/components/schemas/Failure'
+    ReplyTopics:
+      oneOf:
+        - type: object
+          required: [status, data]
+          properties:
+            status: { const: success }
+            data:
+              type: object
+              properties:
+                items: { type: array, items: { type: object, properties: { topic: { type: string }, documents: { type: integer } } } }
+                page: { $ref: '#/components/schemas/PageInfo' }
+        - $ref: '#/components/schemas/Failure'
+    ReplyAttachments:
+      oneOf:
+        - type: object
+          required: [status, data]
+          properties:
+            status: { const: success }
+            data: { type: object, properties: { items: { type: array, items: { $ref: '#/components/schemas/Attachment' } } } }
+        - $ref: '#/components/schemas/Failure'
+    ReplyShares:
+      oneOf:
+        - type: object
+          required: [status, data]
+          properties:
+            status: { const: success }
+            data: { type: object, properties: { items: { type: array, items: { $ref: '#/components/schemas/Share' } }, page: { $ref: '#/components/schemas/PageInfo' } } }
+        - $ref: '#/components/schemas/Failure'
+    ReplyShareResolve:
+      oneOf:
+        - type: object
+          required: [status, data]
+          properties:
+            status: { const: success }
+            data:
+              type: object
+              required: [shareId, documentId, title, version]
+              properties:
+                shareId: { $ref: '#/components/schemas/Ulid' }
+                documentId: { $ref: '#/components/schemas/Ulid' }
+                title: { type: string }
+                version: { type: integer }
+                html: { type: string, description: 'Cuerpo sanitizado, sin frontmatter, con enlaces a adjuntos reescritos a /p/docs/{token}/attachments/{id}. Hasta 256 KiB.' }
+                htmlUrl: { type: string, format: uri, description: 'En lugar de html si supera 256 KiB. Vence a los 300 s.' }
+                attachments:
+                  type: array
+                  description: Vacía si el link no incluye adjuntos.
+                  items:
+                    type: object
+                    properties:
+                      id: { $ref: '#/components/schemas/Ulid' }
+                      fileName: { type: string }
+                      mimeType: { type: string }
+        - $ref: '#/components/schemas/Failure'
+    ReplyShareAttachment:
+      oneOf:
+        - type: object
+          required: [status, data]
+          properties:
+            status: { const: success }
+            data:
+              type: object
+              required: [downloadUrl, expiresIn]
+              properties:
+                downloadUrl: { type: string, format: uri }
+                expiresIn: { type: integer }
+        - $ref: '#/components/schemas/Failure'

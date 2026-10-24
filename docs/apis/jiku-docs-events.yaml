@@ -1,0 +1,299 @@
+asyncapi: 3.0.0
+info:
+  title: jiku-docs — eventos y notificaciones
+  version: 1.0.0
+  description: |
+    Dos canales salen del changelog de jiku-docs (outbox, misma transacción que el comando):
+
+    1. Stream JetStream `JIKU_DOCS_EVENTS` — subjects `{instance}.docs-events.v1.>`.
+       Solo para servicios. Retención limits, max_age 30 días. Entrega at-least-once:
+       deduplicar por `eventId`. Publicado con `Nats-Msg-Id = eventId`.
+    2. Notificaciones por persona — `{instance}.{userId}.docs-notify.v1.{entidad}.{acción}`.
+       NATS core, sin persistencia. A todas las personas con `read` sobre el documento, conectadas o no.
+       No incluyen `snapshot.relations` ni `changes.relations`. Los huecos se cubren con
+       la consulta `documents.changes`.
+
+    Garantías: un evento siempre describe algo ya confirmado en la base; ningún cambio
+    confirmado queda sin evento (a diferencia de JIKU_EVENTS de core, que es best-effort).
+    Los eventos nunca llevan contenido de documentos ni URLs prefirmadas.
+    Un campo nuevo dentro de v1 no es un cambio incompatible: los consumidores deben tolerarlo.
+defaultContentType: application/json
+
+servers:
+  jiku-nats:
+    host: '{natsHost}'
+    protocol: nats
+    variables:
+      natsHost:
+        default: nats.jiku.local:4222
+
+channels:
+  docsEvents:
+    address: '{instance}.docs-events.v1.{entity}.{action}'
+    description: Stream JIKU_DOCS_EVENTS. El subject termina en el `type` del evento.
+    parameters:
+      instance: { $ref: '#/components/parameters/instance' }
+      entity: { enum: [document, folder, attachment, share] }
+      action: { description: 'created, updated, moved, deleted, restored, locked, unlocked, acl.changed, revoked' }
+    messages:
+      documentCreated:   { $ref: '#/components/messages/DocumentEvent' }
+      documentUpdated:   { $ref: '#/components/messages/DocumentEvent' }
+      documentMoved:     { $ref: '#/components/messages/DocumentEvent' }
+      documentDeleted:   { $ref: '#/components/messages/DocumentEvent' }
+      documentRestored:  { $ref: '#/components/messages/DocumentEvent' }
+      documentLocked:    { $ref: '#/components/messages/DocumentEvent' }
+      documentUnlocked:  { $ref: '#/components/messages/DocumentEvent' }
+      folderCreated:     { $ref: '#/components/messages/FolderEvent' }
+      folderUpdated:     { $ref: '#/components/messages/FolderEvent' }
+      folderDeleted:     { $ref: '#/components/messages/FolderEvent' }
+      folderAclChanged:  { $ref: '#/components/messages/FolderEvent' }
+      attachmentCreated: { $ref: '#/components/messages/AttachmentEvent' }
+      attachmentDeleted: { $ref: '#/components/messages/AttachmentEvent' }
+      shareCreated:      { $ref: '#/components/messages/ShareEvent' }
+      shareRevoked:      { $ref: '#/components/messages/ShareEvent' }
+  docsNotify:
+    address: '{instance}.{userId}.docs-notify.v1.{entity}.{action}'
+    description: Notificación filtrada por permisos para una persona conectada.
+    parameters:
+      instance: { $ref: '#/components/parameters/instance' }
+      userId: { description: '`sub` de Zitadel de la persona destinataria.' }
+      entity: { enum: [document, attachment, access] }
+      action: { description: 'created, updated, moved, deleted, restored, locked, unlocked, changed' }
+    messages:
+      documentNotification: { $ref: '#/components/messages/DocumentNotification' }
+      attachmentNotification: { $ref: '#/components/messages/AttachmentEvent' }
+      accessChanged: { $ref: '#/components/messages/AccessChanged' }
+
+operations:
+  publishDocsEvents:
+    action: send
+    channel: { $ref: '#/channels/docsEvents' }
+    description: Lo publica el publicador de outbox de jiku-docs.
+  consumeDocsEvents:
+    action: receive
+    channel: { $ref: '#/channels/docsEvents' }
+    description: |
+      Servicios consumidores (indexador, Jiku, conectores). Durable propio con nombre único,
+      ack explícito, filter_subject con versión, deduplicación persistida por eventId,
+      ignorar eventos propios (actor.id).
+  publishDocsNotify:
+    action: send
+    channel: { $ref: '#/channels/docsNotify' }
+  receiveDocsNotify:
+    action: receive
+    channel: { $ref: '#/channels/docsNotify' }
+    description: Daemon de sincronización y frontends, suscriptos a su propio userId.
+
+components:
+  parameters:
+    instance: { enum: [dev, prod] }
+
+  messages:
+    DocumentEvent:
+      payload: { $ref: '#/components/schemas/DocumentEventEnvelope' }
+    FolderEvent:
+      payload: { $ref: '#/components/schemas/FolderEventEnvelope' }
+    AttachmentEvent:
+      payload: { $ref: '#/components/schemas/AttachmentEventEnvelope' }
+    ShareEvent:
+      description: Solo en el stream; nunca se notifica a personas. Nunca lleva el token.
+      payload: { $ref: '#/components/schemas/ShareEventEnvelope' }
+    DocumentNotification:
+      payload: { $ref: '#/components/schemas/DocumentNotificationEnvelope' }
+    AccessChanged:
+      payload: { $ref: '#/components/schemas/AccessChangedEnvelope' }
+
+  schemas:
+    Ulid: { type: string, pattern: '^[0-9A-HJKMNP-TV-Z]{26}$' }
+    Actor:
+      type: object
+      additionalProperties: false
+      required: [id, via]
+      properties:
+        id: { type: string, description: '`sub` de Zitadel.' }
+        name: { type: [string, 'null'] }
+        via: { type: string, enum: [human, agent, service] }
+    Relations:
+      type: object
+      additionalProperties: false
+      properties:
+        clients: { type: array, items: { type: integer } }
+        projects: { type: array, items: { type: integer } }
+        requirements: { type: array, items: { type: integer } }
+        tasks: { type: array, items: { type: integer } }
+    BaseEnvelope:
+      type: object
+      required: [eventId, seq, type, version, occurredAt, correlationId, actor, entity]
+      properties:
+        eventId: { $ref: '#/components/schemas/Ulid' }
+        seq: { type: integer, description: Posición en el changelog. Monotónico. }
+        type: { type: string, description: Igual a la cola del subject (p. ej. document.updated). }
+        version: { const: v1 }
+        occurredAt: { type: string, format: date-time }
+        correlationId: { type: string }
+        actor: { $ref: '#/components/schemas/Actor' }
+
+    DocumentSnapshot:
+      type: object
+      additionalProperties: false
+      required: [title, version, checksum, visibility, folderId, path]
+      properties:
+        title: { type: string }
+        version: { type: integer }
+        checksum: { type: string }
+        sizeBytes: { type: integer }
+        visibility: { type: string, enum: [internal, public] }
+        folderId: { $ref: '#/components/schemas/Ulid' }
+        path: { type: string }
+        relations: { $ref: '#/components/schemas/Relations' }
+        topics: { type: array, items: { type: string } }
+        deleted: { type: boolean }
+        lock:
+          type: [object, 'null']
+          properties:
+            sessionId: { $ref: '#/components/schemas/Ulid' }
+            holder: { type: string }
+            via: { type: string, enum: [human, agent] }
+            expiresAt: { type: string, format: date-time }
+    DocumentEventEnvelope:
+      allOf:
+        - $ref: '#/components/schemas/BaseEnvelope'
+        - type: object
+          required: [entity, snapshot]
+          properties:
+            type: { enum: [document.created, document.updated, document.moved, document.deleted, document.restored, document.locked, document.unlocked] }
+            entity:
+              type: object
+              additionalProperties: false
+              required: [type, id, folderId, path]
+              properties:
+                type: { const: document }
+                id: { $ref: '#/components/schemas/Ulid' }
+                folderId: { $ref: '#/components/schemas/Ulid' }
+                path: { type: string }
+            snapshot: { $ref: '#/components/schemas/DocumentSnapshot' }
+            changes:
+              type: object
+              description: Qué cambió. Las claves presentes dependen del tipo de evento.
+              properties:
+                version: { type: object, properties: { from: { type: integer }, to: { type: integer } } }
+                path: { type: object, properties: { from: { type: string }, to: { type: string } } }
+                title: { type: object, properties: { from: { type: string }, to: { type: string } } }
+                visibility: { type: object, properties: { from: { type: string }, to: { type: string } } }
+                relations:
+                  type: object
+                  properties:
+                    added: { $ref: '#/components/schemas/Relations' }
+                    removed: { $ref: '#/components/schemas/Relations' }
+                topics:
+                  type: object
+                  properties:
+                    added: { type: array, items: { type: string } }
+                    removed: { type: array, items: { type: string } }
+                restoredFrom: { type: integer }
+                message: { type: [string, 'null'] }
+
+    FolderEventEnvelope:
+      allOf:
+        - $ref: '#/components/schemas/BaseEnvelope'
+        - type: object
+          required: [entity, snapshot]
+          properties:
+            type: { enum: [folder.created, folder.updated, folder.deleted, folder.acl.changed] }
+            entity:
+              type: object
+              additionalProperties: false
+              required: [type, id, path]
+              properties:
+                type: { const: folder }
+                id: { $ref: '#/components/schemas/Ulid' }
+                path: { type: string }
+            snapshot:
+              type: object
+              properties:
+                name: { type: string }
+                parentId: { type: [string, 'null'] }
+                path: { type: string }
+                inheritAcl: { type: boolean }
+                externalBlocked: { type: boolean }
+            changes: { type: object }
+
+    AttachmentEventEnvelope:
+      allOf:
+        - $ref: '#/components/schemas/BaseEnvelope'
+        - type: object
+          required: [entity]
+          properties:
+            type: { enum: [attachment.created, attachment.deleted] }
+            entity:
+              type: object
+              additionalProperties: false
+              required: [type, id, documentId]
+              properties:
+                type: { const: attachment }
+                id: { $ref: '#/components/schemas/Ulid' }
+                documentId: { $ref: '#/components/schemas/Ulid' }
+                folderId: { $ref: '#/components/schemas/Ulid' }
+            snapshot:
+              type: object
+              properties:
+                fileName: { type: string }
+                mimeType: { type: string }
+                sizeBytes: { type: integer }
+                link: { type: string, format: uri }
+
+    ShareEventEnvelope:
+      allOf:
+        - $ref: '#/components/schemas/BaseEnvelope'
+        - type: object
+          required: [entity, snapshot]
+          properties:
+            type: { enum: [share.created, share.revoked] }
+            entity:
+              type: object
+              additionalProperties: false
+              required: [type, id, documentId, folderId]
+              properties:
+                type: { const: share }
+                id: { $ref: '#/components/schemas/Ulid' }
+                documentId: { $ref: '#/components/schemas/Ulid' }
+                folderId: { $ref: '#/components/schemas/Ulid' }
+            snapshot:
+              type: object
+              additionalProperties: false
+              properties:
+                mode: { type: string, enum: [latest, pinned] }
+                version: { type: [integer, 'null'] }
+                includeAttachments: { type: boolean }
+                expiresAt: { type: string, format: date-time }
+                createdBy: { type: string }
+                revokedAt: { type: [string, 'null'], format: date-time }
+            changes:
+              type: object
+              properties:
+                reason: { type: string, enum: [manual, document_deleted], description: Solo en share.revoked. }
+
+    DocumentNotificationEnvelope:
+      description: Igual a DocumentEventEnvelope sin snapshot.relations ni changes.relations.
+      allOf:
+        - $ref: '#/components/schemas/DocumentEventEnvelope'
+        - type: object
+          properties:
+            snapshot:
+              not: { required: [relations] }
+            changes:
+              not: { required: [relations] }
+
+    AccessChangedEnvelope:
+      description: |
+        Se envía a todas las personas internas cuando cambia una ACL. No lleva detalle:
+        es la señal para que el cliente haga una reconciliación completa.
+      type: object
+      additionalProperties: false
+      required: [eventId, seq, type, version, occurredAt]
+      properties:
+        eventId: { $ref: '#/components/schemas/Ulid' }
+        seq: { type: integer }
+        type: { const: access.changed }
+        version: { const: v1 }
+        occurredAt: { type: string, format: date-time }

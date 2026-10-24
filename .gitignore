@@ -1,0 +1,5 @@
+# Credenciales: nunca versionar
+*.service_user.json
+*-su.json
+.local/
+.env

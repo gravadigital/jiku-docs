@@ -1,0 +1,521 @@
+asyncapi: 3.0.0
+info:
+  title: jiku-docs — comandos
+  version: 1.0.0
+  description: |
+    Plano de escritura de jiku-docs (servicio NATS micro `jiku-docs-commands`).
+    Request/reply sin persistencia. La identidad del caller es el `user-id` del subject,
+    garantizado por el auth-callout de Jiku. Solo la `api` de Jiku puede enviar `actor`.
+    Todos los esquemas rechazan claves desconocidas (additionalProperties: false).
+    Todos los comandos son seguros de reintentar (ids de cliente y `baseVersion`).
+defaultContentType: application/json
+
+servers:
+  jiku-nats:
+    host: '{natsHost}'
+    protocol: nats
+    description: Bus NATS de Jiku (modo operator, auth-callout con Zitadel).
+    variables:
+      natsHost:
+        default: nats.jiku.local:4222
+
+channels:
+  folders.new:
+    address: '{instance}.{userId}.jiku-docs-commands.v1.folders.new'
+    parameters: { instance: { $ref: '#/components/parameters/instance' }, userId: { $ref: '#/components/parameters/userId' } }
+    messages:
+      request: { payload: { $ref: '#/components/schemas/FoldersNew' } }
+      reply: { $ref: '#/components/messages/FolderReply' }
+  folders.edit:
+    address: '{instance}.{userId}.jiku-docs-commands.v1.folders.{folderId}.edit'
+    parameters: { instance: { $ref: '#/components/parameters/instance' }, userId: { $ref: '#/components/parameters/userId' }, folderId: { $ref: '#/components/parameters/ulidParam' } }
+    messages:
+      request: { payload: { $ref: '#/components/schemas/FoldersEdit' } }
+      reply: { $ref: '#/components/messages/FolderReply' }
+  folders.delete:
+    address: '{instance}.{userId}.jiku-docs-commands.v1.folders.{folderId}.delete'
+    parameters: { instance: { $ref: '#/components/parameters/instance' }, userId: { $ref: '#/components/parameters/userId' }, folderId: { $ref: '#/components/parameters/ulidParam' } }
+    messages:
+      request: { payload: { $ref: '#/components/schemas/Empty' } }
+      reply: { $ref: '#/components/messages/IdReply' }
+  folders.acl.replace:
+    address: '{instance}.{userId}.jiku-docs-commands.v1.folders.{folderId}.acl.replace'
+    parameters: { instance: { $ref: '#/components/parameters/instance' }, userId: { $ref: '#/components/parameters/userId' }, folderId: { $ref: '#/components/parameters/ulidParam' } }
+    messages:
+      request: { payload: { $ref: '#/components/schemas/AclReplace' } }
+      reply: { $ref: '#/components/messages/AclReply' }
+
+  documents.new:
+    address: '{instance}.{userId}.jiku-docs-commands.v1.documents.new'
+    parameters: { instance: { $ref: '#/components/parameters/instance' }, userId: { $ref: '#/components/parameters/userId' } }
+    messages:
+      request: { payload: { $ref: '#/components/schemas/DocumentsNew' } }
+      reply: { $ref: '#/components/messages/DocumentReply' }
+  documents.update:
+    address: '{instance}.{userId}.jiku-docs-commands.v1.documents.{documentId}.update'
+    parameters: { instance: { $ref: '#/components/parameters/instance' }, userId: { $ref: '#/components/parameters/userId' }, documentId: { $ref: '#/components/parameters/ulidParam' } }
+    messages:
+      request: { payload: { $ref: '#/components/schemas/DocumentsUpdate' } }
+      reply: { $ref: '#/components/messages/DocumentReply' }
+  documents.move:
+    address: '{instance}.{userId}.jiku-docs-commands.v1.documents.{documentId}.move'
+    parameters: { instance: { $ref: '#/components/parameters/instance' }, userId: { $ref: '#/components/parameters/userId' }, documentId: { $ref: '#/components/parameters/ulidParam' } }
+    messages:
+      request: { payload: { $ref: '#/components/schemas/DocumentsMove' } }
+      reply: { $ref: '#/components/messages/DocumentReply' }
+  documents.delete:
+    address: '{instance}.{userId}.jiku-docs-commands.v1.documents.{documentId}.delete'
+    parameters: { instance: { $ref: '#/components/parameters/instance' }, userId: { $ref: '#/components/parameters/userId' }, documentId: { $ref: '#/components/parameters/ulidParam' } }
+    messages:
+      request: { payload: { $ref: '#/components/schemas/BaseVersionOnly' } }
+      reply: { $ref: '#/components/messages/IdReply' }
+  documents.restore:
+    address: '{instance}.{userId}.jiku-docs-commands.v1.documents.{documentId}.restore'
+    parameters: { instance: { $ref: '#/components/parameters/instance' }, userId: { $ref: '#/components/parameters/userId' }, documentId: { $ref: '#/components/parameters/ulidParam' } }
+    messages:
+      request: { payload: { $ref: '#/components/schemas/DocumentsRestore' } }
+      reply: { $ref: '#/components/messages/DocumentReply' }
+  documents.lock:
+    address: '{instance}.{userId}.jiku-docs-commands.v1.documents.{documentId}.lock'
+    parameters: { instance: { $ref: '#/components/parameters/instance' }, userId: { $ref: '#/components/parameters/userId' }, documentId: { $ref: '#/components/parameters/ulidParam' } }
+    messages:
+      request: { payload: { $ref: '#/components/schemas/DocumentsLock' } }
+      reply: { $ref: '#/components/messages/LockReply' }
+  documents.unlock:
+    address: '{instance}.{userId}.jiku-docs-commands.v1.documents.{documentId}.unlock'
+    parameters: { instance: { $ref: '#/components/parameters/instance' }, userId: { $ref: '#/components/parameters/userId' }, documentId: { $ref: '#/components/parameters/ulidParam' } }
+    messages:
+      request: { payload: { $ref: '#/components/schemas/DocumentsUnlock' } }
+      reply: { $ref: '#/components/messages/IdReply' }
+  documents.request-content-upload:
+    address: '{instance}.{userId}.jiku-docs-commands.v1.documents.request-content-upload'
+    parameters: { instance: { $ref: '#/components/parameters/instance' }, userId: { $ref: '#/components/parameters/userId' } }
+    messages:
+      request: { payload: { $ref: '#/components/schemas/ContentUploadRequest' } }
+      reply: { $ref: '#/components/messages/ContentUploadReply' }
+
+  attachments.request-upload:
+    address: '{instance}.{userId}.jiku-docs-commands.v1.attachments.request-upload'
+    parameters: { instance: { $ref: '#/components/parameters/instance' }, userId: { $ref: '#/components/parameters/userId' } }
+    messages:
+      request: { payload: { $ref: '#/components/schemas/AttachmentUploadRequest' } }
+      reply: { $ref: '#/components/messages/AttachmentUploadReply' }
+  attachments.confirm:
+    address: '{instance}.{userId}.jiku-docs-commands.v1.attachments.{attachmentId}.confirm'
+    parameters: { instance: { $ref: '#/components/parameters/instance' }, userId: { $ref: '#/components/parameters/userId' }, attachmentId: { $ref: '#/components/parameters/ulidParam' } }
+    messages:
+      request: { payload: { $ref: '#/components/schemas/Empty' } }
+      reply: { $ref: '#/components/messages/AttachmentConfirmReply' }
+  attachments.request-download:
+    address: '{instance}.{userId}.jiku-docs-commands.v1.attachments.{attachmentId}.request-download'
+    parameters: { instance: { $ref: '#/components/parameters/instance' }, userId: { $ref: '#/components/parameters/userId' }, attachmentId: { $ref: '#/components/parameters/ulidParam' } }
+    messages:
+      request: { payload: { $ref: '#/components/schemas/Empty' } }
+      reply: { $ref: '#/components/messages/AttachmentDownloadReply' }
+  attachments.delete:
+    address: '{instance}.{userId}.jiku-docs-commands.v1.attachments.{attachmentId}.delete'
+    parameters: { instance: { $ref: '#/components/parameters/instance' }, userId: { $ref: '#/components/parameters/userId' }, attachmentId: { $ref: '#/components/parameters/ulidParam' } }
+    messages:
+      request: { payload: { $ref: '#/components/schemas/Empty' } }
+      reply: { $ref: '#/components/messages/IdReply' }
+
+  shares.new:
+    address: '{instance}.{userId}.jiku-docs-commands.v1.shares.new'
+    parameters: { instance: { $ref: '#/components/parameters/instance' }, userId: { $ref: '#/components/parameters/userId' } }
+    messages:
+      request: { payload: { $ref: '#/components/schemas/SharesNew' } }
+      reply: { $ref: '#/components/messages/ShareNewReply' }
+  shares.revoke:
+    address: '{instance}.{userId}.jiku-docs-commands.v1.shares.{shareId}.revoke'
+    parameters: { instance: { $ref: '#/components/parameters/instance' }, userId: { $ref: '#/components/parameters/userId' }, shareId: { $ref: '#/components/parameters/ulidParam' } }
+    messages:
+      request: { payload: { $ref: '#/components/schemas/Empty' } }
+      reply: { $ref: '#/components/messages/ShareRevokeReply' }
+
+operations:
+  foldersNew:          { action: receive, channel: { $ref: '#/channels/folders.new' },          reply: { channel: { $ref: '#/channels/folders.new' } },          x-permission: manage (carpeta padre), x-error-codes: [folder_not_found, already_exists, permission_denied] }
+  foldersEdit:         { action: receive, channel: { $ref: '#/channels/folders.edit' },         reply: { channel: { $ref: '#/channels/folders.edit' } },         x-permission: manage (carpeta y destino si se mueve), x-error-codes: [folder_not_found, already_exists, permission_denied, invalid_fields] }
+  foldersDelete:       { action: receive, channel: { $ref: '#/channels/folders.delete' },       reply: { channel: { $ref: '#/channels/folders.delete' } },       x-permission: manage, x-error-codes: [folder_not_found, folder_not_empty, permission_denied] }
+  foldersAclReplace:   { action: receive, channel: { $ref: '#/channels/folders.acl.replace' },  reply: { channel: { $ref: '#/channels/folders.acl.replace' } },  x-permission: manage, x-error-codes: [folder_not_found, permission_denied, invalid_fields] }
+  documentsNew:        { action: receive, channel: { $ref: '#/channels/documents.new' },        reply: { channel: { $ref: '#/channels/documents.new' } },        x-permission: write (carpeta), x-error-codes: [folder_not_found, already_exists, file_name_invalid, frontmatter_invalid, invalid_relation, content_too_large, checksum_mismatch, upload_not_found, permission_denied, upstream_unavailable] }
+  documentsUpdate:     { action: receive, channel: { $ref: '#/channels/documents.update' },     reply: { channel: { $ref: '#/channels/documents.update' } },     x-permission: write, x-error-codes: [document_not_found, version_conflict, document_locked, frontmatter_invalid, invalid_relation, content_too_large, checksum_mismatch, upload_not_found, permission_denied, upstream_unavailable] }
+  documentsMove:       { action: receive, channel: { $ref: '#/channels/documents.move' },       reply: { channel: { $ref: '#/channels/documents.move' } },       x-permission: write (origen y destino), x-error-codes: [document_not_found, folder_not_found, version_conflict, document_locked, already_exists, file_name_invalid, permission_denied] }
+  documentsDelete:     { action: receive, channel: { $ref: '#/channels/documents.delete' },     reply: { channel: { $ref: '#/channels/documents.delete' } },     x-permission: write, x-error-codes: [document_not_found, version_conflict, document_locked, permission_denied] }
+  documentsRestore:    { action: receive, channel: { $ref: '#/channels/documents.restore' },    reply: { channel: { $ref: '#/channels/documents.restore' } },    x-permission: write, x-error-codes: [document_not_found, version_conflict, document_locked, permission_denied] }
+  documentsLock:       { action: receive, channel: { $ref: '#/channels/documents.lock' },       reply: { channel: { $ref: '#/channels/documents.lock' } },       x-permission: write, x-error-codes: [document_not_found, document_locked, permission_denied] }
+  documentsUnlock:     { action: receive, channel: { $ref: '#/channels/documents.unlock' },     reply: { channel: { $ref: '#/channels/documents.unlock' } },     x-permission: write (force exige manage), x-error-codes: [document_not_found, lock_not_held, permission_denied] }
+  contentUpload:       { action: receive, channel: { $ref: '#/channels/documents.request-content-upload' }, reply: { channel: { $ref: '#/channels/documents.request-content-upload' } }, x-permission: persona interna o servicio, x-error-codes: [content_too_large, caller_not_authorized] }
+  attachmentsUpload:   { action: receive, channel: { $ref: '#/channels/attachments.request-upload' },   reply: { channel: { $ref: '#/channels/attachments.request-upload' } },   x-permission: write (documento), x-error-codes: [attachments_not_configured, document_not_found, attachment_type_not_allowed, attachment_too_large, already_exists, permission_denied] }
+  attachmentsConfirm:  { action: receive, channel: { $ref: '#/channels/attachments.confirm' },  reply: { channel: { $ref: '#/channels/attachments.confirm' } },  x-permission: el mismo caller que pidió la subida, x-error-codes: [attachments_not_configured, attachment_not_found, upload_not_found, checksum_mismatch] }
+  attachmentsDownload: { action: receive, channel: { $ref: '#/channels/attachments.request-download' }, reply: { channel: { $ref: '#/channels/attachments.request-download' } }, x-permission: read (documento), x-error-codes: [attachments_not_configured, attachment_not_found] }
+  attachmentsDelete:   { action: receive, channel: { $ref: '#/channels/attachments.delete' },   reply: { channel: { $ref: '#/channels/attachments.delete' } },   x-permission: write (documento), x-error-codes: [attachments_not_configured, attachment_not_found, permission_denied] }
+
+  sharesNew:           { action: receive, channel: { $ref: '#/channels/shares.new' },           reply: { channel: { $ref: '#/channels/shares.new' } },           x-permission: manage (carpeta del documento), x-error-codes: [document_not_found, permission_denied, sharing_blocked, share_expiry_invalid, secret_warning_not_acknowledged, already_exists] }
+  sharesRevoke:        { action: receive, channel: { $ref: '#/channels/shares.revoke' },        reply: { channel: { $ref: '#/channels/shares.revoke' } },        x-permission: manage (carpeta) o creador del link, x-error-codes: [share_not_found, permission_denied] }
+
+components:
+  parameters:
+    instance:
+      description: Instalación (`dev` / `prod`), igual que NATS_INSTANCE de Jiku.
+      enum: [dev, prod]
+    userId:
+      description: '`sub` de Zitadel del caller, crudo. El auth-callout solo permite el propio.'
+    ulidParam:
+      description: ULID en mayúsculas (26 caracteres, alfabeto Crockford).
+
+  messages:
+    FolderReply:     { payload: { $ref: '#/components/schemas/ReplyFolder' } }
+    IdReply:         { payload: { $ref: '#/components/schemas/ReplyId' } }
+    AclReply:        { payload: { $ref: '#/components/schemas/ReplyAcl' } }
+    DocumentReply:   { payload: { $ref: '#/components/schemas/ReplyDocument' } }
+    LockReply:       { payload: { $ref: '#/components/schemas/ReplyLock' } }
+    ContentUploadReply:      { payload: { $ref: '#/components/schemas/ReplyContentUpload' } }
+    AttachmentUploadReply:   { payload: { $ref: '#/components/schemas/ReplyAttachmentUpload' } }
+    AttachmentConfirmReply:  { payload: { $ref: '#/components/schemas/ReplyAttachmentConfirm' } }
+    AttachmentDownloadReply: { payload: { $ref: '#/components/schemas/ReplyAttachmentDownload' } }
+    ShareNewReply:           { payload: { $ref: '#/components/schemas/ReplyShareNew' } }
+    ShareRevokeReply:        { payload: { $ref: '#/components/schemas/ReplyShareRevoke' } }
+
+  schemas:
+    # ---------- tipos base ----------
+    Ulid:
+      type: string
+      pattern: '^[0-9A-HJKMNP-TV-Z]{26}$'
+    Checksum:
+      type: string
+      pattern: '^sha256:[0-9a-f]{64}$'
+    FileName:
+      type: string
+      pattern: '^[^/\\]{1,200}\.md$'
+    Via:
+      type: string
+      enum: [human, agent, service]
+      description: Origen del cambio. Para callers de clase service se fuerza `service`.
+    Actor:
+      type: object
+      description: Persona en nombre de la cual actúa la `api`. Solo la acepta si el caller es la `api`.
+      additionalProperties: false
+      required: [id]
+      properties:
+        id: { type: string, description: '`sub` de Zitadel de la persona' }
+    Empty:
+      type: object
+      additionalProperties: false
+      properties:
+        actor: { $ref: '#/components/schemas/Actor' }
+    BaseVersionOnly:
+      type: object
+      additionalProperties: false
+      required: [baseVersion]
+      properties:
+        actor: { $ref: '#/components/schemas/Actor' }
+        baseVersion: { type: integer, minimum: 1 }
+
+    # ---------- carpetas ----------
+    FoldersNew:
+      type: object
+      additionalProperties: false
+      required: [id, parentId, name]
+      properties:
+        actor: { $ref: '#/components/schemas/Actor' }
+        id: { $ref: '#/components/schemas/Ulid' }
+        parentId: { $ref: '#/components/schemas/Ulid' }
+        name: { type: string, minLength: 1, maxLength: 120, pattern: '^[^/\\]+$' }
+        inheritAcl: { type: boolean, default: true }
+        externalBlocked: { type: boolean, default: false }
+        sharingBlocked: { type: boolean, default: false, description: 'Impide links compartidos en la carpeta y sus descendientes. Se hereda.' }
+    FoldersEdit:
+      type: object
+      additionalProperties: false
+      minProperties: 1
+      properties:
+        actor: { $ref: '#/components/schemas/Actor' }
+        name: { type: string, minLength: 1, maxLength: 120, pattern: '^[^/\\]+$' }
+        parentId: { $ref: '#/components/schemas/Ulid' }
+        inheritAcl: { type: boolean }
+        externalBlocked: { type: boolean }
+        sharingBlocked: { type: boolean }
+    AclRule:
+      type: object
+      additionalProperties: false
+      required: [principalType, principal, permission]
+      properties:
+        principalType: { type: string, enum: [role, user] }
+        principal: { type: string, minLength: 1, maxLength: 200 }
+        permission: { type: string, enum: [read, write, manage] }
+    AclReplace:
+      type: object
+      additionalProperties: false
+      required: [rules]
+      properties:
+        actor: { $ref: '#/components/schemas/Actor' }
+        rules:
+          type: array
+          maxItems: 100
+          items: { $ref: '#/components/schemas/AclRule' }
+
+    # ---------- documentos ----------
+    ContentSource:
+      description: Exactamente uno de `content` (hasta 256 KiB) o `contentUploadId`.
+      oneOf:
+        - required: [content]
+        - required: [contentUploadId]
+    DocumentsNew:
+      type: object
+      additionalProperties: false
+      required: [id, folderId, fileName, checksum]
+      allOf: [{ $ref: '#/components/schemas/ContentSource' }]
+      properties:
+        actor: { $ref: '#/components/schemas/Actor' }
+        id: { $ref: '#/components/schemas/Ulid' }
+        folderId: { $ref: '#/components/schemas/Ulid' }
+        fileName: { $ref: '#/components/schemas/FileName' }
+        content: { type: string, maxLength: 262144 }
+        contentUploadId: { $ref: '#/components/schemas/Ulid' }
+        checksum: { $ref: '#/components/schemas/Checksum' }
+        via: { $ref: '#/components/schemas/Via' }
+        message: { type: string, maxLength: 500 }
+    DocumentsUpdate:
+      type: object
+      additionalProperties: false
+      required: [baseVersion, checksum]
+      allOf: [{ $ref: '#/components/schemas/ContentSource' }]
+      properties:
+        actor: { $ref: '#/components/schemas/Actor' }
+        baseVersion: { type: integer, minimum: 1 }
+        content: { type: string, maxLength: 262144 }
+        contentUploadId: { $ref: '#/components/schemas/Ulid' }
+        checksum: { $ref: '#/components/schemas/Checksum' }
+        sessionId: { $ref: '#/components/schemas/Ulid' }
+        via: { $ref: '#/components/schemas/Via' }
+        message: { type: string, maxLength: 500 }
+    DocumentsMove:
+      type: object
+      additionalProperties: false
+      required: [baseVersion]
+      anyOf: [{ required: [folderId] }, { required: [fileName] }]
+      properties:
+        actor: { $ref: '#/components/schemas/Actor' }
+        baseVersion: { type: integer, minimum: 1 }
+        folderId: { $ref: '#/components/schemas/Ulid' }
+        fileName: { $ref: '#/components/schemas/FileName' }
+        sessionId: { $ref: '#/components/schemas/Ulid' }
+    DocumentsRestore:
+      type: object
+      additionalProperties: false
+      required: [fromVersion, baseVersion]
+      properties:
+        actor: { $ref: '#/components/schemas/Actor' }
+        fromVersion: { type: integer, minimum: 1 }
+        baseVersion: { type: integer, minimum: 1 }
+    DocumentsLock:
+      type: object
+      additionalProperties: false
+      required: [sessionId, via]
+      properties:
+        actor: { $ref: '#/components/schemas/Actor' }
+        sessionId: { $ref: '#/components/schemas/Ulid' }
+        via: { type: string, enum: [human, agent] }
+        ttlSeconds: { type: integer, minimum: 30, maximum: 300, default: 120 }
+    DocumentsUnlock:
+      type: object
+      additionalProperties: false
+      required: [sessionId]
+      properties:
+        actor: { $ref: '#/components/schemas/Actor' }
+        sessionId: { $ref: '#/components/schemas/Ulid' }
+        force: { type: boolean, default: false, description: 'Libera el lock de otra sesión. Exige manage.' }
+    ContentUploadRequest:
+      type: object
+      additionalProperties: false
+      required: [checksum, size]
+      properties:
+        actor: { $ref: '#/components/schemas/Actor' }
+        checksum: { $ref: '#/components/schemas/Checksum' }
+        size: { type: integer, minimum: 1, maximum: 5242880 }
+
+    # ---------- adjuntos ----------
+    AttachmentUploadRequest:
+      type: object
+      additionalProperties: false
+      required: [id, documentId, fileName, mimeType, fileSize, checksum]
+      properties:
+        actor: { $ref: '#/components/schemas/Actor' }
+        id: { $ref: '#/components/schemas/Ulid' }
+        documentId: { $ref: '#/components/schemas/Ulid' }
+        fileName: { type: string, minLength: 1, maxLength: 255 }
+        mimeType: { type: string, maxLength: 127 }
+        fileSize: { type: integer, minimum: 1 }
+        checksum: { $ref: '#/components/schemas/Checksum' }
+
+    # ---------- links compartidos ----------
+    SharesNew:
+      type: object
+      additionalProperties: false
+      required: [id, documentId, mode, expiresAt]
+      properties:
+        actor: { $ref: '#/components/schemas/Actor' }
+        id: { $ref: '#/components/schemas/Ulid' }
+        documentId: { $ref: '#/components/schemas/Ulid' }
+        mode: { type: string, enum: [latest, pinned] }
+        version: { type: integer, minimum: 1, description: Obligatorio con mode pinned. }
+        expiresAt: { type: string, format: date-time, description: 'Futuro y como máximo 180 días desde ahora.' }
+        includeAttachments: { type: boolean, default: true }
+        note: { type: string, maxLength: 300, description: 'Para quién o para qué es el link. Solo visible internamente.' }
+        acknowledgeSecretWarning: { type: boolean, default: false }
+      if: { properties: { mode: { const: pinned } } }
+      then: { required: [version] }
+
+    # ---------- respuestas ----------
+    Failure:
+      type: object
+      additionalProperties: false
+      required: [status, errorCode, errorMessage]
+      properties:
+        status: { const: failure }
+        errorCode:
+          type: string
+          description: Catálogo abierto dentro de v1; un código desconocido se trata como error genérico.
+          examples: [invalid_fields, document_not_found, folder_not_found, attachment_not_found, permission_denied, version_conflict, document_locked, lock_not_held, already_exists, file_name_invalid, frontmatter_invalid, invalid_relation, content_too_large, checksum_mismatch, upload_not_found, folder_not_empty, attachment_type_not_allowed, attachment_too_large, share_not_found, sharing_blocked, share_expiry_invalid, secret_warning_not_acknowledged, attachments_not_configured, unknown_caller, caller_not_authorized, upstream_unavailable, internal_error]
+        errorMessage: { type: string, description: Texto en español para la interfaz. No decidir por este campo. }
+        errorDetails: { type: object }
+    ReplyId:
+      oneOf:
+        - type: object
+          required: [status, data]
+          properties:
+            status: { const: success }
+            data: { type: object, required: [id], properties: { id: { type: string } } }
+        - $ref: '#/components/schemas/Failure'
+    ReplyFolder:
+      oneOf:
+        - type: object
+          required: [status, data]
+          properties:
+            status: { const: success }
+            data: { type: object, required: [id, path], properties: { id: { $ref: '#/components/schemas/Ulid' }, path: { type: string } } }
+        - $ref: '#/components/schemas/Failure'
+    ReplyAcl:
+      oneOf:
+        - type: object
+          required: [status, data]
+          properties:
+            status: { const: success }
+            data:
+              type: object
+              required: [id, rules]
+              properties:
+                id: { $ref: '#/components/schemas/Ulid' }
+                rules: { type: array, items: { $ref: '#/components/schemas/AclRule' } }
+        - $ref: '#/components/schemas/Failure'
+    ReplyDocument:
+      oneOf:
+        - type: object
+          required: [status, data]
+          properties:
+            status: { const: success }
+            data:
+              type: object
+              required: [id, version]
+              properties:
+                id: { $ref: '#/components/schemas/Ulid' }
+                version: { type: integer }
+                path: { type: string }
+                warnings:
+                  type: array
+                  description: Avisos no bloqueantes, por ejemplo `possible_secret_detected`.
+                  items: { type: string }
+        - $ref: '#/components/schemas/Failure'
+    ReplyLock:
+      oneOf:
+        - type: object
+          required: [status, data]
+          properties:
+            status: { const: success }
+            data:
+              type: object
+              required: [id, sessionId, expiresAt]
+              properties:
+                id: { $ref: '#/components/schemas/Ulid' }
+                sessionId: { $ref: '#/components/schemas/Ulid' }
+                expiresAt: { type: string, format: date-time }
+        - $ref: '#/components/schemas/Failure'
+    ReplyContentUpload:
+      oneOf:
+        - type: object
+          required: [status, data]
+          properties:
+            status: { const: success }
+            data:
+              type: object
+              required: [contentUploadId, uploadUrl, expiresIn]
+              properties:
+                contentUploadId: { $ref: '#/components/schemas/Ulid' }
+                uploadUrl: { type: string, format: uri }
+                expiresIn: { type: integer, description: Segundos }
+        - $ref: '#/components/schemas/Failure'
+    ReplyAttachmentUpload:
+      oneOf:
+        - type: object
+          required: [status, data]
+          properties:
+            status: { const: success }
+            data:
+              type: object
+              required: [id, uploadUrl, expiresIn, link]
+              properties:
+                id: { $ref: '#/components/schemas/Ulid' }
+                uploadUrl: { type: string, format: uri }
+                expiresIn: { type: integer }
+                link: { type: string, format: uri, description: 'URL estable para el markdown: {JIKU_API_URL}/docs/attachments/{id}' }
+        - $ref: '#/components/schemas/Failure'
+    ReplyAttachmentConfirm:
+      oneOf:
+        - type: object
+          required: [status, data]
+          properties:
+            status: { const: success }
+            data: { type: object, required: [id, status], properties: { id: { $ref: '#/components/schemas/Ulid' }, status: { const: ready } } }
+        - $ref: '#/components/schemas/Failure'
+    ReplyAttachmentDownload:
+      oneOf:
+        - type: object
+          required: [status, data]
+          properties:
+            status: { const: success }
+            data:
+              type: object
+              required: [id, downloadUrl, expiresIn]
+              properties:
+                id: { $ref: '#/components/schemas/Ulid' }
+                downloadUrl: { type: string, format: uri }
+                expiresIn: { type: integer }
+        - $ref: '#/components/schemas/Failure'
+    ReplyShareNew:
+      oneOf:
+        - type: object
+          required: [status, data]
+          properties:
+            status: { const: success }
+            data:
+              type: object
+              required: [id, token, url, expiresAt]
+              properties:
+                id: { $ref: '#/components/schemas/Ulid' }
+                token: { type: string, pattern: '^jds_[A-Za-z0-9_-]{43}$', description: 'Solo se devuelve aquí. Se guarda únicamente su SHA-256.' }
+                url: { type: string, format: uri, description: 'https://{JIKU_PUBLIC_URL}/p/docs/{token}' }
+                expiresAt: { type: string, format: date-time }
+        - $ref: '#/components/schemas/Failure'
+    ReplyShareRevoke:
+      oneOf:
+        - type: object
+          required: [status, data]
+          properties:
+            status: { const: success }
+            data:
+              type: object
+              required: [id, revokedAt]
+              properties:
+                id: { $ref: '#/components/schemas/Ulid' }
+                revokedAt: { type: string, format: date-time }
+        - $ref: '#/components/schemas/Failure'
