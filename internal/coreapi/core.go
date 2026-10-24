@@ -121,7 +121,7 @@ func (c *Client) call(ctx context.Context, service, method string, payload, dest
 	defer cancel()
 	reply, err := c.t.Request(ctx, service, method, payload)
 	if err != nil {
-		return fmt.Errorf("%w: %s: %v", ErrUnavailable, method, err)
+		return fmt.Errorf("%w: %s: %w", ErrUnavailable, method, err)
 	}
 	if reply.Status != "success" {
 		if reply.ErrorCode == "" {
@@ -133,7 +133,7 @@ func (c *Client) call(ctx context.Context, service, method string, payload, dest
 		return nil
 	}
 	if err := json.Unmarshal(reply.Data, dest); err != nil {
-		return fmt.Errorf("%w: %s: decoding the reply: %v", ErrUnavailable, method, err)
+		return fmt.Errorf("%w: %s: decoding the reply: %w", ErrUnavailable, method, err)
 	}
 	return nil
 }

@@ -16,40 +16,40 @@ import (
 // Config is the whole service configuration.
 type Config struct {
 	// Bus
-	NATSURL       string
-	NATSCreds     string
-	Instance      string
-	ServiceName   string
-	ServiceKeyB64 string // DOCS_SERVICE_USER_KEY_B64: Zitadel JSON key of the machine user, base64
+	NATSURL        string
+	NATSCreds      string
+	Instance       string
+	ServiceName    string
+	ServiceKeyB64  string // DOCS_SERVICE_USER_KEY_B64: Zitadel JSON key of the machine user, base64
 	ServiceKeyFile string
 	ZitadelIssuer  string
 	ZitadelProject string
 	CoreTimeout    time.Duration
 
 	// Jiku integration
-	APIUserID    string
-	WebURL       string
-	PublicURL    string
+	APIUserID string
+	WebURL    string
+	PublicURL string
 
 	// Storage
-	DatabaseURL     string
-	S3Endpoint      string
+	DatabaseURL      string
+	S3Endpoint       string
 	S3PublicEndpoint string
-	S3Region        string
-	S3Bucket        string
-	S3AccessKey     string
-	S3SecretKey     string
-	S3PathStyle     bool
+	S3Region         string
+	S3Bucket         string
+	S3AccessKey      string
+	S3SecretKey      string
+	S3PathStyle      bool
 
 	// Secrets
 	SecretKey []byte
 
 	// Operation
-	HTTPAddr         string
-	LogLevel         string
-	IndexerEnabled   bool
-	JanitorEnabled   bool
-	OutboxEnabled    bool
+	HTTPAddr           string
+	LogLevel           string
+	IndexerEnabled     bool
+	JanitorEnabled     bool
+	OutboxEnabled      bool
 	RelationReviewHour int
 }
 

@@ -335,9 +335,9 @@ func Title(fm Frontmatter, body, fileName string) string {
 }
 
 var (
-	atxH1Re      = regexp.MustCompile(`^ {0,3}#[ \t]+(.+?)[ \t]*#*[ \t]*$`)
-	setextH1Re   = regexp.MustCompile(`^ {0,3}=+[ \t]*$`)
-	fenceOpenRe  = regexp.MustCompile("^ {0,3}(`{3,}|~{3,})")
+	atxH1Re     = regexp.MustCompile(`^ {0,3}#[ \t]+(.+?)[ \t]*#*[ \t]*$`)
+	setextH1Re  = regexp.MustCompile(`^ {0,3}=+[ \t]*$`)
+	fenceOpenRe = regexp.MustCompile("^ {0,3}(`{3,}|~{3,})")
 )
 
 // FirstHeading returns the text of the first level-1 heading outside code fences.

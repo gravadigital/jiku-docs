@@ -39,7 +39,7 @@ func TestInboxPrefix(t *testing.T) {
 		t.Errorf("%q", p)
 	}
 	for _, r := range p[7:] {
-		if !(r >= 'a' && r <= 'z' || r >= '2' && r <= '7') {
+		if (r < 'a' || r > 'z') && (r < '2' || r > '7') {
 			t.Errorf("not lowercase base32: %q", p)
 		}
 	}

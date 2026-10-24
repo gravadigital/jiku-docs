@@ -28,9 +28,8 @@ var (
 )
 
 // ClassFor maps a user's roles and identity type to a class. ok=false means the roles grant no
-// access (`caller_not_authorized`). The most permissive matching class wins for persons with
-// both internal and external roles? No: like core, the most restrictive wins, so a person that
-// carries external-user is external.
+// access (`caller_not_authorized`). Like core, the most restrictive class wins: a person carrying
+// external-user is external even if it also carries an internal role.
 func ClassFor(roles []string, identityType string) (Class, bool) {
 	has := func(set []string) bool {
 		for _, r := range roles {
