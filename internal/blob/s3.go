@@ -15,6 +15,7 @@ import (
 
 	"github.com/minio/minio-go/v7"
 	"github.com/minio/minio-go/v7/pkg/credentials"
+	"github.com/minio/minio-go/v7/pkg/lifecycle"
 )
 
 // ErrNotFound is returned when an object does not exist.
@@ -48,9 +49,9 @@ type Config struct {
 
 // S3 implements Store over minio-go.
 type S3 struct {
-	client  *minio.Client
-	signer  *minio.Client
-	bucket  string
+	client *minio.Client
+	signer *minio.Client
+	bucket string
 }
 
 func newClient(endpoint string, cfg Config) (*minio.Client, error) {
@@ -85,6 +86,19 @@ func New(cfg Config) (*S3, error) {
 		}
 	}
 	return &S3{client: client, signer: signer, bucket: cfg.Bucket}, nil
+}
+
+// EnsureUploadsLifecycle expires the large uploads in transit (`uploads/`) after one day, as a
+// safety net under the janitor's purge.
+func (s *S3) EnsureUploadsLifecycle(ctx context.Context) error {
+	cfg := lifecycle.NewConfiguration()
+	cfg.Rules = []lifecycle.Rule{{
+		ID:         "jiku-docs-uploads",
+		Status:     "Enabled",
+		RuleFilter: lifecycle.Filter{Prefix: "uploads/"},
+		Expiration: lifecycle.Expiration{Days: 1},
+	}}
+	return s.client.SetBucketLifecycle(ctx, s.bucket, cfg)
 }
 
 // EnsureBucket creates the bucket (with versioning) if missing. Used by tests and by the
