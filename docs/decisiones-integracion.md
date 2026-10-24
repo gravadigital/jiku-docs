@@ -128,3 +128,14 @@ copian a otro repo.
   el dump, aplica una planilla de mapeo (CSV nota → carpeta; sin asignar → `/importado/`, solo admin), crea los
   documentos con `documents.new` como servicio, sube las imágenes como adjuntos (D-3), reescribe los enlaces y
   emite un informe de notas con posibles secretos. El dump nunca se commitea ni se copia fuera de `.local/`.
+
+## D-10. Roles e identidad del caller desde core (seguimiento en jiku)
+
+- jiku-docs clasifica al caller con `users.list {filter:{id}, include:["roles","identityType"]}`. Hoy
+  `core/src/queries/users/users-spec.ts` excluye a propósito `roles` e `identityType` (CA-7: un externo podría
+  enumerar quién es admin).
+- Decisión: core los declara **incluibles solo para la clase `connector`** (roles `internal-app`, y por lo tanto
+  `docs`). Para personas internas y externas siguen sin existir (`invalid_fields`), así CA-7 se mantiene. Ni filtro
+  ni orden, solo `include`. Test que pruebe ambos lados.
+- Va como story de seguimiento del REQ-016 en jiku, junto con la ruta de la web `/docs/documents/{id}` (el
+  importador de HedgeDoc reescribe los enlaces entre notas a `{JIKU_WEB_URL}/docs/documents/{id}`).
