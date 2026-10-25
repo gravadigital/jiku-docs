@@ -198,7 +198,8 @@ type HistoryReport struct {
 	Documents      int
 	VersionsPruned int
 	BytesFreed     int64
-	ObjectsDeleted int
+	// ObjectsTrashed: objects of compacted versions moved to papelera/ in this run.
+	ObjectsTrashed int
 	ObjectsPending int
 	Errors         int
 	Duration       time.Duration
@@ -210,7 +211,7 @@ var ErrCompactionBusy = errors.New("history compaction already running")
 
 // CompactHistory runs the compaction: the pending documents in batches ordered by id (or one
 // document), each in its own short transaction, and then the deletion of the pruned objects in
-// S3. Only one process runs it at a time: if the advisory lock is taken, it returns a report
+// S3 (moved to papelera/, see trash.go). Only one process runs it at a time: if the advisory lock is taken, it returns a report
 // with Skipped set.
 func (s *Service) CompactHistory(ctx context.Context, opts HistoryOptions) (*HistoryReport, error) {
 	start := time.Now()
@@ -264,10 +265,10 @@ func (s *Service) CompactHistory(ctx context.Context, opts HistoryOptions) (*His
 	}
 	if !opts.DryRun && runErr == nil {
 		n, err := s.DrainPrunedObjects(ctx)
-		rep.ObjectsDeleted = n
+		rep.ObjectsTrashed = n
 		if err != nil {
 			rep.Errors++
-			s.Log.Warn("history compaction: objects not deleted, the next run retries", "err", err.Error())
+			s.Log.Warn("history compaction: objects not moved to the trash, the next run retries", "err", err.Error())
 		}
 	}
 	if pending, _, err := s.PrunedObjectsPending(ctx); err == nil {
@@ -275,7 +276,7 @@ func (s *Service) CompactHistory(ctx context.Context, opts HistoryOptions) (*His
 	}
 	rep.Duration = time.Since(start)
 	attrs := []any{"dryRun", opts.DryRun, "documents", rep.Documents, "versionsPruned", rep.VersionsPruned,
-		"bytesFreed", rep.BytesFreed, "objectsDeleted", rep.ObjectsDeleted, "objectsPending", rep.ObjectsPending,
+		"bytesFreed", rep.BytesFreed, "objectsTrashed", rep.ObjectsTrashed, "objectsPending", rep.ObjectsPending,
 		"errors", rep.Errors, "durationMs", rep.Duration.Milliseconds()}
 	if runErr != nil {
 		s.Log.Error("history compaction failed", append(attrs, "err", runErr.Error())...)
@@ -360,9 +361,10 @@ func (s *Service) compactOne(ctx context.Context, id string, dryRun bool, p Hist
 		}
 		if len(prune) > 0 {
 			if _, err := tx.Exec(ctx, `WITH gone AS (
-					DELETE FROM document_versions WHERE document_id = $1 AND version = ANY($2) RETURNING storage_key, version)
-				INSERT INTO pruned_objects (storage_key, document_id, version, pruned_at)
-				SELECT storage_key, $1, version, $3 FROM gone ON CONFLICT (storage_key) DO NOTHING`, id, prune, now); err != nil {
+					DELETE FROM document_versions WHERE document_id = $1 AND version = ANY($2)
+					RETURNING storage_key, version, `+versionRowSQL+` AS row)
+				INSERT INTO pruned_objects (storage_key, document_id, version, pruned_at, version_row)
+				SELECT storage_key, $1, version, $3, row FROM gone ON CONFLICT (storage_key) DO NOTHING`, id, prune, now); err != nil {
 				return err
 			}
 		}
@@ -438,24 +440,30 @@ func pinnedVersions(ctx context.Context, q store.Querier, docID string, now time
 	return out, rows.Err()
 }
 
-// DrainPrunedObjects deletes from S3 the objects of compacted versions, in DeleteObjects
-// batches, and removes each row once its object is gone. A row whose key is still used by a
-// version (it should never happen) is dropped without touching the object.
+// DrainPrunedObjects moves to papelera/ the objects of compacted versions, in batches of
+// DeleteBatch keys (parallel copies, then one DeleteObjects of the originals), each trash copy
+// carrying its version row. A row of pruned_objects goes away only once its object is in the
+// trash and the original is gone (or the original no longer existed). A row whose key is still
+// used by a version (it should never happen) is dropped without touching the object. It
+// returns how many objects it moved.
 func (s *Service) DrainPrunedObjects(ctx context.Context) (int, error) {
 	p := s.historyPolicy()
 	total := 0
 	for {
-		rows, err := s.DB.Query(ctx, `SELECT p.storage_key, EXISTS (SELECT 1 FROM document_versions v WHERE v.storage_key = p.storage_key)
+		rows, err := s.DB.Query(ctx, `SELECT p.storage_key, p.version_row,
+				EXISTS (SELECT 1 FROM document_versions v WHERE v.storage_key = p.storage_key)
 			FROM pruned_objects p ORDER BY p.pruned_at, p.storage_key LIMIT $1`, p.DeleteBatch)
 		if err != nil {
 			return total, err
 		}
-		var del, inUse []string
+		var move []trashObject
+		var inUse []string
 		n := 0
 		for rows.Next() {
 			var key string
+			var row []byte
 			var used bool
-			if err := rows.Scan(&key, &used); err != nil {
+			if err := rows.Scan(&key, &row, &used); err != nil {
 				rows.Close()
 				return total, err
 			}
@@ -463,7 +471,7 @@ func (s *Service) DrainPrunedObjects(ctx context.Context) (int, error) {
 			if used {
 				inUse = append(inUse, key)
 			} else {
-				del = append(del, key)
+				move = append(move, trashObject{Key: key, Meta: encodeVersionRow(row)})
 			}
 		}
 		rows.Close()
@@ -473,15 +481,15 @@ func (s *Service) DrainPrunedObjects(ctx context.Context) (int, error) {
 		if n == 0 {
 			return total, nil
 		}
-		gone, derr := s.Blob.DeleteMany(ctx, del)
-		if done := append(gone, inUse...); len(done) > 0 {
+		done, moved, merr := s.moveToTrash(ctx, TrashCompaction, move)
+		if done = append(done, inUse...); len(done) > 0 {
 			if _, err := s.DB.Exec(ctx, `DELETE FROM pruned_objects WHERE storage_key = ANY($1)`, done); err != nil {
 				return total, err
 			}
 		}
-		total += len(gone)
-		if derr != nil {
-			return total, derr
+		total += moved
+		if merr != nil {
+			return total, merr
 		}
 		if n < p.DeleteBatch {
 			return total, nil
@@ -490,7 +498,7 @@ func (s *Service) DrainPrunedObjects(ctx context.Context) (int, error) {
 }
 
 // PrunedObjectsPending reports the rows waiting in pruned_objects and the age of the oldest
-// (an alert above 24 h means the deletion in S3 does not progress).
+// (an alert above 24 h means the move to the trash does not progress).
 func (s *Service) PrunedObjectsPending(ctx context.Context) (int, time.Duration, error) {
 	var n int
 	var oldest *time.Time

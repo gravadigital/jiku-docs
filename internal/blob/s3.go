@@ -29,6 +29,12 @@ type Store interface {
 	Put(ctx context.Context, key string, data []byte, contentType string) error
 	Get(ctx context.Context, key string, maxBytes int64) ([]byte, error)
 	Copy(ctx context.Context, src, dst string) error
+	// CopyToTrash copies key to papelera/<key> (with meta as user metadata, if any); ErrNotFound
+	// when key does not exist. Deleting the original is the caller's next step.
+	CopyToTrash(ctx context.Context, key string, meta map[string]string) error
+	// RestoreFromTrash copies papelera/<key> back to key (never over an existing object) and
+	// returns the trash copy's user metadata.
+	RestoreFromTrash(ctx context.Context, key string) (meta map[string]string, restored bool, err error)
 	Delete(ctx context.Context, key string) error
 	// DeleteMany deletes up to MaxDeleteBatch keys with one DeleteObjects call and returns the
 	// keys that are gone (deleted now or already missing). A key that failed is not returned.
@@ -100,20 +106,35 @@ const MaxDeleteBatch = 1000
 // ErrStopList ends a ListFrom early, without error.
 var ErrStopList = errors.New("blob: stop listing")
 
+// TrashPrefix holds every content object the service removes (history compaction, orphan sweep,
+// purge of deleted documents): an object is copied to papelera/<original key> and only then
+// deleted, and a lifecycle rule expires the trash after DOCS_TRASH_RETENTION_DAYS. It replaces
+// the bucket versioning as the safety net: `jiku-docs storage restore-from-trash` brings an
+// object back while it is there.
+const TrashPrefix = "papelera/"
+
+// TrashKey is where key lands in the trash.
+func TrashKey(key string) string { return TrashPrefix + key }
+
 // Lifecycle rule ids, also what `storage init` checks.
 const (
-	RuleUploads          = "jiku-docs-uploads"
-	RuleNoncurrent       = "jiku-docs-noncurrent-versions"
-	NoncurrentVersionTTL = 7 // days
+	RuleUploads = "jiku-docs-uploads"
+	RuleTrash   = "jiku-docs-trash"
+	// DefaultTrashDays is the default of DOCS_TRASH_RETENTION_DAYS.
+	DefaultTrashDays = 7
 )
 
-// EnsureLifecycle sets the lifecycle rules of the bucket (it replaces the whole configuration):
+// EnsureLifecycle sets the lifecycle rules of the bucket (it replaces the whole configuration).
+// Both are expirations by age under a prefix, which every S3-compatible provider supports
+// (DigitalOcean Spaces included):
 //   - the large uploads in transit (`uploads/`) expire after one day, as a safety net under the
 //     janitor's purge;
-//   - the non-current versions of every object expire after 7 days: with versioning on, an object
-//     deleted by the history compaction (or by a purge) can be recovered for a week, and its
-//     space is really freed afterwards (docs/compactacion-historial-v1.md, section 4).
-func (s *S3) EnsureLifecycle(ctx context.Context) error {
+//   - the trash (`papelera/`) expires after trashDays: an object removed by the service can be
+//     restored during that time, and its space is really freed afterwards.
+func (s *S3) EnsureLifecycle(ctx context.Context, trashDays int) error {
+	if trashDays < 1 {
+		return fmt.Errorf("blob: trash retention must be at least 1 day, got %d", trashDays)
+	}
 	cfg := lifecycle.NewConfiguration()
 	cfg.Rules = []lifecycle.Rule{
 		{
@@ -123,10 +144,10 @@ func (s *S3) EnsureLifecycle(ctx context.Context) error {
 			Expiration: lifecycle.Expiration{Days: 1},
 		},
 		{
-			ID:                          RuleNoncurrent,
-			Status:                      "Enabled",
-			RuleFilter:                  lifecycle.Filter{Prefix: ""},
-			NoncurrentVersionExpiration: lifecycle.NoncurrentVersionExpiration{NoncurrentDays: NoncurrentVersionTTL},
+			ID:         RuleTrash,
+			Status:     "Enabled",
+			RuleFilter: lifecycle.Filter{Prefix: TrashPrefix},
+			Expiration: lifecycle.Expiration{Days: lifecycle.ExpirationDays(trashDays)},
 		},
 	}
 	return s.client.SetBucketLifecycle(ctx, s.bucket, cfg)
@@ -163,69 +184,56 @@ func (s *S3) Lifecycle(ctx context.Context) ([]LifecycleRule, error) {
 }
 
 // CheckLifecycle verifies that the bucket holds the two rules EnsureLifecycle sets.
-func (s *S3) CheckLifecycle(ctx context.Context) error {
+func (s *S3) CheckLifecycle(ctx context.Context, trashDays int) error {
 	rules, err := s.Lifecycle(ctx)
 	if err != nil {
 		return err
 	}
-	var uploads, noncurrent bool
+	var uploads, trash bool
 	for _, r := range rules {
 		switch {
 		case r.ID == RuleUploads && r.Enabled && r.Prefix == "uploads/" && r.ExpirationDays == 1:
 			uploads = true
-		case r.ID == RuleNoncurrent && r.Enabled && r.Prefix == "" && r.NoncurrentDays == NoncurrentVersionTTL:
-			noncurrent = true
+		case r.ID == RuleTrash && r.Enabled && r.Prefix == TrashPrefix && r.ExpirationDays == trashDays:
+			trash = true
 		}
 	}
-	if !uploads || !noncurrent {
-		return fmt.Errorf("blob: lifecycle rules missing (uploads/ after 1 day: %v; non-current versions after %d days: %v)",
-			uploads, NoncurrentVersionTTL, noncurrent)
+	if !uploads || !trash {
+		return fmt.Errorf("blob: lifecycle rules missing (uploads/ after 1 day: %v; %s after %d days: %v)",
+			uploads, TrashPrefix, trashDays, trash)
 	}
 	return nil
 }
 
-// Versioning reports whether versioning is enabled on the bucket.
-func (s *S3) Versioning(ctx context.Context) (bool, error) {
+// VersioningStatus reports the versioning state of the bucket: "Enabled", "Suspended" or ""
+// (never enabled).
+func (s *S3) VersioningStatus(ctx context.Context) (string, error) {
 	v, err := s.client.GetBucketVersioning(ctx, s.bucket)
 	if err != nil {
-		return false, err
+		return "", err
 	}
-	return v.Enabled(), nil
+	return v.Status, nil
 }
 
-// ObjectVersions counts the versions (including delete markers) kept for a key, for tests and
-// operation checks.
-func (s *S3) ObjectVersions(ctx context.Context, key string) (versions, deleteMarkers int, err error) {
-	for obj := range s.client.ListObjects(ctx, s.bucket, minio.ListObjectsOptions{Prefix: key, WithVersions: true}) {
-		if obj.Err != nil {
-			return 0, 0, obj.Err
-		}
-		if obj.Key != key {
-			continue
-		}
-		if obj.IsDeleteMarker {
-			deleteMarkers++
-		} else {
-			versions++
-		}
-	}
-	return versions, deleteMarkers, nil
+// SuspendVersioning stops keeping new versions. The versions the bucket already holds stay
+// until someone deletes them: suspending does not remove them.
+func (s *S3) SuspendVersioning(ctx context.Context) error {
+	return s.client.SuspendVersioning(ctx, s.bucket)
 }
 
-// EnsureBucket creates the bucket (with versioning) if missing. Used by tests and by the
-// optional `storage init`.
-func (s *S3) EnsureBucket(ctx context.Context, region string, versioning bool) error {
+// EnableVersioning turns versioning on (only tests use it: the content bucket runs without).
+func (s *S3) EnableVersioning(ctx context.Context) error {
+	return s.client.EnableVersioning(ctx, s.bucket)
+}
+
+// EnsureBucket creates the bucket if missing. Used by tests and by `storage init`.
+func (s *S3) EnsureBucket(ctx context.Context, region string) error {
 	exists, err := s.client.BucketExists(ctx, s.bucket)
 	if err != nil {
 		return err
 	}
 	if !exists {
-		if err := s.client.MakeBucket(ctx, s.bucket, minio.MakeBucketOptions{Region: region}); err != nil {
-			return err
-		}
-	}
-	if versioning {
-		return s.client.EnableVersioning(ctx, s.bucket)
+		return s.client.MakeBucket(ctx, s.bucket, minio.MakeBucketOptions{Region: region})
 	}
 	return nil
 }
@@ -275,6 +283,67 @@ func (s *S3) Copy(ctx context.Context, src, dst string) error {
 		return ErrNotFound
 	}
 	return err
+}
+
+// missingKey is a source object that does not exist (not a missing bucket).
+func missingKey(err error) bool {
+	resp := minio.ToErrorResponse(err)
+	return resp.Code == "NoSuchKey" || (resp.StatusCode == 404 && resp.Code != "NoSuchBucket")
+}
+
+// CopyToTrash copies key to papelera/<key>; the caller deletes the original afterwards (in a
+// DeleteObjects batch). With meta, the copy carries it as user metadata (the source's content
+// type is kept); without, it keeps the source's metadata. ErrNotFound: the original is gone.
+// Copying again over an existing trash copy is harmless: same content.
+func (s *S3) CopyToTrash(ctx context.Context, key string, meta map[string]string) error {
+	dst := minio.CopyDestOptions{Bucket: s.bucket, Object: TrashKey(key)}
+	if meta != nil {
+		info, err := s.client.StatObject(ctx, s.bucket, key, minio.StatObjectOptions{})
+		if err != nil {
+			if missingKey(err) {
+				return ErrNotFound
+			}
+			return err
+		}
+		dst.ReplaceMetadata, dst.UserMetadata, dst.ContentType = true, meta, info.ContentType
+	}
+	_, err := s.client.CopyObject(ctx, dst, minio.CopySrcOptions{Bucket: s.bucket, Object: key})
+	if err != nil && missingKey(err) {
+		return ErrNotFound
+	}
+	return err
+}
+
+// RestoreFromTrash copies papelera/<key> back to key and returns the user metadata of the trash
+// copy (keys in lower case, without the x-amz-meta- prefix). The trash copy stays until the
+// lifecycle expires it. If key already exists it is not overwritten (restored = false).
+// ErrNotFound: the object is not in the trash (never was, or expired).
+func (s *S3) RestoreFromTrash(ctx context.Context, key string) (meta map[string]string, restored bool, err error) {
+	info, err := s.client.StatObject(ctx, s.bucket, TrashKey(key), minio.StatObjectOptions{})
+	if err != nil {
+		if missingKey(err) {
+			return nil, false, ErrNotFound
+		}
+		return nil, false, err
+	}
+	meta = map[string]string{}
+	for k, v := range info.UserMetadata {
+		meta[strings.ToLower(strings.TrimPrefix(strings.ToLower(k), "x-amz-meta-"))] = v
+	}
+	if _, err := s.client.StatObject(ctx, s.bucket, key, minio.StatObjectOptions{}); err == nil {
+		return meta, false, nil
+	} else if !missingKey(err) {
+		return nil, false, err
+	}
+	// The restored object gets only its content type back: the trash metadata stays in the trash.
+	_, err = s.client.CopyObject(ctx,
+		minio.CopyDestOptions{Bucket: s.bucket, Object: key, ReplaceMetadata: true, UserMetadata: map[string]string{},
+			ContentType: info.ContentType},
+		minio.CopySrcOptions{Bucket: s.bucket, Object: TrashKey(key)})
+	if err != nil {
+		return nil, false, err
+	}
+	return meta, true, nil
 }
 
 func (s *S3) Delete(ctx context.Context, key string) error {

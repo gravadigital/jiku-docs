@@ -40,6 +40,9 @@ type Config struct {
 	S3AccessKey      string
 	S3SecretKey      string
 	S3PathStyle      bool
+	// TrashRetentionDays: how long papelera/ keeps what the service removes (lifecycle rule set
+	// by `storage init`).
+	TrashRetentionDays int
 
 	// Secrets
 	SecretKey []byte
@@ -88,6 +91,8 @@ func FromEnv() Config {
 		S3AccessKey:      env("DOCS_S3_ACCESS_KEY", ""),
 		S3SecretKey:      env("DOCS_S3_SECRET_KEY", ""),
 		S3PathStyle:      envBool("DOCS_S3_FORCE_PATH_STYLE", true),
+
+		TrashRetentionDays: envInt("DOCS_TRASH_RETENTION_DAYS", 7),
 
 		SecretKey: decodeKey(env("DOCS_SECRET_KEY", "")),
 
@@ -269,6 +274,9 @@ func (c Config) ValidateStorage() error {
 	}
 	if _, err := url.Parse(c.S3Endpoint); err != nil {
 		return fmt.Errorf("DOCS_S3_ENDPOINT: %w", err)
+	}
+	if c.TrashRetentionDays < 1 {
+		return fmt.Errorf("DOCS_TRASH_RETENTION_DAYS must be at least 1, got %d", c.TrashRetentionDays)
 	}
 	return nil
 }

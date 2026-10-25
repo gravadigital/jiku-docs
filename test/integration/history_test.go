@@ -163,6 +163,18 @@ func span(from, to int) []int {
 	return out
 }
 
+func (h *hist) list(prefix string) []string {
+	h.t.Helper()
+	var out []string
+	if err := h.e.Blob.List(context.Background(), prefix, func(key string, _ time.Time) error {
+		out = append(out, key)
+		return nil
+	}); err != nil {
+		h.t.Fatal(err)
+	}
+	return out
+}
+
 func (h *hist) objectExists(key string) bool {
 	h.t.Helper()
 	_, err := h.e.Blob.Get(context.Background(), key, 0)
@@ -185,7 +197,8 @@ func TestHistory01RecentVersionsStay(t *testing.T) {
 }
 
 // Case 2: the same, 3 days ago: only the last of the block and the current one stay (and the
-// creation, always protected). The objects go too, and the count is reported.
+// creation, always protected). The objects go to papelera/ (nothing of them stays under docs/),
+// and the count is reported.
 func TestHistory02OldBlockKeepsItsLast(t *testing.T) {
 	h := newHist(t)
 	start := histNow.Add(-72 * time.Hour)
@@ -195,11 +208,18 @@ func TestHistory02OldBlockKeepsItsLast(t *testing.T) {
 	keys := h.keys(id)
 	rep := h.compact(histNow, service.HistoryOptions{})
 	h.expect(id, 1, last, cur)
-	if rep.VersionsPruned != 299 || rep.ObjectsDeleted != 299 || rep.ObjectsPending != 0 || rep.BytesFreed <= 0 {
+	if rep.VersionsPruned != 299 || rep.ObjectsTrashed != 299 || rep.ObjectsPending != 0 || rep.BytesFreed <= 0 {
 		t.Fatalf("%+v", rep)
 	}
 	if h.objectExists(keys[2]) || h.objectExists(keys[last-1]) || !h.objectExists(keys[last]) || !h.objectExists(keys[1]) {
 		t.Fatal("the objects of the pruned versions go, the others stay")
+	}
+	if left := h.list("docs/" + id + "/"); len(left) != 3 {
+		t.Fatalf("only the kept versions stay under docs/: %d objects", len(left))
+	}
+	trash := h.list(blob.TrashPrefix + "docs/" + id + "/")
+	if len(trash) != 299 || !h.objectExists(blob.TrashKey(keys[2])) || h.objectExists(blob.TrashKey(keys[last])) {
+		t.Fatalf("the pruned objects are in papelera/: %d", len(trash))
 	}
 	g := h.e.OK(h.e.Q(tu.User, "documents.get", map[string]any{"id": id}))
 	if g["prunedVersionsCount"] != float64(299) {
@@ -413,17 +433,20 @@ func TestHistory12Idempotent(t *testing.T) {
 	}
 }
 
-// failingBlob cuts the run between the commit and the deletion in S3.
+// failingBlob cuts the run between the copy to papelera/ and the deletion of the originals.
 type failingBlob struct{ blob.Store }
 
 func (failingBlob) DeleteMany(context.Context, []string) ([]string, error) {
 	return nil, errors.New("simulated S3 outage")
 }
 
-// Case 13: the process stops after the commit and before deleting in S3: the rows stay in
-// pruned_objects (the objects too, without rows of versions) and the next run deletes them.
+// Case 13: the process stops after the commit, with the objects already copied to papelera/
+// but not deleted: the rows stay in pruned_objects (the originals too, without rows of
+// versions) and the next run finishes the move. An original that disappeared meanwhile counts
+// as done.
 func TestHistory13ResumesObjectDeletion(t *testing.T) {
 	h := newHist(t)
+	ctx := context.Background()
 	start := histNow.Add(-72 * time.Hour)
 	id := h.doc(tu.User, start.Add(-time.Hour))
 	_, last := h.burst(id, tu.User, "", start, 5, time.Minute)
@@ -431,21 +454,28 @@ func TestHistory13ResumesObjectDeletion(t *testing.T) {
 	h.clk.Set(histNow)
 	broken := service.New(h.e.DB, failingBlob{h.e.Blob}, h.e.Cached, logging.Discard(), h.e.Settings)
 	broken.Now = h.clk.Now
-	rep, err := broken.CompactHistory(context.Background(), service.HistoryOptions{})
-	if err != nil || rep.VersionsPruned != 4 || rep.ObjectsDeleted != 0 || rep.ObjectsPending != 4 || rep.Errors != 1 {
+	rep, err := broken.CompactHistory(ctx, service.HistoryOptions{})
+	if err != nil || rep.VersionsPruned != 4 || rep.ObjectsTrashed != 0 || rep.ObjectsPending != 4 || rep.Errors != 1 {
 		t.Fatalf("%+v %v", rep, err)
 	}
 	h.expect(id, 1, last)
-	if !h.objectExists(keys[2]) {
-		t.Fatal("the object waits in pruned_objects")
+	if !h.objectExists(keys[2]) || !h.objectExists(blob.TrashKey(keys[2])) {
+		t.Fatal("cut between the copy and the delete: the copy is in the trash and the original waits in pruned_objects")
+	}
+	// The original of version 3 disappears meanwhile: its row is done anyway.
+	if err := h.e.Blob.Delete(ctx, keys[3]); err != nil {
+		t.Fatal(err)
 	}
 	rep = h.compact(histNow.Add(time.Hour), service.HistoryOptions{})
-	if rep.Documents != 0 || rep.ObjectsDeleted != 4 || rep.ObjectsPending != 0 {
+	if rep.Documents != 0 || rep.ObjectsTrashed != 3 || rep.ObjectsPending != 0 {
 		t.Fatalf("%+v", rep)
 	}
 	for v := 2; v < last; v++ {
 		if h.objectExists(keys[v]) {
 			t.Fatalf("object of version %d still there", v)
+		}
+		if !h.objectExists(blob.TrashKey(keys[v])) {
+			t.Fatalf("object of version %d is not in the trash", v)
 		}
 	}
 }

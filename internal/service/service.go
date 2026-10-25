@@ -46,6 +46,9 @@ type Settings struct {
 // Hooks observe the dispatcher, for metrics.
 type Hooks struct {
 	Request func(plane, method, errorCode string, d time.Duration)
+	// Trashed counts the objects moved to papelera/, by source (compaction, orphans,
+	// deleted-documents).
+	Trashed func(source string, n int)
 }
 
 // Service is the business logic.

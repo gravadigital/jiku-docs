@@ -36,7 +36,10 @@ func TestPurges(t *testing.T) {
 		t.Fatal(n, err)
 	}
 	if _, err := e.Blob.Get(ctx, key, 0); !errors.Is(err, blob.ErrNotFound) {
-		t.Fatalf("object must be deleted: %v", err)
+		t.Fatalf("object must be gone from docs/: %v", err)
+	}
+	if _, err := e.Blob.Get(ctx, blob.TrashKey(key), 0); err != nil {
+		t.Fatalf("the object of the purged document waits in papelera/: %v", err)
 	}
 	e.Fail(e.Cmd(tu.User, "documents."+doc+".restore", map[string]any{"fromVersion": 1, "baseVersion": 1}), protocol.CodeDocumentNotFound)
 
@@ -47,6 +50,16 @@ func TestPurges(t *testing.T) {
 	svc.Now = func() time.Time { return time.Now().Add(2 * time.Hour) }
 	if n := sweepOrphans(t, svc); n != 1 {
 		t.Fatal(n)
+	}
+	// The orphan went to papelera/, not deleted; the sweep never touches the trash.
+	if _, err := e.Blob.Get(ctx, "docs/HUERFANO/1-abc.md", 0); !errors.Is(err, blob.ErrNotFound) {
+		t.Fatalf("orphan still under docs/: %v", err)
+	}
+	if b, err := e.Blob.Get(ctx, blob.TrashKey("docs/HUERFANO/1-abc.md"), 0); err != nil || string(b) != "x" {
+		t.Fatalf("orphan must be in papelera/: %q %v", b, err)
+	}
+	if n := sweepOrphans(t, svc); n != 0 {
+		t.Fatalf("papelera/ is not swept (%d)", n)
 	}
 	live := e.Doc(tu.User, f, "vivo.md", "vivo")
 	if n := sweepOrphans(t, svc); n != 0 {

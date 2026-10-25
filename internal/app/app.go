@@ -72,6 +72,7 @@ func Start(ctx context.Context, o Options) (*Instance, error) {
 	svc := service.New(o.DB, o.Blob, o.Core, o.Log, o.Settings)
 	svc.History = o.History
 	svc.Hooks.Request = o.Metrics.Request
+	svc.Hooks.Trashed = o.Metrics.Trashed
 	if mp := o.NC.MaxPayload(); mp > 0 {
 		svc.PageBudget = int(mp / 2)
 	}

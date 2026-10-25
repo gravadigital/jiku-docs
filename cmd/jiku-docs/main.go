@@ -7,6 +7,8 @@
 //	jiku-docs module deregister    delete the `docs` key of JIKU_MODULES (uninstall)
 //	jiku-docs import hedgedoc ...  import notes from a HedgeDoc database
 //	jiku-docs history compact      compact the version history now (--document, --dry-run)
+//	jiku-docs storage init         prepare the content bucket (no versioning, lifecycle rules)
+//	jiku-docs storage restore-from-trash --key <key> [--version-row]
 //	jiku-docs version
 package main
 
@@ -85,11 +87,14 @@ func main() {
 		}
 		err = historyCompact(ctx, cfg, log, args[1:])
 	case "storage":
-		if len(args) != 1 || args[0] != "init" {
-			err = errors.New("usage: jiku-docs storage init")
-			break
+		switch {
+		case len(args) == 1 && args[0] == "init":
+			err = storageInit(ctx, cfg, log)
+		case len(args) > 0 && args[0] == "restore-from-trash":
+			err = storageRestore(ctx, cfg, log, args[1:])
+		default:
+			err = errors.New("usage: jiku-docs storage init | jiku-docs storage restore-from-trash --key <key> [--version-row]")
 		}
-		err = storageInit(ctx, cfg, log)
 	case "healthcheck":
 		err = healthcheck(cfg)
 	case "version", "--version", "-v":
@@ -114,7 +119,11 @@ const usage = `jiku-docs — módulo de documentación de Jiku
   jiku-docs import hedgedoc     importa notas de HedgeDoc (--help para las opciones)
   jiku-docs history compact     compacta el historial de versiones ahora
                                 [--document <id>] [--dry-run]
-  jiku-docs storage init        crea el bucket de contenido con versionado y ciclo de vida (idempotente)
+  jiku-docs storage init        crea el bucket de contenido sin versionado (lo suspende si estaba
+                                activado) y aplica el ciclo de vida de uploads/ y papelera/ (idempotente)
+  jiku-docs storage restore-from-trash --key <clave original> [--version-row]
+                                devuelve un objeto desde papelera/; con --version-row también vuelve
+                                a poner en el historial la versión compactada que guardaba
   jiku-docs healthcheck          consulta /readyz del proceso local (para el HEALTHCHECK de Docker)
   jiku-docs version
 
@@ -427,8 +436,8 @@ func historyCompact(ctx context.Context, cfg config.Config, log *slog.Logger, ar
 			}
 		}
 	}
-	fmt.Printf("documents=%d versionsPruned=%d bytesFreed=%d objectsDeleted=%d objectsPending=%d errors=%d dryRun=%v duration=%s\n",
-		rep.Documents, rep.VersionsPruned, rep.BytesFreed, rep.ObjectsDeleted, rep.ObjectsPending, rep.Errors, rep.DryRun,
+	fmt.Printf("documents=%d versionsPruned=%d bytesFreed=%d objectsTrashed=%d objectsPending=%d errors=%d dryRun=%v duration=%s\n",
+		rep.Documents, rep.VersionsPruned, rep.BytesFreed, rep.ObjectsTrashed, rep.ObjectsPending, rep.Errors, rep.DryRun,
 		rep.Duration.Round(time.Millisecond))
 	if rep.Errors > 0 {
 		return fmt.Errorf("%d documents failed (see the log)", rep.Errors)
@@ -454,30 +463,84 @@ func healthcheck(cfg config.Config) error {
 	return nil
 }
 
-// storageInit creates the content bucket idempotently, with versioning and the lifecycle rules.
-// The local compose runs it as an init container against the MinIO of jiku.
+// storageInit prepares the content bucket idempotently. The local compose runs it as an init
+// container against the MinIO of jiku.
 func storageInit(ctx context.Context, cfg config.Config, log *slog.Logger) error {
 	bs, err := openBlob(cfg)
 	if err != nil {
 		return err
 	}
-	return initStorage(ctx, bs, cfg.S3Region, cfg.S3Bucket, log)
+	return initStorage(ctx, bs, cfg.S3Region, cfg.S3Bucket, cfg.TrashRetentionDays, log)
 }
 
-// initStorage is what `storage init` does: bucket with versioning, then the lifecycle rules
-// (uploads/ after one day; non-current versions after 7 days, the safety net of the history
-// compaction), read back to check that the provider kept them.
-func initStorage(ctx context.Context, bs *blob.S3, region, bucket string, log *slog.Logger) error {
-	if err := bs.EnsureBucket(ctx, region, true); err != nil {
+// initStorage is what `storage init` does: the bucket, without versioning (the safety net of
+// what the service removes is papelera/, not the versions of the bucket: DigitalOcean Spaces
+// does not confirm NoncurrentVersionExpiration), then the lifecycle rules (uploads/ after one
+// day, papelera/ after trashDays), read back to check that the provider kept them.
+func initStorage(ctx context.Context, bs *blob.S3, region, bucket string, trashDays int, log *slog.Logger) error {
+	if err := bs.EnsureBucket(ctx, region); err != nil {
 		return err
 	}
-	if err := bs.EnsureLifecycle(ctx); err != nil {
-		log.Warn("lifecycle rules not set: the janitor still purges uploads, but objects deleted by the history "+
-			"compaction stay in the bucket as non-current versions until they are expired by hand", "err", err.Error())
-	} else if err := bs.CheckLifecycle(ctx); err != nil {
-		log.Warn("lifecycle rules not confirmed by the provider", "err", err.Error())
+	status, err := bs.VersioningStatus(ctx)
+	if err != nil {
+		return fmt.Errorf("reading the versioning of the bucket: %w", err)
 	}
-	log.Info("content bucket ready", "bucket", bucket, "versioning", true,
-		"noncurrentVersionExpirationDays", blob.NoncurrentVersionTTL)
+	switch status {
+	case "Enabled":
+		if err := bs.SuspendVersioning(ctx); err != nil {
+			return fmt.Errorf("suspending the versioning of the bucket: %w", err)
+		}
+		log.Warn("bucket versioning suspended: the content bucket no longer keeps versions (the safety net is "+
+			"papelera/). The old versions it already holds are NOT removed by themselves: delete them by hand "+
+			"when they are no longer needed (README, section Spaces)", "bucket", bucket)
+		status = "Suspended"
+	case "Suspended":
+		log.Info("bucket versioning already suspended; old versions, if any, stay until deleted by hand", "bucket", bucket)
+	}
+	if err := bs.EnsureLifecycle(ctx, trashDays); err != nil {
+		log.Warn("lifecycle rules not set: the janitor still purges uploads, but papelera/ never expires and "+
+			"keeps growing until it is emptied by hand", "err", err.Error())
+	} else if err := bs.CheckLifecycle(ctx, trashDays); err != nil {
+		log.Warn("lifecycle rules not confirmed by the provider", "err", err.Error())
+	} else {
+		log.Info("lifecycle rules applied", "bucket", bucket, "uploadsExpirationDays", 1,
+			"trashPrefix", blob.TrashPrefix, "trashExpirationDays", trashDays)
+	}
+	if status == "" {
+		status = "never enabled"
+	}
+	log.Info("content bucket ready", "bucket", bucket, "versioning", status)
 	return nil
+}
+
+// storageRestore brings an object back from papelera/ and, with --version-row, the compacted
+// version it held back into the history. It prints the result as one JSON line.
+func storageRestore(ctx context.Context, cfg config.Config, log *slog.Logger, args []string) error {
+	fs := flag.NewFlagSet("storage restore-from-trash", flag.ContinueOnError)
+	key := fs.String("key", "", "clave original del objeto, por ejemplo docs/<documentId>/<version>-<sha256>.md")
+	row := fs.Bool("version-row", false, "además, volver a poner la versión compactada en el historial (queda protegida)")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if fs.NArg() > 0 || *key == "" {
+		return errors.New("usage: jiku-docs storage restore-from-trash --key <key> [--version-row]")
+	}
+	bs, err := openBlob(cfg)
+	if err != nil {
+		return err
+	}
+	svc := service.New(nil, bs, nil, log, service.Settings{Instance: cfg.Instance, ServiceName: cfg.ServiceName})
+	if *row {
+		pool, err := openDB(ctx, cfg, log, true)
+		if err != nil {
+			return err
+		}
+		defer pool.Close()
+		svc.DB = pool
+	}
+	res, err := svc.RestoreFromTrash(ctx, *key, *row)
+	if res != nil {
+		_ = json.NewEncoder(os.Stdout).Encode(res)
+	}
+	return err
 }

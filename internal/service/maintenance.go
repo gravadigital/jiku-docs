@@ -81,7 +81,7 @@ func (s *Service) ActiveLocks(ctx context.Context) (int, error) {
 }
 
 // PurgeDeleted removes for good the documents deleted more than 30 days ago, with their
-// versions and their objects.
+// versions; their objects go to papelera/ (they expire after DOCS_TRASH_RETENTION_DAYS).
 func (s *Service) PurgeDeleted(ctx context.Context) (int, error) {
 	cutoff := s.now().Add(-DeletedRetention)
 	rows, err := s.DB.Query(ctx, `SELECT id FROM documents WHERE deleted_at IS NOT NULL AND deleted_at < $1 LIMIT 500`, cutoff)
@@ -128,10 +128,12 @@ func (s *Service) PurgeDeleted(ctx context.Context) (int, error) {
 		if err != nil {
 			return n, err
 		}
-		for _, k := range keys {
-			if err := s.Blob.Delete(ctx, k); err != nil {
-				s.Log.Warn("purge: object not deleted (the orphan sweep retries)", "document", id, "err", err.Error())
-			}
+		objs := make([]trashObject, len(keys))
+		for i, k := range keys {
+			objs[i] = trashObject{Key: k}
+		}
+		if _, _, err := s.moveToTrash(ctx, TrashPurge, objs); err != nil {
+			s.Log.Warn("purge: objects not moved to the trash (the orphan sweep retries)", "document", id, "err", err.Error())
 		}
 		n++
 	}
@@ -237,9 +239,10 @@ func (s *Service) StartOrphanSweep(ctx context.Context) error {
 }
 
 // PurgeOrphans runs one page of the orphan sweep and reports whether the sweep finished (also
-// when none is in progress). It deletes objects no metadata points to: document contents of
-// failed transactions (versions removed by the history compaction go through pruned_objects
-// instead), uploads without a row, and rendered pages older than a day. The cursor lives in
+// when none is in progress). It removes objects no metadata points to: document contents of
+// failed transactions, moved to papelera/ (versions removed by the history compaction go
+// through pruned_objects instead), and, deleted for good, uploads without a row and rendered
+// pages older than a day. papelera/ itself is never swept: its lifecycle rule expires it. The cursor lives in
 // service_state, so the sweep survives restarts and one page never takes long.
 func (s *Service) PurgeOrphans(ctx context.Context) (deleted int, done bool, err error) {
 	var raw []byte
@@ -319,9 +322,22 @@ func (s *Service) PurgeOrphans(ctx context.Context) (deleted int, done bool, err
 			}
 		}
 	}
-	gone, err := s.Blob.DeleteMany(ctx, orphans)
+	// Document contents go to the trash; uploads in transit and rendered pages are not content
+	// (a used upload is stored again under docs/; a page is rebuilt on demand) and are deleted.
+	var gone int
+	if cur.Prefix == "docs/" {
+		objs := make([]trashObject, len(orphans))
+		for i, k := range orphans {
+			objs[i] = trashObject{Key: k}
+		}
+		_, gone, err = s.moveToTrash(ctx, TrashOrphans, objs)
+	} else {
+		var deleted []string
+		deleted, err = s.Blob.DeleteMany(ctx, orphans)
+		gone = len(deleted)
+	}
 	if err != nil {
-		return len(gone), false, err
+		return gone, false, err
 	}
 	next := cur
 	if len(page) < OrphanPage {
@@ -336,11 +352,11 @@ func (s *Service) PurgeOrphans(ctx context.Context) (deleted int, done bool, err
 	}
 	if next.Prefix == "" {
 		_, err = s.DB.Exec(ctx, `DELETE FROM service_state WHERE key = $1`, orphanSweepKey)
-		return len(gone), err == nil, err
+		return gone, err == nil, err
 	}
 	val, _ := json.Marshal(next)
 	_, err = s.DB.Exec(ctx, `UPDATE service_state SET value = $2, updated_at = now() WHERE key = $1`, orphanSweepKey, val)
-	return len(gone), false, err
+	return gone, false, err
 }
 
 // fresh is implemented by the cached core client: the review must see deletions immediately.

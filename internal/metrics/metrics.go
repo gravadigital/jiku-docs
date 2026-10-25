@@ -31,6 +31,7 @@ type Metrics struct {
 	historyLastSuccess prometheus.Gauge
 	historyPending     prometheus.Gauge
 	historyPendingAge  prometheus.Gauge
+	trashMoved         *prometheus.CounterVec
 }
 
 // New registers the metrics.
@@ -72,8 +73,14 @@ func New() *Metrics {
 		Name: "docs_history_pruned_objects_pending", Help: "Rows in pruned_objects: objects of compacted versions still in S3."})
 	m.historyPendingAge = prometheus.NewGauge(prometheus.GaugeOpts{
 		Name: "docs_history_pruned_objects_oldest_seconds", Help: "Age of the oldest row in pruned_objects (alert above 86400)."})
+	m.trashMoved = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "docs_trash_objects_moved_total", Help: "Content objects moved to papelera/ by source (compaction, orphans, deleted-documents)."},
+		[]string{"source"})
+	for _, src := range []string{"compaction", "orphans", "deleted-documents"} {
+		m.trashMoved.WithLabelValues(src) // exported at 0 from the start, so alerts and dashboards see it
+	}
 	reg.MustRegister(m.requests, m.duration, m.published, m.outboxAge, m.notifications, m.indexerLag, m.indexed, m.locks,
-		m.historyPruned, m.historyBytes, m.historyDuration, m.historyRuns, m.historyLastSuccess, m.historyPending, m.historyPendingAge,
+		m.historyPruned, m.historyBytes, m.historyDuration, m.historyRuns, m.historyLastSuccess, m.historyPending, m.historyPendingAge, m.trashMoved,
 		collectors.NewGoCollector(), collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}))
 	return m
 }
@@ -143,6 +150,13 @@ func (m *Metrics) HistoryPending(n int, oldest time.Duration) {
 	if m != nil {
 		m.historyPending.Set(float64(n))
 		m.historyPendingAge.Set(oldest.Seconds())
+	}
+}
+
+// Trashed counts content objects moved to papelera/.
+func (m *Metrics) Trashed(source string, n int) {
+	if m != nil {
+		m.trashMoved.WithLabelValues(source).Add(float64(n))
 	}
 }
 
