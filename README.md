@@ -27,7 +27,7 @@ del subject (garantizada por el auth-callout) y publica eventos en JetStream. Lo
      │  ├─ ACL de carpetas, clases de caller, validación estricta, versionado, locks
      │  ├─ users / project-permissions / entidades / files.*  ──▶ core (jiku-queries, jiku-commands)
      │  ├─ PostgreSQL 16 propio (metadatos, changelog, índice es_unaccent)
-     │  └─ bucket S3 propio (contenido versionado, subidas grandes)
+     │  └─ bucket S3 propio (una versión por objeto, subidas grandes, papelera/)
      │
      ├─ outbox: changelog ─▶ JetStream JIKU_DOCS_EVENTS (Nats-Msg-Id = eventId)
      │                    └▶ {instance}.{userId}.docs-notify.v1.* (personas con read)
@@ -38,7 +38,7 @@ del subject (garantizada por el auth-callout) y publica eventos en JetStream. Lo
 
 | Paquete | Responsabilidad |
 | --- | --- |
-| `cmd/jiku-docs` | Binario y subcomandos (`serve`, `migrate`, `reindex`, `module deregister`, `storage init`, `import hedgedoc`, `healthcheck`) |
+| `cmd/jiku-docs` | Binario y subcomandos (`serve`, `migrate`, `reindex`, `module deregister`, `storage init`, `storage restore-from-trash`, `history compact`, `import hedgedoc`, `healthcheck`) |
 | `internal/app` | Cableado del proceso: stream, servicios micro, outbox, indexador, janitor, registro |
 | `internal/bus` | Registro de los dos servicios NATS micro (patrón del `BusHost` de core) |
 | `internal/service` | Lógica: 18 comandos, 13 consultas, ACL, clases de caller, eventos, purgas, revisión de relaciones |
@@ -109,7 +109,8 @@ jiku-docs no modifica Jiku; estos son los cambios que el repo de Jiku tiene que 
    ```
 
    El compose levanta un Postgres 16 propio (`127.0.0.1:5442`), corre `jiku-docs storage init` (crea
-   `jiku-docs-content` con versionado en el MinIO de Jiku) y el servicio, con `NATS_URL=nats://nats:4222` y
+   `jiku-docs-content` sin versionado en el MinIO de Jiku, o lo suspende si estaba activado, y aplica las
+   reglas de ciclo de vida) y el servicio, con `NATS_URL=nats://nats:4222` y
    las creds del sentinel de `../../jiku/deploy/nats/creds/sentinel-client.creds` (cambiar con
    `JIKU_DEPLOY_DIR`).
 4. Probar con jiku-go: `jiku docs status`, `jiku docs ls /`, etc.
@@ -125,8 +126,8 @@ Todas están documentadas en [`.env.dist`](.env.dist). Las obligatorias para `se
 `DOCS_S3_ACCESS_KEY`, `DOCS_S3_SECRET_KEY` y `DOCS_SECRET_KEY` (32 bytes, base64).
 
 En producción el bucket es un Space de DigitalOcean propio (`DOCS_S3_ENDPOINT=https://<región>.digitaloceanspaces.com`,
-`DOCS_S3_FORCE_PATH_STYLE=false`), con versionado activado (`jiku-docs storage init` lo crea y lo activa
-si la credencial lo permite).
+`DOCS_S3_FORCE_PATH_STYLE=false`), sin versionado y con las reglas de ciclo de vida de `uploads/` y `papelera/`
+(`jiku-docs storage init` lo crea si la credencial lo permite y aplica las reglas; ver "Spaces" abajo).
 
 ## Operación
 
@@ -136,7 +137,8 @@ si la credencial lo permite).
 | `jiku-docs migrate` | Aplica migraciones (también lo hace `serve`; seguras con varias réplicas) |
 | `jiku-docs reindex` | Regenera el índice de búsqueda completo (en proceso; no inyecta eventos en el stream) |
 | `jiku-docs module deregister` | Borra la clave `docs` (desinstalar). Un apagado normal **no** la borra |
-| `jiku-docs storage init` | Crea el bucket con versionado y las reglas de ciclo de vida (`uploads/` a 1 día, versiones no actuales a 7 días) y las relee |
+| `jiku-docs storage init` | Crea el bucket sin versionado (si lo tenía activado, lo suspende y lo avisa en el log), aplica las reglas de ciclo de vida (`uploads/` a 1 día, `papelera/` a `DOCS_TRASH_RETENTION_DAYS`) y las relee |
+| `jiku-docs storage restore-from-trash --key <clave> [--version-row]` | Devuelve un objeto desde `papelera/` a su clave original (nunca pisa uno existente; la copia de la papelera queda hasta que vence). Con `--version-row` también vuelve a poner en el historial la versión compactada (ver "Papelera" abajo). Imprime una línea JSON con lo que hizo |
 | `jiku-docs history compact [--document <id>] [--dry-run]` | Compacta el historial de versiones ahora (solo base y bucket, sin bus). `--dry-run` imprime una línea JSON por documento con cada versión, si se conserva y el motivo, y no toca nada. Si la corrida diaria tiene el lock, sale con error |
 | `jiku-docs import hedgedoc` | Importador (ver abajo) |
 | `jiku-docs healthcheck` | Consulta `/readyz` (HEALTHCHECK de la imagen) |
@@ -153,7 +155,8 @@ si la credencial lo permite).
 | `jiku_docs_requests_total{code="upstream_unavailable"}` | tasa sostenida |
 | `jiku_docs_request_duration_seconds`, `jiku_docs_locks_active`, `jiku_docs_notifications_total`, `jiku_docs_outbox_published_total` | — |
 | `docs_history_last_success_timestamp_seconds` | más de 48 h atrás (la compactación falla o no corre); también `docs_history_runs_total{result="failure"}` |
-| `docs_history_pruned_objects_oldest_seconds` | > 86400 (el borrado en S3 no avanza); `docs_history_pruned_objects_pending` da el volumen |
+| `docs_history_pruned_objects_oldest_seconds` | > 86400 (el paso a la papelera no avanza); `docs_history_pruned_objects_pending` da el volumen |
+| `docs_trash_objects_moved_total{source}` | — (objetos movidos a `papelera/`: `compaction`, `orphans`, `deleted-documents`) |
 | `docs_history_versions_pruned_total`, `docs_history_bytes_freed_total`, `docs_history_run_duration_seconds` | — |
 
 **Logs**: JSON por stderr con método, caller, actor, `correlationId`, duración y `errorCode`. Nunca contenido,
@@ -161,9 +164,9 @@ tokens ni URLs prefirmadas.
 
 **Tareas periódicas** (una sola réplica a la vez, por advisory lock): vencimiento de locks con
 `document.unlocked` (cada 10 s), borrado de cifrados de reintento de shares (5 min), subidas vencidas,
-adjuntos pendientes de más de 24 h, documentos borrados hace más de 30 días (con sus objetos), changelog
-de más de 30 días, objetos huérfanos (barrido semanal y paginado: una página de 1.000 objetos por minuto,
-con el cursor en `service_state`), accesos a links de más de 180 días y la revisión diaria
+adjuntos pendientes de más de 24 h, documentos borrados hace más de 30 días (sus objetos van a `papelera/`),
+changelog de más de 30 días, objetos huérfanos (barrido semanal y paginado: una página de 1.000 objetos por
+minuto, con el cursor en `service_state`; el contenido huérfano va a `papelera/`), accesos a links de más de 180 días y la revisión diaria
 de relaciones contra core (`DOCS_RELATION_REVIEW_HOUR_UTC`), que quita relaciones a entidades
 inexistentes reescribiendo el frontmatter en una versión nueva firmada por el servicio.
 
@@ -174,35 +177,64 @@ cada guardado sigue creando una versión, y una vez por día, a partir de `DOCS_
 de cada día. Nunca se borran la versión actual, la creación, las restauraciones, las versiones con `message`,
 las de `via: service` ni las fijadas por un link `pinned` activo; las de agente siguen la regla de bloques
 (para proteger una, guardarla con `--message`). Procesa documento por documento con `FOR UPDATE` y
-transacciones cortas, y borra los objetos de S3 después del commit vía `pruned_objects` (`DeleteObjects` en
-lotes). Corre en una sola réplica (`pg_try_advisory_lock`), también frente a un `history compact` manual.
+transacciones cortas, y después del commit mueve los objetos a `papelera/` vía `pruned_objects` (copias en
+paralelo y `DeleteObjects` en lotes). Procesa los documentos con actividad nueva, con un link fijado que
+venció o se revocó, y los que tienen alguna versión no protegida que cruzó el umbral de 24 h o el de 30 días
+desde su última compactación (así la sesión del día anterior se compacta en la corrida siguiente aunque nadie
+vuelva a editar). Corre en una sola réplica (`pg_try_advisory_lock`), también frente a un `history compact` manual.
 Los parámetros están en `.env.dist`; `DOCS_HISTORY_COMPACTION_ENABLED=false` la apaga.
 
-**Bucket y ciclo de vida.** `storage init` deja el versionado activado y dos reglas: `uploads/` expira a 1
-día y las versiones no actuales de cualquier objeto expiran a los 7 días. Así un objeto borrado por la
-compactación (o por una purga) se puede recuperar durante una semana y después libera el espacio. Verificado
-contra MinIO (test `TestStorageInitLifecycle`). Las marcas de borrado (delete markers) quedan en el bucket;
-son objetos vacíos.
+**Papelera.** Todo objeto de contenido que el servicio borra pasa por `papelera/`: las versiones compactadas,
+el contenido huérfano del barrido semanal y las versiones de los documentos purgados a los 30 días de
+borrados. Mover es `CopyObject` a `papelera/<clave original>` (en paralelo) y después `DeleteObjects` de los
+originales en lotes. Una fila de `pruned_objects` se elimina recién cuando el objeto quedó en la papelera y
+el original ya no existe; si el proceso se corta entre la copia y el borrado, la siguiente corrida lo
+retoma. Las subidas en tránsito (`uploads/`) y las páginas renderizadas (`renders/`) no son contenido y se
+borran directo. La papelera no la barre nadie: la vacía su regla de ciclo de vida.
 
-*DigitalOcean Spaces y `NoncurrentVersionExpiration` (revisado 2026-10-25): no confirmado.* La página de
-compatibilidad S3 de Spaces dice que el ciclo de vida está "Supported for time-based expiration and removing
-incomplete multipart uploads" y no menciona versiones no actuales
-([S3 Compatibility](https://docs.digitalocean.com/products/spaces/reference/s3-compatibility/)); la guía de
-reglas de ciclo de vida solo muestra expiración y multipart
-([Configure Lifecycle Rules](https://docs.digitalocean.com/products/spaces/how-to/configure-lifecycle-rules/));
-la referencia de la API lista `PutBucketLifecycleConfiguration` sin detallar elementos
-([Spaces API](https://docs.digitalocean.com/reference/api/spaces/)). En cambio, el provider de Terraform
-de DigitalOcean expone `lifecycle_rule.noncurrent_version_expiration { days }` para `digitalocean_spaces_bucket`
-([spaces_bucket](https://docs.digitalocean.com/reference/terraform/reference/resources/spaces_bucket/)), lo que
-indica que la API lo acepta. Antes de activar la compactación en producción: correr `jiku-docs storage init`
-contra el Space (relee las reglas y avisa si el proveedor no guardó la de versiones no actuales) y comprobar
-con un objeto de prueba borrado que su versión anterior desaparece pasados 7 días. Si no funciona, la red de
-seguridad alternativa es dejar `DOCS_HISTORY_COMPACTION_ENABLED=false` hasta definir otra (por ejemplo, un
-barrido propio de versiones no actuales con `ListObjectVersions`).
+**Bucket y ciclo de vida.** `storage init` deja el bucket sin versionado y dos reglas de expiración por
+tiempo: `uploads/` a 1 día y `papelera/` a `DOCS_TRASH_RETENTION_DAYS` (default 7). Relee las reglas y avisa
+en el log si el proveedor no las guardó. Verificado contra MinIO (tests `TestStorageInit*`).
 
-**Respaldo**: backup diario de la base (30 días) y versionado del bucket. Restaurar un backup anterior a una
-compactación puede dejar filas de versiones cuyo objeto ya expiró (más de 7 días): al restaurar, verificar los
-objetos y descartar las filas sin objeto. El índice no se respalda: `reindex`.
+**Spaces.** Las dos reglas son expiraciones por tiempo bajo un prefijo, que DigitalOcean Spaces soporta
+("Supported for time-based expiration and removing incomplete multipart uploads",
+[S3 Compatibility](https://docs.digitalocean.com/products/spaces/reference/s3-compatibility/)). Ya no hace
+falta `NoncurrentVersionExpiration`, que Spaces no confirma: el versionado del bucket dejó de ser la red de
+seguridad. `DOCS_HISTORY_COMPACTION_ENABLED=true` es el default seguro también en producción. Si el bucket
+tenía el versionado activado (lo activaba `storage init` antes de la papelera), `storage init` lo suspende
+(`Suspended`) y lo avisa en el log; las versiones viejas que ya guardaba **no** se borran solas: cuando ya no
+hagan falta, borrarlas a mano (por ejemplo `aws s3api list-object-versions` y `delete-object --version-id`
+sobre las que no son actuales, o `mc rm --recursive --versions --non-current` en MinIO).
+
+**Recuperar una versión compactada por error** (dentro de `DOCS_TRASH_RETENTION_DAYS`):
+
+1. Encontrar la clave. Es `docs/<documentId>/<version>-<sha256>.md`; en la papelera está como
+   `papelera/docs/<documentId>/...`. Por ejemplo, con el cliente de S3 que se use:
+   `mc ls --recursive <alias>/jiku-docs-content/papelera/docs/<documentId>/` (el nombre empieza con el número
+   de versión). Si la compactación es reciente, el log por documento (`--dry-run` o nivel debug) muestra qué
+   versiones borró.
+2. Devolverla, objeto y fila del historial, con un solo comando:
+
+   ```sh
+   jiku-docs storage restore-from-trash --key docs/<documentId>/<version>-<sha256>.md --version-row
+   # {"key":"docs/...","objectRestored":true,"documentId":"...","version":3,"rowRestored":true}
+   ```
+
+   La copia de la papelera guarda la fila de la versión (autor, `via`, fecha, checksum, tamaño, título) como
+   metadata del objeto, así que no hace falta escribir SQL a mano. El comando primero copia el objeto a su
+   clave original (si ya existe no lo pisa) y después, en una transacción, inserta la fila en
+   `document_versions` marcada `protected` (la próxima compactación no la vuelve a borrar) y descuenta
+   `pruned_versions_count`. Se niega si el documento ya no existe o está borrado (restaurarlo primero), si la
+   versión no es anterior a la actual o si esa versión ya existe con otro objeto. Es idempotente.
+3. Sin `--version-row` devuelve solo el objeto: sirve para el contenido huérfano o de un documento purgado,
+   que no tienen fila que restaurar. Un objeto devuelto sin fila vuelve a ser huérfano y el próximo barrido
+   lo manda otra vez a la papelera.
+
+**Respaldo**: backup diario de la base (30 días); el bucket no tiene versionado: la red de seguridad de lo
+que borra el servicio es `papelera/`. Restaurar un backup anterior a una compactación puede dejar filas de
+versiones cuyo objeto está en la papelera (devolverlo con `restore-from-trash` sin `--version-row`) o ya
+venció (más de `DOCS_TRASH_RETENTION_DAYS`): al restaurar, verificar los objetos y descartar las filas sin
+objeto. El índice no se respalda: `reindex`.
 
 **Varias réplicas**: los comandos y consultas se reparten por queue group; outbox y janitor eligen líder
 con advisory locks de PostgreSQL; el indexador comparte el durable.

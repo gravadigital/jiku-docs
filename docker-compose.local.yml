@@ -33,7 +33,8 @@ services:
     networks:
       - jiku
 
-  # Crea (idempotente) el bucket jiku-docs-content con versionado en el MinIO de Jiku.
+  # Crea (idempotente) el bucket jiku-docs-content en el MinIO de Jiku, sin versionado (lo suspende
+  # si estaba activado), con las reglas de ciclo de vida de uploads/ y papelera/.
   docs-storage-init:
     build:
       context: .

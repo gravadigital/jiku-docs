@@ -87,7 +87,7 @@ Sigue el mismo patrón que `core`: no tiene HTTP propio, atiende request/reply e
 | Publicador de outbox | Lee el changelog confirmado y publica en `JIKU_DOCS_EVENTS` y en `docs-notify` de cada persona autorizada | Go, mismo binario |
 | Indexador | Consume `JIKU_DOCS_EVENTS`, fragmenta el texto y mantiene el catálogo | Go, mismo binario o proceso aparte |
 | Postgres docs | Árbol, ACL, documentos, versiones, relaciones, changelog, índice (full-text) | PostgreSQL 16 |
-| S3 docs | Contenido de cada versión de cada documento | Bucket con versionado activado |
+| S3 docs | Contenido de cada versión de cada documento | Bucket sin versionado; lo que borra el servicio pasa por `papelera/` |
 | S3 adjuntos | Bytes de los adjuntos | Bucket aparte, sin acceso público |
 | `jiku-go` | Librería y CLI existentes; suman el grupo `jiku docs`, el daemon `jiku docs sync` y los paquetes `modules` y `modules/docs` | Go |
 | api de Jiku | Rutas HTTP para los frontends, descubrimiento del módulo y redirección de adjuntos | Existente, se extiende |
@@ -955,7 +955,8 @@ CREATE TABLE pruned_objects (                            -- objetos a borrar de 
   storage_key text PRIMARY KEY,
   document_id text NOT NULL,
   version     integer NOT NULL,
-  pruned_at   timestamptz NOT NULL DEFAULT now()
+  pruned_at   timestamptz NOT NULL DEFAULT now(),
+  version_row jsonb          -- migración 0004: la fila borrada, que viaja como metadata a la papelera
 );
 ```
 
@@ -965,9 +966,12 @@ Los datos existentes se marcan al migrar: la versión 1 es `create`, las que tie
 
 | Bucket | Clave | Notas |
 | --- | --- | --- |
-| `jiku-docs-content` | `docs/<documentId>/<version>-<sha256>.md` | Objetos inmutables hasta que la compactación borra la versión; versionado del bucket activado como red de seguridad, con una regla de ciclo de vida que expira las versiones no actuales a los 7 días |
-| `jiku-docs-content` | `uploads/<contentUploadId>` | Contenido grande en tránsito; regla de ciclo de vida a 24 h |
+| `jiku-docs-content` | `docs/<documentId>/<version>-<sha256>.md` | Objetos inmutables hasta que la compactación borra la versión, el barrido de huérfanos los encuentra sin fila o se purga el documento a los 30 días de borrado; en esos tres casos el objeto pasa por la papelera |
+| `jiku-docs-content` | `papelera/<clave original>` | Papelera: todo objeto de contenido que borra el servicio se copia acá y después se borra el original. Regla de ciclo de vida que la expira a `DOCS_TRASH_RETENTION_DAYS` (default 7). `jiku-docs storage restore-from-trash` devuelve un objeto (y, si viene de la compactación, su fila de versión) |
+| `jiku-docs-content` | `uploads/<contentUploadId>` | Contenido grande en tránsito; regla de ciclo de vida a 24 h; se borra directo, sin papelera |
 | `jiku-docs-attachments` | `att/<attachmentId>` | Sin acceso público; solo URLs prefirmadas |
+
+El bucket de contenido no usa versionado: la red de seguridad de lo que borra el servicio es la papelera, con dos reglas de expiración por tiempo (`uploads/` y `papelera/`), que DigitalOcean Spaces soporta; `NoncurrentVersionExpiration` no hace falta. `jiku-docs storage init` crea el bucket, suspende el versionado si estaba activado (las versiones viejas que ya existían no se borran solas), aplica las dos reglas y las relee.
 
 Solo `jiku-docs` tiene credenciales de los buckets, igual que `core` con los suyos.
 
@@ -1060,12 +1064,12 @@ Integrar `jiku-docs` requiere cambios de seguridad en el repositorio de Jiku (ro
 | Logs | Estructurados en JSON: método, caller, `correlationId`, duración, `errorCode` |
 | Métricas | Latencia y errores por método; antigüedad del changelog sin publicar; lag del indexador; locks activos; fan-out de notificaciones |
 | Alertas | Changelog sin publicar con más de 60 s; indexador con lag de más de 5 min; tasa de `upstream_unavailable` |
-| Compactación del historial | Log por ejecución (inicio y fin, documentos, versiones borradas, bytes liberados, duración, errores); log por documento solo con `--dry-run` o nivel debug. Métricas `docs_history_versions_pruned_total`, `docs_history_bytes_freed_total`, `docs_history_run_duration_seconds`, `docs_history_pruned_objects_pending`, más `docs_history_runs_total{result}`, `docs_history_last_success_timestamp_seconds` y `docs_history_pruned_objects_oldest_seconds`. Alertas: una ejecución que falla o no corre en 48 h; `pruned_objects` con filas de más de 24 h. Ver [`compactacion-historial-v1.md`](compactacion-historial-v1.md), sección 6 |
+| Compactación del historial | Log por ejecución (inicio y fin, documentos, versiones borradas, bytes liberados, duración, errores); log por documento solo con `--dry-run` o nivel debug. Métricas `docs_history_versions_pruned_total`, `docs_history_bytes_freed_total`, `docs_history_run_duration_seconds`, `docs_history_pruned_objects_pending`, más `docs_history_runs_total{result}`, `docs_history_last_success_timestamp_seconds` y `docs_history_pruned_objects_oldest_seconds`; `docs_trash_objects_moved_total{source}` cuenta los objetos movidos a la papelera (`compaction`, `orphans`, `deleted-documents`). Alertas: una ejecución que falla o no corre en 48 h; `pruned_objects` con filas de más de 24 h. Ver [`compactacion-historial-v1.md`](compactacion-historial-v1.md), sección 6 |
 | Salud | Endpoints de NATS micro (`nats micro info jiku-docs-commands`) |
 
 ### Respaldo
 
-Backup diario de `jiku_docs` con retención de 30 días y versionado en los buckets. El índice no se respalda; se regenera. Con la compactación del historial, restaurar un backup anterior a una compactación puede dejar filas de versiones cuyo objeto se borró hace más de 7 días (las versiones no actuales del bucket expiran a la semana): el proceso de restauración debe verificar los objetos y descartar las filas sin objeto.
+Backup diario de `jiku_docs` con retención de 30 días. El bucket de contenido no tiene versionado: lo que borra el servicio queda en `papelera/` durante `DOCS_TRASH_RETENTION_DAYS` (default 7) y se recupera con `jiku-docs storage restore-from-trash --key <clave> [--version-row]` (README, "Recuperar una versión compactada por error"). El índice no se respalda; se regenera. Con la compactación del historial, restaurar un backup anterior a una compactación puede dejar filas de versiones cuyo objeto está en la papelera (se devuelve con `restore-from-trash`) o ya venció: el proceso de restauración debe verificar los objetos, devolver los que sigan en la papelera y descartar las filas sin objeto.
 
 ## 13. Módulo opcional y autodescubrimiento
 

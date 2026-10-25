@@ -14,7 +14,7 @@ Formato: [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/). Versionado
   su origen. Además de los documentos con actividad nueva o con un link fijado que venció o se revocó, procesa
   los que tienen alguna versión no protegida que cruzó el umbral de 24 h o el de 30 días desde su última
   compactación (la sesión del día anterior se compacta en la corrida siguiente al cruce de 24 h). Los objetos
-  se borran de S3 después del commit vía `pruned_objects` (`DeleteObjects` en lotes). Comando `jiku-docs history compact [--document <id>] [--dry-run]`. Migración `0003`: `kind` y `protected` en
+  van a `papelera/` después del commit vía `pruned_objects`. Comando `jiku-docs history compact [--document <id>] [--dry-run]`. Migración `0003`: `kind` y `protected` en
   `document_versions` (con backfill), `last_compacted_at` y `pruned_versions_count` en `documents`, tabla
   `pruned_objects`.
 - Contratos 1.2.0: `documents.versions.list` devuelve `kind` (`create`, `update`, `restore`) y `protected`, y los
@@ -23,9 +23,21 @@ Formato: [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/). Versionado
 - Código de error `version_pruned` (`errorDetails`: `requestedVersion`, `previousAvailable`, `nextAvailable`) en
   `documents.get` con `version`, `documents.{id}.restore` y `shares.new` con `mode: pinned`.
 - `PurgeOrphans` pasa a un barrido semanal y paginado (1.000 objetos por minuto) con cursor en `service_state`;
-  los objetos de versiones compactadas los borra `pruned_objects`.
-- `jiku-docs storage init` agrega la regla de ciclo de vida que expira las versiones no actuales a los 7 días y
-  relee las reglas. Variables `DOCS_HISTORY_*` y métricas `docs_history_*`.
+  los objetos de versiones compactadas los mueve `pruned_objects`.
+- Papelera en lugar del versionado del bucket (DigitalOcean Spaces no confirma `NoncurrentVersionExpiration`):
+  todo objeto de contenido que borra el servicio (compactación, `PurgeOrphans`, purga de documentos borrados a
+  los 30 días) se copia a `papelera/<clave original>` y después se borra el original (`DeleteObjects` en
+  lotes). Una fila de `pruned_objects` se elimina recién cuando el objeto quedó en la papelera y el original
+  no existe; la copia guarda la fila de la versión como metadata (migración `0004`: `pruned_objects.version_row`).
+- `jiku-docs storage init` ya no activa el versionado: si el bucket lo tiene activado, lo suspende y lo avisa en
+  el log (las versiones viejas no se borran solas). Aplica y relee dos reglas de expiración por tiempo:
+  `uploads/` a 1 día y `papelera/` a `DOCS_TRASH_RETENTION_DAYS` (default 7). Ya no hay regla de versiones no
+  actuales.
+- Comando `jiku-docs storage restore-from-trash --key <clave> [--version-row]`: devuelve un objeto desde la
+  papelera y, con `--version-row`, vuelve a poner en el historial la versión compactada (protegida).
+- Variables `DOCS_HISTORY_*` y `DOCS_TRASH_RETENTION_DAYS`; métricas `docs_history_*` y
+  `docs_trash_objects_moved_total{source}`. El reporte de `history compact` informa `objectsTrashed` (antes
+  `objectsDeleted`).
 
 ### Security
 

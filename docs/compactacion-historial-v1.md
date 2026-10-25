@@ -68,13 +68,13 @@ Como las versiones con `message` nunca se compactan, para marcar un punto import
 
 ### Lo que no cambia
 
-- Los documentos borrados se eliminan definitivamente a los 30 días con todas sus versiones, como antes. La compactación no los procesa.
+- Los documentos borrados se eliminan definitivamente a los 30 días con todas sus versiones, como antes (sus objetos pasan por la papelera, sección 4). La compactación no los procesa.
 - El índice de búsqueda solo contiene la versión actual, así que no se ve afectado.
 - El changelog y el feed `documents.changes` conservan sus registros; un evento viejo puede mencionar una versión que ya fue compactada.
 
 ## 3. Proceso de compactación
 
-Un proceso del propio servicio `jiku-docs` corre una vez por día, procesa documento por documento en transacciones cortas y borra los objetos de S3 recién después de confirmar el borrado en la base.
+Un proceso del propio servicio `jiku-docs` corre una vez por día, procesa documento por documento en transacciones cortas y mueve los objetos de S3 a la papelera recién después de confirmar el borrado en la base.
 
 ### Ejecución
 
@@ -95,23 +95,24 @@ Un proceso del propio servicio `jiku-docs` corre una vez por día, procesa docum
 4. Agrupar todas las versiones del documento en bloques de edición. Para las versiones del tramo de 24 h a 30 días, conservar la última de cada bloque.
 5. Para las versiones de más de 30 días, partir de las que dejó la regla de bloques, agruparlas por día calendario y conservar la última de cada día.
 6. Marcar como conservadas todas las versiones de menos de 24 h.
-7. Borrar las filas de `document_versions` no conservadas, guardando su `storage_key` en `pruned_objects`.
+7. Borrar las filas de `document_versions` no conservadas, guardando su `storage_key` y la fila borrada (`version_row`) en `pruned_objects`.
 8. Actualizar `last_compacted_at` y `pruned_versions_count` del documento, y confirmar la transacción.
 
 Los bloques se calculan sobre todas las versiones del documento, no solo las del tramo, para que un bloque que cruza el límite de 24 h no se parta en dos. La regla diaria se aplica sobre lo que dejó la regla de bloques, así que el resultado es como máximo una versión por día más las protegidas.
 
 El proceso es idempotente: correrlo dos veces seguidas no borra nada más, porque las versiones que conserva cumplen las mismas reglas en la segunda pasada.
 
-### Borrado en S3
+### Borrado en S3: papelera
 
-El borrado de objetos ocurre fuera de la transacción, en dos pasos:
+Ningún objeto de contenido se borra directamente: pasa primero por la papelera (`papelera/<clave original>`, sección 4). El paso ocurre fuera de la transacción:
 
-1. Después del commit, el proceso toma las filas de `pruned_objects` y borra los objetos en S3 en lotes (`DeleteObjects`, hasta 1.000 claves por llamada).
-2. Cada fila se elimina de `pruned_objects` cuando su objeto se borró o ya no existía.
+1. Después del commit, el proceso toma las filas de `pruned_objects` en lotes (`DOCS_HISTORY_S3_DELETE_BATCH`, hasta 1.000) y copia cada objeto a `papelera/<clave original>` (`CopyObject`, varias copias en paralelo). La copia lleva como metadata la fila de la versión borrada, para poder devolverla al historial.
+2. Borra los originales copiados con una llamada a `DeleteObjects` por lote.
+3. Cada fila se elimina de `pruned_objects` recién cuando su objeto quedó en la papelera y el original ya no existe. Si el original ya no existía, cuenta como hecho.
 
-Si el proceso se corta entre el commit y el borrado, las filas quedan en `pruned_objects` y la siguiente ejecución las retoma. Nunca queda una fila de versión apuntando a un objeto borrado; en el peor caso queda un objeto sin fila por un tiempo.
+Si el proceso se corta entre el commit y la copia, o entre la copia y el borrado del original, las filas quedan en `pruned_objects` y la siguiente ejecución las retoma: volver a copiar sobre una copia existente es inocuo (mismo contenido). Nunca queda una fila de versión apuntando a un objeto borrado; en el peor caso queda un objeto sin fila por un tiempo, o la misma versión en la clave original y en la papelera.
 
-El barrido general de huérfanos (`PurgeOrphans`), que hoy lista todo `docs/` y consulta la base por cada objeto, no escala con este volumen y se superpone con `pruned_objects`. Pasa a ser semanal y paginado con un cursor persistido en `service_state`; el borrado de versiones compactadas lo hace siempre `pruned_objects`.
+El barrido general de huérfanos (`PurgeOrphans`), que hoy lista todo `docs/` y consulta la base por cada objeto, no escala con este volumen y se superpone con `pruned_objects`. Pasa a ser semanal y paginado con un cursor persistido en `service_state`; el paso a la papelera de versiones compactadas lo hace siempre `pruned_objects`. El contenido huérfano que encuentra el barrido también va a la papelera, igual que las versiones de un documento que se purga a los 30 días de borrado.
 
 ### Concurrencia con las escrituras
 
@@ -125,7 +126,7 @@ La compactación no emite eventos ni notificaciones: no cambia el estado vigente
 
 ## 4. Cambios en el modelo de datos y storage
 
-Se agregan dos columnas a `document_versions`, dos a `documents` y una tabla para el borrado diferido en S3.
+Se agregan dos columnas a `document_versions`, dos a `documents` y una tabla para el paso diferido a la papelera.
 
 ### Migración
 
@@ -155,13 +156,16 @@ CREATE INDEX documents_pending_compaction
   ON documents (id)
   WHERE deleted_at IS NULL AND (last_compacted_at IS NULL OR updated_at > last_compacted_at);
 
--- Objetos de S3 pendientes de borrar después del commit
+-- Objetos de S3 pendientes de pasar a la papelera después del commit
 CREATE TABLE pruned_objects (
   storage_key text PRIMARY KEY,
   document_id text NOT NULL,
   version     integer NOT NULL,
   pruned_at   timestamptz NOT NULL DEFAULT now()
 );
+
+-- Migración 0004: la fila borrada, que la copia en la papelera lleva como metadata
+ALTER TABLE pruned_objects ADD COLUMN version_row jsonb;
 ```
 
 Las restauraciones existentes se identifican por el mensaje fijo que escribe el servicio al restaurar (`Restaurado desde la versión N`).
@@ -178,9 +182,12 @@ La protección por link compartido fijado no se guarda en la columna: se calcula
 
 ### Storage
 
-- Los objetos de versiones compactadas se borran de `jiku-docs-content` (sección 3).
-- El versionado del bucket se mantiene como red de seguridad, con una regla de ciclo de vida que expira las versiones no actuales de objetos a los 7 días. **A verificar:** que DigitalOcean Spaces soporte `NoncurrentVersionExpiration` (MinIO, en local, lo soporta). Si no lo soporta, definir otra red de seguridad antes de activar la compactación en producción. Estado al 2026-10-25: la documentación pública de Spaces no lo confirma ni lo descarta (ver README, sección "Bucket y ciclo de vida"); `jiku-docs storage init` aplica la regla, la relee y avisa si el proveedor no la guardó. Así, un borrado por error de la compactación se puede recuperar durante una semana, y el espacio se libera de verdad pasado ese plazo.
-- El respaldo diario de la base no cambia. Restaurar un backup anterior a una compactación deja filas apuntando a objetos que pueden haberse borrado hace más de 7 días; el proceso de restauración debe verificar los objetos y descartar las filas sin objeto.
+- **Sin versionado.** El bucket `jiku-docs-content` no usa versionado. La red de seguridad es una papelera propia, porque DigitalOcean Spaces no confirma soporte de `NoncurrentVersionExpiration`. `jiku-docs storage init` no activa el versionado; en un bucket que ya lo tiene activado, lo suspende (`Suspended`) y avisa en el log que las versiones viejas que ya existían no se borran solas (hay que borrarlas a mano cuando no hagan falta).
+- **Papelera.** Todo borrado de objetos de contenido que hace el servicio pasa por el prefijo `papelera/`: la compactación (vía `pruned_objects`, sección 3), el barrido de huérfanos (`PurgeOrphans`) y la purga definitiva de documentos borrados a los 30 días. Mover es `CopyObject` a `papelera/<clave original>` y después `DeleteObjects` de los originales, en lotes. Las subidas en tránsito (`uploads/`) y las páginas renderizadas (`renders/`) no son contenido y se borran directo.
+- **Ciclo de vida.** Dos reglas de expiración por tiempo, que Spaces soporta: `uploads/` a 1 día y `papelera/` a `DOCS_TRASH_RETENTION_DAYS` (default 7). `jiku-docs storage init` las aplica, las relee y avisa si el proveedor no las guardó.
+- **Recuperación.** `jiku-docs storage restore-from-trash --key <clave original>` devuelve un objeto desde la papelera (nunca pisa uno existente). Con `--version-row` también vuelve a insertar la fila en `document_versions` con los datos que la copia lleva como metadata, marcada `protected` para que la próxima compactación no la vuelva a borrar, y descuenta `pruned_versions_count`. El procedimiento está en el README ("Recuperar una versión compactada por error").
+- Así, un borrado por error de la compactación se puede recuperar durante `DOCS_TRASH_RETENTION_DAYS`, y el espacio se libera de verdad pasado ese plazo.
+- El respaldo diario de la base no cambia. Restaurar un backup anterior a una compactación deja filas apuntando a objetos que pueden estar en la papelera o haber vencido; el proceso de restauración debe verificar los objetos, devolver los que sigan en la papelera y descartar las filas sin objeto.
 
 ## 5. Cambios en contratos y en jiku-go
 
@@ -257,16 +264,17 @@ Todos los umbrales de la política son parámetros del servicio, con los valores
 | `DOCS_HISTORY_KEEP_BLOCKS` | `30d` | Hasta qué antigüedad se conserva una versión por bloque de edición |
 | `DOCS_HISTORY_BLOCK_GAP` | `30m` | Pausa que cierra un bloque de edición |
 | `DOCS_HISTORY_BATCH_SIZE` | `100` | Documentos por lote |
-| `DOCS_HISTORY_S3_DELETE_BATCH` | `1000` | Claves por llamada a `DeleteObjects` |
+| `DOCS_HISTORY_S3_DELETE_BATCH` | `1000` | Objetos por lote al pasar a la papelera (copias en paralelo y una llamada a `DeleteObjects` de los originales) |
+| `DOCS_TRASH_RETENTION_DAYS` | `7` | Días que `papelera/` guarda lo que borra el servicio (regla de ciclo de vida de `storage init`) |
 
 ### Observabilidad
 
 | Señal | Detalle |
 | --- | --- |
-| Log por ejecución | Inicio y fin, documentos procesados, versiones borradas, bytes liberados, duración, errores |
+| Log por ejecución | Inicio y fin, documentos procesados, versiones borradas, bytes liberados, objetos movidos a la papelera, duración, errores |
 | Log por documento | Solo con `--dry-run` o nivel debug: versiones conservadas y borradas con el motivo |
-| Métricas | `docs_history_versions_pruned_total`, `docs_history_bytes_freed_total`, `docs_history_run_duration_seconds`, `docs_history_pruned_objects_pending` (filas en `pruned_objects`) |
-| Alertas | Una ejecución que falla o no corre en 48 h; `pruned_objects` con filas de más de 24 h (el borrado en S3 no avanza) |
+| Métricas | `docs_history_versions_pruned_total`, `docs_history_bytes_freed_total`, `docs_history_run_duration_seconds`, `docs_history_pruned_objects_pending` (filas en `pruned_objects`), `docs_trash_objects_moved_total{source}` (objetos movidos a la papelera por la compactación, el barrido de huérfanos y la purga de borrados) |
+| Alertas | Una ejecución que falla o no corre en 48 h; `pruned_objects` con filas de más de 24 h (el paso a la papelera no avanza) |
 
 ## 7. Casos de prueba
 
@@ -286,7 +294,7 @@ Los casos cubren cada regla de la política, los bordes entre tramos y la seguri
 | 10 | Versión fijada por un link activo, hace 60 días | Se conserva; tras revocar el link, la siguiente compactación la borra si no está protegida por otro motivo |
 | 11 | Documento sin cambios desde la última compactación | No se procesa |
 | 12 | Ejecutar la compactación dos veces seguidas | La segunda no borra nada |
-| 13 | El proceso se corta después del commit y antes de borrar en S3 | Las filas quedan en `pruned_objects`; la siguiente ejecución borra los objetos |
+| 13 | El proceso se corta después del commit, entre la copia a la papelera y el borrado del original | Las filas quedan en `pruned_objects`; la siguiente ejecución termina de mover los objetos. Un original que ya no existe cuenta como hecho |
 | 14 | Dos réplicas inician la compactación a la vez | Solo una ejecuta (advisory lock) |
 | 15 | `documents.get` con una versión compactada | `version_pruned` con las versiones conservadas más cercanas |
 | 16 | `restore` desde una versión compactada | `version_pruned`; no se crea versión nueva |
@@ -298,6 +306,8 @@ Los casos cubren cada regla de la política, los bordes entre tramos y la seguri
 | 22 | Versión de agente con `message`, hace 60 días | Se conserva |
 | 23 | Versión de `service` sin mensaje, hace 60 días | Se conserva |
 | 24 | Sesión del día anterior sin actividad posterior | Se compacta en la corrida siguiente al cruce de 24 h; las corridas siguientes no lo procesan hasta otro cruce |
+| 25 | Compactación de un bloque viejo | Los objetos de las versiones borradas quedan en `papelera/` y nada de ellos en `docs/` |
+| 26 | `storage restore-from-trash --version-row` sobre una versión compactada | Vuelven el objeto y la fila (protegida); la siguiente compactación la conserva |
 
 ## 8. Revisión contra la implementación (2026-10-25)
 
@@ -308,7 +318,7 @@ Cambios acordados respecto del borrador del 2026-10-24, y decisiones del dueño 
 3. No existe `kind = move`: `documents.move` no crea versión.
 4. Las restauraciones existentes se marcan por el mensaje fijo del servicio.
 5. `PurgeOrphans` pasa a semanal y paginado; el borrado de versiones compactadas lo hace `pruned_objects`.
-6. Verificar el soporte de `NoncurrentVersionExpiration` en DigitalOcean Spaces.
+6. ~~Verificar el soporte de `NoncurrentVersionExpiration` en DigitalOcean Spaces.~~ Decidido: Spaces no lo confirma, así que el bucket deja de usar versionado y la red de seguridad es la papelera `papelera/` con expiración por tiempo (`DOCS_TRASH_RETENTION_DAYS`, default 7), que Spaces sí soporta. Pasan por la papelera la compactación, `PurgeOrphans` y la purga de documentos borrados. `storage init` suspende el versionado si estaba activado. Recuperación con `jiku-docs storage restore-from-trash` (sección 4). La compactación queda activada por default también en producción.
 7. Programación con hora del día (`DOCS_HISTORY_COMPACTION_HOUR`), como el resto de las tareas del servicio, en lugar de cron.
 8. Pendiente para otra etapa: la pantalla de historial y el campo de mensaje en la web (REQ en jiku).
 9. Fuera de alcance, anotado: el volumen de eventos, changelog y notificaciones por guardado no cambia con la compactación.
