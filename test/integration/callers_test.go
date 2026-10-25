@@ -70,7 +70,7 @@ func TestAPIActorRolesWinOverStaleUsersRow(t *testing.T) {
 	e := tu.NewEnv(t)
 	f := writable(e)
 	fresh := "500000000000000088"
-	e.Core.Users[fresh] = coreapi.User{ID: fresh, Name: "Recién llegada", Username: "nueva", Roles: []string{}, IdentityType: "person"}
+	e.Core.SetUser(coreapi.User{ID: fresh, Name: "Recién llegada", Username: "nueva", Roles: []string{}, IdentityType: "person"})
 	// By the bus, the stale row decides: no product role.
 	e.Fail(e.Q(fresh, "documents.list", nil), protocol.CodeCallerNotAuthorized)
 	before := e.Core.CallCount("users.list")
@@ -106,10 +106,9 @@ func TestCoreUnavailable(t *testing.T) {
 	f := writable(e)
 	e.OK(e.Q(tu.User, "documents.list", nil)) // warms the cache of this user
 	newcomer := "500000000000000077"
-	e.Core.Users[newcomer] = e.Core.Users[tu.User2]
-	u := e.Core.Users[newcomer]
+	u := e.Core.User(tu.User2)
 	u.ID = newcomer
-	e.Core.Users[newcomer] = u
+	e.Core.SetUser(u)
 	e.Core.SetDown(true)
 	// Cached identities keep working until they expire; uncached ones fail closed.
 	e.OK(e.Q(tu.User, "documents.list", nil))

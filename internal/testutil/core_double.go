@@ -62,6 +62,20 @@ func (d *CoreDouble) SetDown(down bool) {
 	d.mu.Unlock()
 }
 
+// SetUser adds or replaces a user while the double is serving (the map is read by its handlers).
+func (d *CoreDouble) SetUser(u coreapi.User) {
+	d.mu.Lock()
+	d.Users[u.ID] = u
+	d.mu.Unlock()
+}
+
+// User reads a user while the double is serving.
+func (d *CoreDouble) User(id string) coreapi.User {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.Users[id]
+}
+
 // CallCount counts the calls to a method.
 func (d *CoreDouble) CallCount(method string) int {
 	d.mu.Lock()
