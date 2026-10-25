@@ -35,6 +35,8 @@
 #   E2E_DOCS_CONTAINER contenedor del servicio               (default: jiku-docs-local)
 #   E2E_DISRUPTIVE     1 = probar módulo caído y deregister (default: 0)
 #   E2E_KEEP           1 = no borrar el directorio temporal al terminar
+#   E2E_CONFIG_DIR     carpeta con los config dirs del CLI por identidad (cfg-admin, cfg-user,
+#                      cfg-external), para reusar tokens ya obtenidos (default: el temporal)
 #
 # Sale con 0 si todo pasó, 1 si algo falló. El resumen final lista cada falla.
 
@@ -75,6 +77,7 @@ done
 for bin in python3 curl docker; do command -v "$bin" >/dev/null || { echo "falta $bin" >&2; exit 2; }; done
 
 TMP=$(mktemp -d "${TMPDIR:-/tmp}/jiku-docs-e2e.XXXXXX")
+CFG=${E2E_CONFIG_DIR:-$TMP}
 SYNC_PID=""
 cleanup() {
   [[ -n "$SYNC_PID" ]] && kill "$SYNC_PID" 2>/dev/null
@@ -98,7 +101,7 @@ as() {
     admin) key=$E2E_KEY_ADMIN ;; user) key=$E2E_KEY_USER ;; external) key=$E2E_KEY_EXTERNAL ;;
     *) echo "identidad desconocida: $who" >&2; return 2 ;;
   esac
-  OUT=$(JIKU_KEY_FILE="$E2E_KEY_DIR/$key" JIKU_CONFIG_DIR="$TMP/cfg-$who" "$JIKU_BIN" "$@" 2>"$TMP/stderr")
+  OUT=$(JIKU_KEY_FILE="$E2E_KEY_DIR/$key" JIKU_CONFIG_DIR="$CFG/cfg-$who" "$JIKU_BIN" "$@" 2>"$TMP/stderr")
   RC=$?
   ERR=$(cat "$TMP/stderr")
 }
@@ -455,7 +458,7 @@ as user docs sync "$SYNC" --once --only "$P/"
 expect "sync --once" 0
 [[ -f "$SYNC$PP/arq.md" && ! -w "$SYNC$P/infra/servidores/staging.md" ]] && ok "sync baja los documentos; /infra/ queda de solo lectura" || bad "sync --once: archivos"
 grep -q 'deleted in Jiku' <<<"$ERR" && bad "sync aplicó un borrado ya restaurado" || ok "sync no reaplica borrados restaurados"
-JIKU_KEY_FILE="$E2E_KEY_DIR/$E2E_KEY_USER" JIKU_CONFIG_DIR="$TMP/cfg-user" "$JIKU_BIN" docs sync "$SYNC" --only "$P/" 2>"$TMP/sync.log" &
+JIKU_KEY_FILE="$E2E_KEY_DIR/$E2E_KEY_USER" JIKU_CONFIG_DIR="$CFG/cfg-user" "$JIKU_BIN" docs sync "$SYNC" --only "$P/" 2>"$TMP/sync.log" &
 SYNC_PID=$!
 until_ok 20 grep -q 'online' "$TMP/sync.log" || bad "el daemon no quedó online"
 as admin docs get "$PP/reunion.md" -o json; RV=$(json 'd["version"]' <<<"$OUT")
