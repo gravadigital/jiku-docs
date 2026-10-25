@@ -42,6 +42,20 @@ const D = {
   arqAttachment: '01M5RB1RRDH3AX4NWRQ10FFCDB', // diagrama.png de arq
   privAttachment: '01M5RB3FJXEEP0WH66VAJTTHH1', // adjunto de un documento internal
   clientFolder: '01M5RACNQ5QV1KSS9G2Q7FYJGX', // /clientes/exo/videoconferencia/
+  // Notas importadas de HedgeDoc (lectura del rol user).
+  impImage: process.env.E2E_IMPORTED_IMAGE_DOC || '01KPP6J840WSMXAM5CF9NX830Z', // /interno/proyectos/opus/, con imagen
+  impImageTitle: 'Opus / Arquitectura del sistema',
+  impImageAtt: '01KPP6J840V6XKJBAKS6FVB49G',
+  impLinkSrc: process.env.E2E_IMPORTED_LINK_DOC || '01EFPRY9405SWET0DANRE36EBX', // Wecerty.md
+  impLinkText: 'Versión 1',
+  impLinkDst: '01G2NH12ZGDXS8EE7P1KC5ZV5F',
+  impLinkDstTitle: 'Wecerty - versión 1',
+  impFolders: ['clientes', 'wecerty', 'wecerty', 'tecnico'],
+  impFolderDoc: 'Wecerty',
+  searchPhrase: '"levantar nodos"',
+  searchPhraseHit: 'RCA - Levantar nodos caídos',
+  searchExclude: '"levantar nodos" -linode',
+  searchExcluded: 'Ener2Crowd', // contiene "levantar nodo en Linode"
 };
 
 const creds = loadCreds();
@@ -104,6 +118,11 @@ async function waitText(page, locator, re, timeout = 15000) {
 
 function docker(...a) {
   return execFileSync('docker', a, { encoding: 'utf8' }).trim();
+}
+// SQL contra la base de Jiku local (solo para quitar y devolver permisos de prueba).
+const JIKU_DB = process.env.E2E_JIKU_DB_CONTAINER || 'jiku-local-database';
+function jikuSQL(sql) {
+  return docker('exec', JIKU_DB, 'sh', '-c', `psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -tAc "${sql.replace(/"/g, '\\"')}"`).split('\n')[0];
 }
 async function waitModule(ctx, base, apiPath, want, timeoutMs = 150000) {
   const t0 = Date.now();
@@ -181,6 +200,7 @@ async function opusSuite(browser) {
 
   await step('O4', 'opus-web: visor del documento público (markdown seguro, imagen, sin edición)', async () => {
     const imgResp = page.waitForResponse((r) => r.url().includes(`/attachments/${D.arqAttachment}`), { timeout: 20000 });
+    const docResp = page.waitForResponse((r) => r.url().endsWith(`/api/opus/docs/documents/${D.arq}`), { timeout: 20000 });
     await page.goto(`${OPUS}/projects/${D.project}/requirements`);
     await page.locator('section[aria-label="Documentación"] a', { hasText: D.arqTitle }).click();
     await page.waitForURL(new RegExp(`/projects/${D.project}/docs/${D.arq}`));
@@ -199,12 +219,24 @@ async function opusSuite(browser) {
     for (const label of ['Editar', 'Compartir', 'Guardar']) {
       assert((await page.getByRole('button', { name: label }).count()) === 0, `hay botón "${label}"`);
     }
+    // D-11: el documento llega sin frontmatter (respuesta de red, no solo lo que se pinta).
+    const dr = await docResp;
+    const doc = await dr.json();
+    assert(dr.status() === 200 && typeof doc.content === 'string', `GET documento: ${dr.status()}`);
+    assert(!doc.content.trimStart().startsWith('---') && !/requirements:|projects:/.test(doc.content), 'la respuesta trae el frontmatter');
+    // S-090: un enlace a otro documento (`/docs/{id}` de la web interna) se ve como texto.
     const hrefs = await main.locator('a').evaluateAll((as) => as.map((a) => a.getAttribute('href') || ''));
-    const toWeb = hrefs.filter((h) => h.startsWith(WEB));
+    const toDocs = hrefs.filter((h) => /\/docs\/[0-9A-Z]{26}([?#]|$)/.test(h));
+    assert(toDocs.length === 0, `enlaces a documentos como <a>: ${toDocs.join(', ')}`);
+    const linkText = /\[([^\]]+)\]\([^)]*\/docs\/[0-9A-Z]{26}\)/.exec(doc.content)?.[1];
+    if (linkText) {
+      assert(text.includes(linkText), `no aparece el texto del enlace "${linkText}"`);
+      assert((await main.locator('a', { hasText: linkText }).count()) === 0, `"${linkText}" sigue siendo un <a>`);
+    }
     await shot(page, 'opus-documento-1440');
     return (
-      `imagen 302 → ${r.headers().location?.split('?')[0]}; sin JS; sin edición` +
-      (toWeb.length ? `; OBS: enlace a la web interna: ${toWeb.join(', ')}` : '')
+      `imagen 302 → ${r.headers().location?.split('?')[0]}; sin JS; sin edición; respuesta sin frontmatter (${doc.content.length} B)` +
+      (linkText ? `; enlace "${linkText}" como texto` : '; OBS: el documento no tiene enlaces a otros documentos')
     );
   });
 
@@ -288,6 +320,30 @@ async function opusSuite(browser) {
     });
   }
 
+  await step('O10', 'opus-web: sin project-permissions → aviso "sin acceso" (no "no disponible")', async () => {
+    const ext = await (await ctx.request.get(OPUS + '/api/auth/session')).json();
+    const uid = process.env.E2E_EXTERNAL_USER_ID || ext?.user?.id || ext?.user?.sub;
+    if (!uid) throw skip(`la sesión no expone el id del externo (definir E2E_EXTERNAL_USER_ID): ${Object.keys(ext?.user || {})}`);
+    const before = jikuSQL(`SELECT count(*) FROM user_project_permissions WHERE user_id='${uid}' AND project_id=${D.project}`);
+    assert(before === '1', `el externo no tiene permiso sobre ${D.project} (${before})`);
+    jikuSQL(`DELETE FROM user_project_permissions WHERE user_id='${uid}' AND project_id=${D.project}`);
+    try {
+      const respP = page.waitForResponse((r) => r.url().includes('/api/opus/docs/documents?'), { timeout: 20000 });
+      await page.goto(`${OPUS}/projects/${D.project}/requirements`);
+      const resp = await respP.catch(() => null);
+      const forbidden = page.getByText('No tenés acceso a la documentación de este proyecto.');
+      await forbidden.first().waitFor({ timeout: 20000 });
+      const unavailable = await page.getByText('Los documentos no están disponibles').count();
+      await shot(page, 'opus-sin-acceso');
+      assert(unavailable === 0, 'aparece también el aviso de "no disponible"');
+      return `GET documents → ${resp ? resp.status() : 'sin pedido'}; aviso de sin acceso`;
+    } finally {
+      jikuSQL(`INSERT INTO user_project_permissions (user_id, project_id) VALUES ('${uid}', ${D.project}) ON CONFLICT DO NOTHING`);
+      await page.goto(`${OPUS}/projects/${D.project}/requirements`);
+      await page.locator('section[aria-label="Documentación"] a').first().waitFor({ timeout: 30000 });
+    }
+  });
+
   await step('O9', 'web: el externo no entra a la web interna', async () => {
     const c2 = await browser.newContext();
     const p2 = await c2.newPage();
@@ -320,8 +376,9 @@ async function publicSuite(browser) {
     const page = await ctx.newPage();
     const w = watch(page);
     const att = [];
-    page.on('response', (r) => {
-      if (r.url().includes('/attachments/')) att.push(r.status());
+    let cspBlocked = '';
+    page.on('requestfailed', (r) => {
+      if (r.failure()?.errorText === 'csp') cspBlocked = new URL(r.url()).origin;
     });
     try {
       const r = await page.goto(url);
@@ -338,10 +395,18 @@ async function publicSuite(browser) {
       const hdr = ['content-security-policy', 'x-robots-tag', 'referrer-policy', 'cache-control'].map((k) => `${k}=${h[k] ? 'sí' : 'NO'}`);
       assert(h['content-security-policy'] && /noindex/.test(h['x-robots-tag'] || ''), hdr.join(' '));
       const img = await page.locator('img').first().evaluate((i) => i.naturalWidth).catch(() => 0);
+      // La imagen apunta a /p/docs/{token}/attachments/{id}, que responde 302 a la URL prefirmada.
+      const src = await page.locator('img').first().getAttribute('src').catch(() => null);
+      if (src) {
+        assert(/^\/p\/docs\/jds_[^/]+\/attachments\/[0-9A-Z]{26}$/.test(src), `src de la imagen: ${src.replace(/jds_[^/]+/, 'jds_…')}`);
+        const a302 = await ctx.request.get(new URL(src, url).href, { maxRedirects: 0 });
+        assert(a302.status() === 302, `adjunto del link → ${a302.status()}`);
+        att.push(302);
+      }
       cli('docs', 'revoke', share.id);
       const r2 = await page.goto(url);
       assert(r2.status() === 404, `tras revocar → ${r2.status()}`);
-      return `200; ${hdr.join(', ')}; sin JS; imagen ${img > 0 ? 'ok' : 'NO carga'} (${att.join(',') || 'sin pedidos de adjunto'}); enlaces a documentos como <a>: ${links}; revocado → 404`;
+      return `200; ${hdr.join(', ')}; sin JS; imagen ${img > 0 ? 'ok' : cspBlocked ? `302 pero la CSP (img-src 'self' https:) bloquea el storage ${cspBlocked} (http en local)` : 'NO carga'} (${att.join(',') || 'sin <img>'}); enlaces a documentos como <a>: ${links}; revocado → 404`;
     } finally {
       await ctx.close();
     }
@@ -360,10 +425,11 @@ async function webSuite(browser) {
     if (/\/api\/docs|\/docs\/attachments|\/api\/modules/.test(r.url())) net.push(`${r.status()} ${r.request().method()} ${r.url()}`);
   });
   let logged = false;
-  const all = ['W2', 'W3', 'W4', 'W5', 'W6', 'W7', 'W8', 'W9', 'W10', 'W11', 'W12'];
+  const all = ['W2', 'W3', 'W4b', 'W4', 'W5', 'W6', 'W7', 'W8', 'W9', 'W10', 'W11', 'W12'];
 
   await step('W1', 'web: login del interno, /modules y entrada "Documentación"', async () => {
     const modResp = page.waitForResponse((r) => /\/api\/modules$/.test(r.url()), { timeout: 60000 });
+    modResp.catch(() => {}); // si el login falla, el contexto se cierra con la promesa pendiente
     await login(page, WEB, 'USER', creds);
     logged = true;
     const r = await modResp;
@@ -375,7 +441,8 @@ async function webSuite(browser) {
     return `docs=${docs.status}, sharing=${docs.features?.sharing}`;
   });
   if (!logged) {
-    for (const id of all) results.push({ id, name: 'web (interno)', status: 'no probado', note: 'sin login del usuario interno (W1)' });
+    const why = results.find((r) => r.id === 'W1')?.note || '';
+    for (const id of all) results.push({ id, name: 'web (interno)', status: 'no probado', note: `sin login del usuario interno (W1: ${why})` });
     return ctx.close();
   }
 
@@ -408,27 +475,67 @@ async function webSuite(browser) {
     return out.join('; ');
   });
 
-  await step('W3', 'web: /docs, carpetas, búsqueda (frase y exclusión) y apertura', async () => {
-    await page.goto(`${WEB}/docs`);
-    await page.getByRole('link', { name: 'clientes' }).first().click();
-    await page.getByRole('link', { name: 'exo' }).first().click();
-    await page.getByRole('link', { name: 'videoconferencia' }).first().click();
-    await page.locator('table[aria-label="Contenido de la carpeta"]').getByRole('link', { name: D.arqTitle }).waitFor();
+  await step('W3', 'web: /docs, carpetas (incluidas importadas), búsqueda sobre importados (frase y exclusión) y apertura', async () => {
+    const folderTable = page.locator('table[aria-label="Contenido de la carpeta"]');
+    const openPath = async (names) => {
+      await page.goto(`${WEB}/docs`);
+      for (const n of names) {
+        await folderTable.getByRole('link', { name: n, exact: true }).first().click();
+        await page.waitForURL(/\/docs\?folder=/);
+        await folderTable.waitFor();
+      }
+    };
+    await openPath(['clientes', 'exo', 'videoconferencia']);
+    await folderTable.getByRole('link', { name: D.arqTitle }).waitFor();
     await shot(page, 'web-docs-carpeta');
+    await openPath(D.impFolders);
+    await folderTable.getByRole('link', { name: D.impFolderDoc, exact: true }).waitFor();
+    const impCount = await folderTable.locator('tbody tr').count();
+    await shot(page, 'web-docs-carpeta-importada');
+    const results = page.locator('table[aria-label="Resultados de la búsqueda"]');
     const search = page.getByPlaceholder('Buscar en la documentación');
-    await search.fill('"integración con aduana"');
-    await page.locator('table[aria-label="Resultados de la búsqueda"]').waitFor({ timeout: 15000 });
-    const phrase = await page.locator('table[aria-label="Resultados de la búsqueda"] a').allInnerTexts();
-    await search.fill('aduana -livekit');
-    await page.waitForTimeout(1500);
-    await page.locator('table[aria-label="Resultados de la búsqueda"], [class*="empty"]').first().waitFor({ timeout: 15000 });
-    const excl = await page.locator('table[aria-label="Resultados de la búsqueda"] a').allInnerTexts();
+    const runSearch = async (q) => {
+      const resp = page
+        .waitForResponse((r) => r.url().includes('/docs/search?') && new URL(r.url()).searchParams.get('q') === q, { timeout: 20000 })
+        .catch(() => null);
+      await search.fill(q);
+      await resp;
+      await page.waitForTimeout(800);
+      await results.waitFor({ timeout: 15000 });
+      return results.locator('a').allInnerTexts();
+    };
+    const phrase = await runSearch(D.searchPhrase);
+    const excl = await runSearch(D.searchExclude);
     await shot(page, 'web-docs-busqueda');
-    assert(phrase.length > 0, 'la frase no dio resultados');
-    assert(!excl.includes(D.arqTitle), `la exclusión -livekit no sacó "${D.arqTitle}"`);
-    await page.locator('table[aria-label="Resultados de la búsqueda"] a').first().click();
+    assert(phrase.includes(D.searchPhraseHit), `la frase no trajo "${D.searchPhraseHit}": ${phrase.join(' | ')}`);
+    assert(phrase.includes(D.searchExcluded), `sin "${D.searchExcluded}" en la frase no se puede probar la exclusión: ${phrase.join(' | ')}`);
+    assert(excl.includes(D.searchPhraseHit) && !excl.includes(D.searchExcluded), `exclusión: ${excl.join(' | ')}`);
+    await results.getByRole('link', { name: D.searchPhraseHit }).first().click();
     await page.waitForURL(/\/docs\/[0-9A-Z]{26}/);
-    return `frase: ${phrase.join(' | ')}; exclusión: ${excl.join(' | ') || '(sin resultados)'}`;
+    await page.getByRole('heading', { name: D.searchPhraseHit }).first().waitFor({ timeout: 15000 });
+    return `carpeta importada ${D.impFolders.join('/')}: ${impCount} filas; frase: ${phrase.length} resultados; exclusión: ${excl.length} (sin ${D.searchExcluded}); abre "${D.searchPhraseHit}"`;
+  });
+
+  await step('W4b', 'web: nota importada (imagen por /docs/attachments 302 y enlace interno a otra nota)', async () => {
+    const imgResp = page.waitForResponse((r) => r.url().includes(`/docs/attachments/${D.impImageAtt}`), { timeout: 20000 });
+    await page.goto(`${WEB}/docs/${D.impImage}`);
+    await page.getByRole('heading', { name: D.impImageTitle }).first().waitFor({ timeout: 20000 });
+    const r = await imgResp;
+    assert(r.status() === 302, `imagen importada → ${r.status()}`);
+    await page.waitForTimeout(1500);
+    const nat = await page.locator(`img[src*="${D.impImageAtt}"]`).first().evaluate((i) => i.naturalWidth).catch(() => 0);
+    assert(nat > 0, 'la imagen importada no cargó');
+    const text = await page.locator('main').innerText();
+    assert(!/^---$/m.test(text) && !text.includes('shortid:'), 'el visor muestra el frontmatter');
+    await shot(page, 'web-visor-importado');
+    await page.goto(`${WEB}/docs/${D.impLinkSrc}`);
+    const link = page.locator('main').getByRole('link', { name: D.impLinkText, exact: true }).first();
+    await link.waitFor({ timeout: 20000 });
+    const href = await link.getAttribute('href');
+    await link.click();
+    await page.waitForURL(new RegExp(`/docs/${D.impLinkDst}`), { timeout: 20000 });
+    await page.getByRole('heading', { name: D.impLinkDstTitle }).first().waitFor({ timeout: 20000 });
+    return `imagen 302 → ${r.headers().location?.split('?')[0]} (${nat}px); enlace "${D.impLinkText}" (${href}) abre "${D.impLinkDstTitle}"`;
   });
 
   // Documento de prueba con XSS, imagen y enlace interno (creado por CLI admin).
@@ -513,7 +620,7 @@ async function webSuite(browser) {
     assert(body.baseVersion === 1 && body.sessionId, `PUT sin baseVersion/sessionId: ${Object.keys(body)}`);
     await page.waitForTimeout(1500);
     const unlock = net.filter((l) => l.includes(`/docs/documents/${newId}/unlock`));
-    const got = cliJSON('docs', 'query', 'documents.get', '--id', newId);
+    const got = cliJSON('docs', 'query', 'documents.get', '--id', newId, '--include', 'lock', '--include', 'content');
     assert(!got.lock, `el lock sigue tomado: ${JSON.stringify(got.lock)}`);
     return `lock ${lockReq[0].split(' ')[0]}, PUT baseVersion=1, unlock ${unlock.length ? unlock[0].split(' ')[0] : 'no visto'}; versión ${got.version}`;
   });
@@ -523,14 +630,14 @@ async function webSuite(browser) {
     await page.goto(`${WEB}/docs/${newId}`);
     await page.getByRole('button', { name: 'Editar' }).click();
     await page.getByText('Lo estás editando').waitFor();
-    const before = cliJSON('docs', 'query', 'documents.get', '--id', newId).lock;
+    const before = cliJSON('docs', 'query', 'documents.get', '--id', newId, '--include', 'lock', '--include', 'content').lock;
     assert(before, 'sin lock tras Editar');
     await page.waitForTimeout(65000); // RENEW_INTERVAL_MS = 60 s
-    const after = cliJSON('docs', 'query', 'documents.get', '--id', newId).lock;
+    const after = cliJSON('docs', 'query', 'documents.get', '--id', newId, '--include', 'lock', '--include', 'content').lock;
     assert(after && after.expiresAt > before.expiresAt, `no renovó: ${before.expiresAt} → ${after?.expiresAt}`);
     await page.goto(`${WEB}/docs`); // pagehide/desmontaje → unlock con keepalive
     await page.waitForTimeout(2000);
-    const gone = cliJSON('docs', 'query', 'documents.get', '--id', newId).lock;
+    const gone = cliJSON('docs', 'query', 'documents.get', '--id', newId, '--include', 'lock', '--include', 'content').lock;
     assert(!gone, `el lock sigue tomado al salir: ${JSON.stringify(gone)}`);
     return `renovado ${before.expiresAt} → ${after.expiresAt}; liberado al salir`;
   });
@@ -542,7 +649,7 @@ async function webSuite(browser) {
     await page.goto(`${WEB}/docs/${newId}`);
     await page.getByRole('button', { name: 'Editar' }).click();
     await page.getByText('Lo estás editando').waitFor();
-    const cur = cliJSON('docs', 'query', 'documents.get', '--id', newId);
+    const cur = cliJSON('docs', 'query', 'documents.get', '--id', newId, '--include', 'lock', '--include', 'content');
     const f = path.join(OUT, 'conflict.md');
     fs.writeFileSync(f, (cur.content || '') + '\nCambio del admin por CLI.\n');
     // Con el lock del humano, el put del admin sin lock tiene que fallar con document_locked.
@@ -607,46 +714,56 @@ async function webSuite(browser) {
     return `adjunto ${att} insertado y visible`;
   });
 
-  await step('W11', 'web: compartir (link una vez, página pública, listar, revocar → 404)', async () => {
-    await page.goto(`${WEB}/docs/${D.arq}`);
-    await page.getByRole('heading', { name: D.arqTitle }).first().waitFor();
-    const canShare = (await page.getByRole('button', { name: 'Compartir' }).count()) > 0;
-    const perm = cliJSON('docs', 'query', 'documents.get', '--id', D.arq).folder?.effectivePermission;
-    if (!canShare) {
-      // Sin manage no hay botón: es lo esperado. Probamos en un documento propio con manage.
-      if (!newId) throw skip('sin manage y sin documento propio');
-    }
-    const target = canShare ? D.arq : newId;
-    await page.goto(`${WEB}/docs/${target}`);
-    const btn = page.getByRole('button', { name: 'Compartir' });
-    await btn.waitFor({ timeout: 15000 });
-    await btn.click();
-    await page.getByRole('button', { name: 'Crear link' }).click();
-    const link = page.getByLabel('Link');
-    await link.waitFor({ timeout: 15000 });
-    const url = await link.inputValue();
-    assert(/\/p\/docs\/jds_/.test(url), `link: ${url.slice(0, 40)}`);
-    await shot(page, 'web-compartir-creado');
+  await step('W11', 'web: compartir (link una vez, página pública, listar, revocar → 404; bloqueado en /infra/)', async () => {
+    // El rol user tiene write en /clientes/: para Compartir hace falta manage. Se le da una regla
+    // por usuario en la carpeta de prueba y se quita al terminar.
+    const sess = await (await ctx.request.get(WEB + '/api/auth/session')).json();
+    const uid = process.env.E2E_WEB_USER_ID || sess?.user?.id || sess?.user?.sub;
+    if (!uid) throw skip(`la sesión no expone el id del interno (definir E2E_WEB_USER_ID): ${Object.keys(sess?.user || {})}`);
+    const rules = (list) => cli('docs', 'cmd', `folders.${D.clientFolder}.acl.replace`, JSON.stringify({ rules: list }));
+    rules([{ principalType: 'user', principal: uid, permission: 'manage' }]);
     const anon = await browser.newContext();
-    const pub = await anon.newPage();
-    const r = await pub.goto(url.replace(/^https?:\/\/[^/]+/, PUBLIC));
-    const ok = r.status() === 200;
-    const hdr = r.headers();
-    await shot(pub, 'web-link-publico');
-    await page.getByRole('button', { name: 'Cerrar' }).click();
-    await btn.click();
-    const rows = page.locator('table[aria-label="Links de este documento"] tbody tr');
-    await rows.first().waitFor();
-    const n = await rows.count();
-    assert((await page.getByLabel('Link').count()) === 0, 'el link se vuelve a mostrar');
-    await page.getByRole('button', { name: 'Revocar' }).first().click();
-    await page.getByRole('dialog').getByRole('button', { name: 'Revocar' }).click();
-    await page.waitForTimeout(1500);
-    const r2 = await pub.goto(url.replace(/^https?:\/\/[^/]+/, PUBLIC));
-    await anon.close();
-    assert(ok, `página pública: ${r.status()}`);
-    assert(r2.status() === 404, `tras revocar: ${r2.status()}`);
-    return `permiso en arq: ${perm}; link → 200 (CSP ${hdr['content-security-policy'] ? 'sí' : 'no'}, noindex ${hdr['x-robots-tag'] || 'no'}); ${n} link(s) listados; revocado → 404`;
+    try {
+      await page.goto(`${WEB}/docs/${D.arq}`);
+      await page.getByRole('heading', { name: D.arqTitle }).first().waitFor();
+      const btn = page.getByRole('button', { name: 'Compartir' });
+      await btn.waitFor({ timeout: 15000 });
+      await btn.click();
+      await page.getByRole('button', { name: 'Crear link' }).click();
+      const link = page.getByLabel('Link');
+      await link.waitFor({ timeout: 15000 });
+      const url = await link.inputValue();
+      assert(/\/p\/docs\/jds_/.test(url), `link: ${url.slice(0, 40)}`);
+      await shot(page, 'web-compartir-creado', { mask: [link, page.getByText(creds.WEB_USER_LOGIN)] });
+      const pub = await anon.newPage();
+      const r = await pub.goto(url.replace(/^https?:\/\/[^/]+/, PUBLIC));
+      const hdr = r.headers();
+      await shot(pub, 'web-link-publico');
+      assert(r.status() === 200, `página pública: ${r.status()}`);
+      await page.getByRole('button', { name: 'Cerrar' }).first().click();
+      await btn.click();
+      const rows = page.locator('table[aria-label="Links de este documento"] tbody tr');
+      await rows.first().waitFor();
+      const n = await rows.count();
+      assert((await page.getByLabel('Link').count()) === 0, 'el link se vuelve a mostrar');
+      await shot(page, 'web-compartir-lista');
+      await page.getByRole('button', { name: 'Revocar' }).first().click();
+      await page.getByRole('dialog').getByRole('button', { name: 'Revocar' }).last().click();
+      await page.waitForTimeout(1500);
+      const r2 = await pub.goto(url.replace(/^https?:\/\/[^/]+/, PUBLIC));
+      assert(r2.status() === 404, `tras revocar: ${r2.status()}`);
+      await page.keyboard.press('Escape');
+      // /infra/: read para el rol user y externalBlocked → sin "Compartir".
+      await page.goto(`${WEB}/docs/${D.infra}`);
+      await page.getByRole('heading', { name: D.infraTitle }).first().waitFor();
+      const infraShare = await page.getByRole('button', { name: 'Compartir' }).count();
+      await shot(page, 'web-infra-sin-compartir');
+      assert(infraShare === 0, 'en /infra/ aparece "Compartir"');
+      return `link → 200 (CSP ${hdr['content-security-policy'] ? 'sí' : 'no'}, noindex ${hdr['x-robots-tag'] || 'no'}); ${n} link(s) listados; revocado → 404; /infra/ sin Compartir`;
+    } finally {
+      await anon.close();
+      rules([]);
+    }
   });
 
   if (withDown) {
@@ -693,4 +810,5 @@ try {
 const table = ['| id | escenario | estado | detalle |', '| --- | --- | --- | --- |', ...results.map((r) => `| ${r.id} | ${r.name} | ${r.status} | ${r.note.replace(/\|/g, '\\|')} |`)].join('\n');
 fs.writeFileSync(path.join(OUT, 'resultados.md'), table + '\n');
 log('\n' + table + `\n\nCapturas y resultados en ${OUT}`);
-process.exitCode = results.some((r) => r.status === 'falla') ? 1 : 0;
+// 1: alguna falla. 2: nada falló pero quedaron escenarios sin probar (no es "verde").
+process.exitCode = results.some((r) => r.status === 'falla') ? 1 : results.some((r) => r.status === 'no probado') ? 2 : 0;

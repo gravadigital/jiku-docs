@@ -49,6 +49,14 @@ export async function login(page, base, who, creds) {
     const u = page.url();
     if (u.startsWith(base) && !u.includes('/login') && !u.includes('/api/auth')) return;
     if (u.includes('id.grava.io')) {
+      // Contraseña inicial: Zitadel exige cambiarla. La suite no la cambia (es una cuenta
+      // real del IdP hosteado): el dueño tiene que entrar una vez a mano y actualizar el .env.
+      if (await page.locator('#change-old-password').count()) {
+        throw Object.assign(
+          new Error(`login ${who}: Zitadel exige cambiar la contraseña inicial; entrar una vez a mano y actualizar WEB_${who}_PASSWORD`),
+          { skip: true }
+        );
+      }
       const skip = page.locator('button:has-text("saltar")');
       if (await skip.count()) { await skip.click(); continue; }
     }

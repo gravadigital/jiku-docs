@@ -23,13 +23,22 @@ node run.mjs --only opus --down                              # solo opus-web, co
 - Salida: capturas y `resultados.md` en `.local/e2e-web/<fecha>/` (o `$E2E_OUT`). No guardar
   capturas fuera de `.local/` o de un directorio temporal.
 - URLs: `E2E_WEB_URL` (3000), `E2E_OPUS_URL` (3001), `E2E_PUBLIC_URL` (`http://127.0.0.1:3100`).
+- Código de salida: 0 todo ok, 1 alguna falla, 2 sin fallas pero con escenarios "no probado".
+- Si Zitadel pide cambiar la contraseña inicial de un usuario, la suite no la cambia: marca su
+  parte como "no probado". Entrar una vez a mano, cambiarla y actualizar el `.env`.
+- O10 quita y devuelve el `project-permissions` del externo sobre el proyecto (SQL en
+  `jiku-local-database`, o `$E2E_JIKU_DB_CONTAINER`). W11 le da al interno una regla `manage`
+  por usuario en `/clientes/exo/videoconferencia/` (vía `E2E_CLI_ADMIN`) y la quita al terminar.
+  Los ids salen de la sesión, o de `E2E_EXTERNAL_USER_ID` / `E2E_WEB_USER_ID`.
 
 ## Datos que espera
 
 Los que deja `test/e2e/local-bus.sh` con el stack local: proyecto 43 (requisitos 54 internal y 15
 public, tarea 2716), carpetas `/clientes/exo/videoconferencia/`, `/infra/` (`externalBlocked`) e
 `/interno/`, y los documentos y adjuntos cuyos ids están en `D` al principio de `run.mjs`
-(sobrescribibles por variables `E2E_*`). Además:
+(sobrescribibles por variables `E2E_*`), y notas importadas de HedgeDoc (W3, W4b): la carpeta
+`/clientes/wecerty/wecerty/tecnico/`, la nota con imagen `Opus / Arquitectura del sistema` y el
+enlace `Versión 1` de `Wecerty.md`. Además:
 
 - El externo tiene que tener `project-permissions` sobre el proyecto 43
   (`user_project_permissions` en la base de Jiku).
