@@ -204,7 +204,9 @@ go run ./cmd/jiku-docs import hedgedoc --mapping .local/hedgedoc-mapping.csv
   markdown queda con `{JIKU_WEB_URL}/docs/attachments/{id}`.
 - **Enlaces entre notas** (`{--hedgedoc-url}/{alias|shortid|id}`, `/s/…`, `/p/…`) se reescriben a
   `{JIKU_WEB_URL}/docs/{id}`; los que no resuelven quedan como estaban y se informan.
-- **Idempotente**: ids deterministas (ULID con la fecha de la nota); reimportar no duplica.
+- **Idempotente**: ids deterministas (ULID con la fecha de la nota); reimportar no duplica. En una
+  reimportación las notas ya importadas quedan `unchanged` en el informe y los adjuntos ya confirmados no se
+  vuelven a descargar; solo se reintentan los que fallaron.
 - **Informe** (`--report`, default `.local/hedgedoc-import-report.csv`): estado por nota, ruta destino,
   adjuntos, enlaces sin resolver y **posibles secretos** (regla y línea, nunca el valor). Esas notas fueron
   públicas en HedgeDoc: hay que rotar esas credenciales antes de apagarlo.

@@ -86,3 +86,5 @@ Formato: [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/). Versionado
 - `documents.{id}.move` no crea versión nueva (el contenido no cambia); la respuesta trae la versión actual.
 - Carpetas con borrado lógico (para que borrar dos veces sea `success`).
 - El importador omite por defecto las notas anónimas de HedgeDoc (spam) salvo que estén mapeadas.
+- En una reimportación de HedgeDoc las notas ya importadas figuran `unchanged` y los adjuntos ya confirmados
+  no se vuelven a descargar (la primera corrida real tardó 9 min y la segunda 7 solo por re-descargar).

@@ -102,7 +102,15 @@ func TestHedgeDocImport(t *testing.T) {
 	if !strings.Contains(string(rep), "password_assignment") || strings.Contains(string(rep), "N0tAR3alPass") {
 		t.Fatalf("report:\n%s", rep)
 	}
-	// Re-running is idempotent.
+	// Re-running is idempotent: nothing is written and no asset is downloaded again.
+	downloads := 0
+	countingHTTP := &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		if r.Method == http.MethodGet {
+			downloads++
+		}
+		return http.DefaultTransport.RoundTrip(r)
+	})}
+	opts.HTTP = countingHTTP
 	if err := hedgedoc.Run(ctx, opts, svc, logging.Discard()); err != nil {
 		t.Fatal(err)
 	}
@@ -110,7 +118,14 @@ func TestHedgeDocImport(t *testing.T) {
 		t.Fatalf("rerun created duplicates: %d", n)
 	}
 	rep, _ = os.ReadFile(report)
-	if strings.Contains(string(rep), ",failed,") {
-		t.Fatalf("rerun failed:\n%s", rep)
+	if strings.Contains(string(rep), ",failed,") || strings.Contains(string(rep), ",imported,") || !strings.Contains(string(rep), ",unchanged,") {
+		t.Fatalf("rerun report:\n%s", rep)
+	}
+	if downloads != 0 {
+		t.Fatalf("rerun downloaded %d assets again", downloads)
 	}
 }
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }

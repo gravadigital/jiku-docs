@@ -319,7 +319,7 @@ func Run(ctx context.Context, o Options, svc *service.Service, log *slog.Logger)
 		}
 		return finish(o, plan, log, true)
 	}
-	if err := execute(ctx, o, svc, plan, log); err != nil {
+	if err := execute(ctx, o, svc, plan, existingNames, log); err != nil {
 		_ = finish(o, plan, log, false)
 		return err
 	}
@@ -347,7 +347,7 @@ func existingDocNames(ctx context.Context, svc *service.Service, plan []*planned
 	return out, rows.Err()
 }
 
-func execute(ctx context.Context, o Options, svc *service.Service, plan []*planned, log *slog.Logger) error {
+func execute(ctx context.Context, o Options, svc *service.Service, plan []*planned, existing map[string]string, log *slog.Logger) error {
 	call := &service.Call{Caller: svc.SelfCaller(), CorrelationID: "hedgedoc-import-" + protocol.NewULID()}
 	folders := map[string]string{"/": protocol.RootFolderID}
 	hc := o.HTTP
@@ -369,7 +369,11 @@ func execute(ctx context.Context, o Options, svc *service.Service, plan []*plann
 			ID: p.docID, FolderID: folderID, FileName: p.fileName, Content: []byte(p.content), Via: "service",
 			Message: Message(*p.note), CreatedAt: p.note.CreatedAt, UpdatedAt: p.note.UpdatedAt,
 		})
+		_, already := existing[p.docID]
 		switch {
+		case err == nil && already:
+			// Same id, same content: imported by a previous run. Nothing is written.
+			p.status, p.detail = "unchanged", "ya importada en una corrida anterior"
 		case err == nil:
 			p.status = "imported"
 		case protocol.CodeOf(err) == protocol.CodeAlreadyExists:
@@ -381,14 +385,29 @@ func execute(ctx context.Context, o Options, svc *service.Service, plan []*plann
 			continue
 		}
 		for _, u := range p.assets {
+			// A rerun must not download again what a previous run already migrated.
+			if ready, err := attachmentReady(ctx, svc, AttachmentID(*p.note, u)); err != nil {
+				return err
+			} else if ready {
+				continue
+			}
 			if err := migrateAsset(ctx, svc, call, hc, o.MaxAssetBytes, p, u); err != nil {
 				p.warnings = append(p.warnings, "adjunto no migrado: "+AssetName(u)+": "+err.Error())
 				log.Warn("import: asset not migrated", "note", p.note.ID, "asset", AssetName(u), "err", err.Error())
 			}
 		}
-		log.Info("import: note imported", "note", p.note.ID, "document", p.docID, "assets", len(p.assets))
+		if p.status == "imported" {
+			log.Info("import: note imported", "note", p.note.ID, "document", p.docID, "assets", len(p.assets))
+		}
 	}
 	return nil
+}
+
+// attachmentReady reports whether an attachment id was already migrated and confirmed.
+func attachmentReady(ctx context.Context, svc *service.Service, id string) (bool, error) {
+	var ready bool
+	err := svc.DB.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM attachments WHERE id = $1 AND status = 'ready')`, id).Scan(&ready)
+	return ready, err
 }
 
 // ensureFolder creates the folders of a path (as the service). /importado/ is created closed:
