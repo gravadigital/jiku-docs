@@ -54,9 +54,27 @@ Subcomando `jiku-docs import hedgedoc` (código en `internal/importer/hedgedoc`;
 7. Corre el detector de secretos. El informe en `.local/` lista regla y línea, nunca el valor.
 8. Tiene `--dry-run`. Una reimportación saltea los adjuntos ya subidos y marca `unchanged` las notas sin cambios.
 
-**En curso (código, sin reimportar):** columnas `projects`, `clients`, `requirements`, `tasks` y `topics` en la planilla. El importador las escribe en el bloque `jiku:` y en `topics` del frontmatter.
+**Relaciones y temas (commit `e32cb09`; todavía sin reimportar en local).**
 
-Una relación con un id inexistente en Jiku se descarta y queda en el informe. Sin esto, **ninguna nota importada aparece en la card "Documentación" de la ficha de proyecto, requisito o tarea**: las relaciones salen solo del frontmatter (especificación, sección 3).
+- **Columnas nuevas de la planilla**, después de `skip`:
+  - `projects`, `clients`, `requirements` y `tasks`: ids separados por `;` o `,`;
+  - `topics`: temas separados por `;`.
+- **Dónde se escriben:** el importador los vuelca al bloque `jiku:` y a `topics` del frontmatter de la versión 1. Sin relaciones, **ninguna nota importada aparece en la card "Documentación"** de la ficha de proyecto, requisito o tarea: las relaciones salen solo del frontmatter (especificación, sección 3). La importación local del 2026-10-24 se hizo antes de este cambio, así que no tiene ninguna.
+- **Ids inexistentes:** una relación con un id que no existe en Jiku se descarta y la nota se importa igual. El descarte queda en la columna `droppedRelations` del informe.
+- **Validación previa:** `--dry-run --check-relations` valida los ids contra core sin escribir nada.
+- **Reimportación:** una nota con contenido nuevo se actualiza (`updated`) solo si la última versión la escribió el importador. Si alguien la editó en jiku-docs, queda `exists` y no se pisa.
+
+Dry-run con la planilla actual: 1.709 notas en total.
+
+| Cobertura | Notas |
+| --- | --- |
+| Con proyecto | 1.175 |
+| Con cliente | 931 (el cliente se dedujo por el prefijo del nombre del proyecto, porque casi ningún proyecto de Jiku tiene `client_id`) |
+| Con temas | 1.409 |
+| Con requisitos o tareas | ninguna |
+| Relaciones descartadas | 0 |
+
+La planilla anterior quedó en `.local/hedgedoc-mapping.prev.csv`.
 
 ## 4. Árbol de carpetas y permisos usados en la prueba local
 
