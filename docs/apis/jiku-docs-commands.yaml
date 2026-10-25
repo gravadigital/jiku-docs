@@ -18,6 +18,9 @@ info:
     - `content` inline de más de 256 KiB y `size` de más de 5 MiB responden `content_too_large`
       (no `invalid_fields`), y un `fileName` fuera del patrón responde `file_name_invalid`.
     - Un comando de una persona externa responde `caller_not_authorized`.
+    - `actor` (D-11): `{ id, roles, name?, username?, email? }`, el mismo sobre que la api manda a core.
+      La clase de la persona y las reglas ACL por rol salen de `actor.roles`; la autoría, de `actor.id`.
+      No se consulta `users.list` para la api con `actor`. Un `actor` sin `roles` es `invalid_fields`.
     - `via`: para callers de clase servicio el origen registrado en versiones y en `actor.via` de los
       eventos es siempre `service`. En `documents.lock` el `via` del lock (`human`/`agent`) se guarda
       tal como lo manda el caller, también si es un servicio (jiku-go manda `agent`); el evento
@@ -210,11 +213,15 @@ components:
       description: Origen del cambio. Para callers de clase service se fuerza `service`.
     Actor:
       type: object
-      description: Persona en nombre de la cual actúa la `api`. Solo la acepta si el caller es la `api`.
+      description: 'Persona en nombre de la cual actúa la `api` (D-11): el mismo `actor` que la api manda a core, armado con el token web ya verificado. Solo se acepta si el caller es la `api`. La clase de la persona sale de `roles` (`admin`/`user` → interna, `external-user` → externa, otro → `caller_not_authorized`); no se consulta `users.list`.'
       additionalProperties: false
-      required: [id]
+      required: [id, roles]
       properties:
-        id: { type: string, description: '`sub` de Zitadel de la persona' }
+        id: { type: string, minLength: 1, maxLength: 200, description: '`sub` de Zitadel de la persona' }
+        roles: { type: array, maxItems: 50, items: { type: string }, description: 'Roles de producto del token web verificado.' }
+        name: { type: string, maxLength: 500 }
+        username: { type: string, maxLength: 500 }
+        email: { type: string, maxLength: 500 }
     Empty:
       type: object
       additionalProperties: false

@@ -80,6 +80,10 @@ jiku-docs no modifica Jiku; estos son los cambios que el repo de Jiku tiene que 
    [`docs/apis/jiku-modules.yaml`](docs/apis/jiku-modules.yaml).
 5. **KV `JIKU_MODULES`** creado por el despliegue de Jiku (D-6). Si no existe, jiku-docs arranca igual y
    reintenta registrarse cada 30 s.
+6. **api: `actor` completo** (D-11). La api manda a jiku-docs el mismo `actor` que a core (`buildActor`):
+   `{ id, roles, name?, username?, email? }`, con los roles del token web verificado. jiku-docs clasifica a
+   la persona con `actor.roles` (no consulta `users.list`, cuyo espejo de roles puede estar viejo) y un
+   `actor` sin `roles` es `invalid_fields`. Un externo recibe `documents.get` sin frontmatter.
 
 ## Correr local contra el stack de Jiku
 

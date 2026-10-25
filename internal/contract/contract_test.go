@@ -237,3 +237,31 @@ func TestErrorCatalog(t *testing.T) {
 		}
 	}
 }
+
+// D-11: the api sends the same actor it sends to core, and both planes agree on its shape.
+func TestActorSchema(t *testing.T) {
+	v := load(t)
+	cases := []struct {
+		actor string
+		ok    bool
+	}{
+		{`{"id":"1","roles":["user"]}`, true},
+		{`{"id":"1","roles":[]}`, true},
+		{`{"id":"1","roles":["external-user"],"name":"Ana","username":"ana","email":"ana@example.com"}`, true},
+		{`{"id":"1"}`, false},
+		{`{"id":"1","roles":"user"}`, false},
+		{`{"id":"1","roles":["user"],"via":"human"}`, false},
+		{`{"roles":["user"]}`, false},
+	}
+	for _, c := range cases {
+		for _, r := range []struct{ plane, method, payload string }{
+			{protocol.PlaneQueries, "documents.list", `{"actor":` + c.actor + `}`},
+			{protocol.PlaneCommands, "folders.new", `{"actor":` + c.actor + `,"id":"01J00000000000000000000000","parentId":"01J00000000000000000000001","name":"x"}`},
+		} {
+			err := v.ValidateRequest(r.plane, r.method, []byte(r.payload))
+			if (err == nil) != c.ok {
+				t.Errorf("%s %s: actor %s: got err %v, want ok=%v", r.plane, r.method, c.actor, err, c.ok)
+			}
+		}
+	}
+}

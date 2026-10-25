@@ -2,12 +2,16 @@ package service
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/base64"
 	"errors"
+	"slices"
 	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
 
+	"github.com/gravadigital/jiku-docs/internal/markdown"
 	"github.com/gravadigital/jiku-docs/internal/protocol"
 	"github.com/gravadigital/jiku-docs/internal/query"
 	"github.com/gravadigital/jiku-docs/internal/validate"
@@ -326,24 +330,44 @@ func (s *Service) documentsGet(ctx context.Context, c *Call) (any, error) {
 		full["version"], full["checksum"], full["sizeBytes"], full["title"] = int(version), ver.checksum, ver.size, ver.title
 		full["updatedAt"], full["updatedBy"] = protocol.FormatTime(ver.at), ver.author
 	}
+	if key == "" && (v.c.IsExternal() || slices.Contains(include, "content")) {
+		if err := s.DB.QueryRow(ctx, `SELECT storage_key FROM document_versions WHERE document_id = $1 AND version = $2`,
+			id, d.Version).Scan(&key); err != nil {
+			return nil, err
+		}
+	}
+	// D-11: an external person never sees the frontmatter (it holds internal ids of
+	// requirements and tasks). `checksum` and `sizeBytes` describe what it receives: the body.
+	var external []byte
+	if v.c.IsExternal() && (slices.Contains(fields, "checksum") || slices.Contains(fields, "sizeBytes") || slices.Contains(include, "content")) {
+		raw, err := s.Blob.Get(ctx, key, MaxDocumentBytes)
+		if err != nil {
+			return nil, err
+		}
+		external = []byte(markdown.StripFrontmatter(string(raw)))
+		full["checksum"], full["sizeBytes"] = Checksum(external), len(external)
+	}
 	out := project(full, fields)
 	for _, inc := range include {
 		switch inc {
 		case "content":
-			if key == "" {
-				if err := s.DB.QueryRow(ctx, `SELECT storage_key FROM document_versions WHERE document_id = $1 AND version = $2`,
-					id, d.Version).Scan(&key); err != nil {
+			size, _ := full["sizeBytes"].(int)
+			switch {
+			case external != nil && size > MaxInlineBytes:
+				u, err := s.presignExternalBody(ctx, d.ID, d.Version, external)
+				if err != nil {
 					return nil, err
 				}
-			}
-			size, _ := full["sizeBytes"].(int)
-			if size > MaxInlineBytes {
+				out["contentUrl"] = u
+			case external != nil:
+				out["content"] = string(external)
+			case size > MaxInlineBytes:
 				u, err := s.Blob.PresignGet(ctx, key, PresignTTL, "text/markdown; charset=utf-8")
 				if err != nil {
 					return nil, err
 				}
 				out["contentUrl"] = u
-			} else {
+			default:
 				b, err := s.Blob.Get(ctx, key, MaxDocumentBytes)
 				if err != nil {
 					return nil, err
@@ -365,6 +389,17 @@ func (s *Service) documentsGet(ctx context.Context, c *Call) (any, error) {
 		}
 	}
 	return out, nil
+}
+
+// presignExternalBody stores the body without frontmatter that an external person receives
+// under `renders/` (the janitor removes it after RenderRetention) and presigns it.
+func (s *Service) presignExternalBody(ctx context.Context, docID string, version int, body []byte) (string, error) {
+	sum := sha256.Sum256(body)
+	key := "renders/external/" + docID + "/" + itoa(version) + "-" + base64.RawURLEncoding.EncodeToString(sum[:8]) + ".md"
+	if err := s.Blob.Put(ctx, key, body, "text/markdown; charset=utf-8"); err != nil {
+		return "", err
+	}
+	return s.Blob.PresignGet(ctx, key, PresignTTL, "text/markdown; charset=utf-8")
 }
 
 func (s *Service) readyAttachments(ctx context.Context, docID string) ([]map[string]any, error) {
@@ -455,6 +490,23 @@ func (s *Service) versionsList(ctx context.Context, c *Call) (any, error) {
 	hasMore := len(items) > q.Limit
 	if hasMore {
 		items, keys = items[:q.Limit], keys[:q.Limit]
+	}
+	if v.c.IsExternal() {
+		// The only visible version is the current one; like documents.get, its checksum and size
+		// describe the body without frontmatter, the content an external person receives (D-11).
+		for _, it := range items {
+			var key string
+			if err := s.DB.QueryRow(ctx, `SELECT storage_key FROM document_versions WHERE document_id = $1 AND version = $2`,
+				docCond.Strings[0], it["version"]).Scan(&key); err != nil {
+				return nil, err
+			}
+			raw, err := s.Blob.Get(ctx, key, MaxDocumentBytes)
+			if err != nil {
+				return nil, err
+			}
+			body := []byte(markdown.StripFrontmatter(string(raw)))
+			it["checksum"], it["sizeBytes"] = Checksum(body), len(body)
+		}
 	}
 	return s.pageOut(q, items, keys, hasMore, nil), nil
 }

@@ -190,7 +190,7 @@ La `api` resuelve esa ruta verificando permisos y redirige a una URL prefirmada 
 | --- | --- | --- | --- | --- |
 | `person-internal` | `users.identity_type = person` y rol interno | El `user-id` del subject | Según ACL de carpetas | Según ACL de carpetas |
 | `person-external` | `users.identity_type = person` y rol de cliente | El `user-id` del subject | Solo documentos `public` vinculados a proyectos visibles en `project-permissions` | Nunca |
-| `api` | El `user-id` es el de la `api` de Jiku | La persona declarada en `actor` | Según la clase de esa persona | Según la clase de esa persona |
+| `api` | El `user-id` es el de la `api` de Jiku | La persona declarada en `actor` (`actor.id`) | Según la clase que dan `actor.roles` | Según la clase que dan `actor.roles` |
 | `service` | `identity_type = service` con rol `internal-app` | El `user-id` del subject | Todo, sin recorte | Todo; queda atribuido al servicio |
 
 Mapeo de roles de Zitadel a clases: `admin` y `user` son `person-internal`; `external-user` es `person-external`; `internal-app` es `service`. Cualquier otro rol (`core`, `bus-observer`) no tiene acceso a `jiku-docs`.
@@ -199,13 +199,15 @@ Reglas de `actor`, iguales a las de `core`:
 
 - Solo la `api` puede mandar la clave `actor`. Si la manda cualquier otro caller: `invalid_fields`.
 - Si la `api` no manda `actor`, la llamada se trata como del servicio `api`.
+- El `actor` es el mismo sobre que la `api` manda a `core`: `{ id, roles, name?, username?, email? }`, con `roles` tomados del token web ya verificado (D-11). Un `actor` sin `roles` o con claves desconocidas es `invalid_fields`.
+- La clase de la persona sale de `actor.roles` (`admin`/`user` → `person-internal`, `external-user` → `person-external`, otro → `caller_not_authorized`) y las reglas de ACL por rol usan esos mismos roles; para la `api` con `actor` no se consulta `users.list`. La autoría es siempre `actor.id`. Los `project-permissions` de un externo se siguen pidiendo a `core`.
 - Los campos de autoría del payload no existen: el autor siempre es la identidad efectiva.
 
 ### Datos que se consultan a core
 
 | Dato | Consulta | Caché |
 | --- | --- | --- |
-| Roles e `identity_type` del caller | `users.list` con `filter.id` | 60 s por usuario |
+| Roles e `identity_type` del caller (personas por el bus y servicios; no la `api` con `actor`) | `users.list` con `filter.id` | 60 s por usuario |
 | Proyectos visibles para un externo | `project-permissions.list` con `filter.userId` | 60 s por usuario |
 | Existencia de entidades en relaciones | `clients.list`, `projects.list`, `requirements.list`, `tasks.list` con `filter.id` | 5 min |
 
@@ -213,7 +215,7 @@ Si `core` no responde, las operaciones que dependen de esos datos fallan con `up
 
 Como `core` no publica eventos de clientes ni proyectos, una tarea diaria revisa las relaciones de todos los documentos contra `core` y quita las que apuntan a entidades que ya no existen, registrándolo en el historial del documento.
 
-Un usuario sin fila en `users` (por el problema de espejo descrito en la guía de conectores, §3.4) recibe `unknown_caller`.
+Un usuario sin fila en `users` (por el problema de espejo descrito en la guía de conectores, §3.4) recibe `unknown_caller`. Ese problema no alcanza a las personas que entran por la web: la `api` manda sus roles frescos en `actor` (D-11).
 
 ### ACL de carpetas
 
@@ -241,7 +243,7 @@ No existen reglas de denegación: para restringir una subcarpeta se pone `inheri
 
 ### Clientes externos
 
-Un usuario externo ve un documento si se cumplen las tres condiciones: `visibility = public`, el documento tiene una relación con un proyecto (o un requisito o tarea de un proyecto) que aparece en sus `project-permissions`, y la carpeta del documento no tiene la marca `externalBlocked = true`. Esa marca permite cerrar carpetas enteras (por ejemplo `/infra/`) a clientes aunque alguien publique un documento por error. El externo lee solo la versión actual: las anteriores pueden ser de antes de publicarlo.
+Un usuario externo ve un documento si se cumplen las tres condiciones: `visibility = public`, el documento tiene una relación con un proyecto (o un requisito o tarea de un proyecto) que aparece en sus `project-permissions`, y la carpeta del documento no tiene la marca `externalBlocked = true`. Esa marca permite cerrar carpetas enteras (por ejemplo `/infra/`) a clientes aunque alguien publique un documento por error. El externo lee solo la versión actual: las anteriores pueden ser de antes de publicarlo. Tampoco ve el frontmatter (tiene ids internos de requisitos y tareas): ver `documents.get` en la sección 7.
 
 ### Links compartidos
 
@@ -479,6 +481,8 @@ Orden permitido: `updatedAt`, `createdAt`, `title`, `path`. Campos base: `id`, `
   "lock": { "sessionId": "01JC…", "holder": "281234567890123456", "via": "agent", "expiresAt": "…" }
 } }
 ```
+
+Para un `person-external` (por el bus o por la `api` con `actor`), `content` y `contentUrl` traen el documento **sin frontmatter**, y `checksum` y `sizeBytes` de esa respuesta son los de ese cuerpo, no los del archivo guardado (D-11). Si el cuerpo supera 256 KiB, se guarda una copia derivada bajo `renders/` (la purga la borra a las 24 h) y `contentUrl` apunta a ella. `documents.versions.list` hace lo mismo con la única versión que ve un externo. En `documents.list`, `documents.changes` y los eventos, `checksum` identifica la versión guardada (archivo completo): un externo lo usa para detectar cambios, no para verificar el contenido recibido. Los snippets de `documents.search` nunca incluyen frontmatter.
 
 ### `documents.search`
 

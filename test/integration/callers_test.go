@@ -9,6 +9,7 @@ import (
 
 	"github.com/nats-io/nats.go/jetstream"
 
+	"github.com/gravadigital/jiku-docs/internal/coreapi"
 	"github.com/gravadigital/jiku-docs/internal/protocol"
 	"github.com/gravadigital/jiku-docs/internal/registry"
 	tu "github.com/gravadigital/jiku-docs/internal/testutil"
@@ -24,7 +25,8 @@ func TestCallerClasses(t *testing.T) {
 	e.Fail(e.CmdRaw(tu.Connector, "folders.new", map[string]any{"actor": map[string]any{"id": tu.Admin}, "id": tu.ID(), "parentId": f, "name": "x"}), protocol.CodeInvalidFields)
 	// The api with actor writes as the person: author and event actor are the person.
 	id := tu.ID()
-	e.OK(e.Cmd(tu.APIUser, "documents.new", map[string]any{"actor": map[string]any{"id": tu.User}, "id": id, "folderId": f,
+	e.OK(e.Cmd(tu.APIUser, "documents.new", map[string]any{"actor": map[string]any{"id": tu.User, "roles": []string{"user"}, "name": "Usuario",
+		"username": "usuario", "email": "usuario@example.com"}, "id": id, "folderId": f,
 		"fileName": "via-api.md", "content": "hola", "checksum": tu.Sum("hola")}))
 	d := e.OK(e.Q(tu.User, "documents.get", map[string]any{"id": id}))
 	if d["createdBy"] != tu.User {
@@ -35,8 +37,15 @@ func TestCallerClasses(t *testing.T) {
 		t.Fatal(a)
 	}
 	// The api acting for a person without access is refused like the person.
-	e.Fail(e.Cmd(tu.APIUser, "documents."+id+".delete", map[string]any{"actor": map[string]any{"id": tu.External}, "baseVersion": 1}), protocol.CodeCallerNotAuthorized)
-	e.Fail(e.Q(tu.APIUser, "documents.list", map[string]any{"actor": map[string]any{"id": tu.Ghost}}), protocol.CodeUnknownCaller)
+	e.Fail(e.Cmd(tu.APIUser, "documents."+id+".delete", map[string]any{"actor": actor(tu.External, "external-user"), "baseVersion": 1}), protocol.CodeCallerNotAuthorized)
+	// D-11: the class comes from actor.roles. Without a product role there is no access; without
+	// roles the actor is malformed.
+	e.Fail(e.Q(tu.APIUser, "documents.list", map[string]any{"actor": actor(tu.Ghost, "observer")}), protocol.CodeCallerNotAuthorized)
+	e.Fail(e.Q(tu.APIUser, "documents.list", map[string]any{"actor": actor(tu.Ghost)}), protocol.CodeCallerNotAuthorized)
+	e.Fail(e.Q(tu.APIUser, "documents.list", map[string]any{"actor": actor(tu.Admin, "internal-app")}), protocol.CodeCallerNotAuthorized)
+	e.Fail(e.QRaw(tu.APIUser, "documents.list", map[string]any{"actor": map[string]any{"id": tu.Admin}}), protocol.CodeInvalidFields)
+	e.Fail(e.QRaw(tu.APIUser, "documents.list", map[string]any{"actor": map[string]any{"id": tu.Admin, "roles": []string{"admin"}, "via": "human"}}), protocol.CodeInvalidFields)
+	e.Fail(e.QRaw(tu.APIUser, "documents.list", map[string]any{"actor": map[string]any{"id": tu.Admin, "roles": "admin"}}), protocol.CodeInvalidFields)
 	// A connector (internal-app) is a service: reads everything, writes as itself with via service.
 	sid := tu.ID()
 	e.OK(e.Cmd(tu.Connector, "documents.new", map[string]any{"id": sid, "folderId": f, "fileName": "bot.md", "content": "bot", "checksum": tu.Sum("bot"), "via": "agent"}))
@@ -52,6 +61,44 @@ func TestCallerClasses(t *testing.T) {
 	}
 	// A wrong id in the subject.
 	e.Fail(e.CmdRaw(tu.User, "documents.not-an-id.delete", map[string]any{"baseVersion": 1}), protocol.CodeInvalidFields)
+}
+
+// D-11: core refreshes a person's roles in `users` only when that person runs a core command, so
+// a web user who only reads may have a stale row. The api sends the roles of the verified token
+// and jiku-docs uses them: no users.list for the api with actor.
+func TestAPIActorRolesWinOverStaleUsersRow(t *testing.T) {
+	e := tu.NewEnv(t)
+	f := writable(e)
+	fresh := "500000000000000088"
+	e.Core.Users[fresh] = coreapi.User{ID: fresh, Name: "Recién llegada", Username: "nueva", Roles: []string{}, IdentityType: "person"}
+	// By the bus, the stale row decides: no product role.
+	e.Fail(e.Q(fresh, "documents.list", nil), protocol.CodeCallerNotAuthorized)
+	before := e.Core.CallCount("users.list")
+	a := map[string]any{"id": fresh, "roles": []string{"user"}, "name": "Recién llegada"}
+	e.OK(e.Q(tu.APIUser, "documents.list", map[string]any{"actor": a}))
+	id := tu.ID()
+	e.OK(e.Cmd(tu.APIUser, "documents.new", map[string]any{"actor": a, "id": id, "folderId": f, "fileName": "fresca.md", "content": "hola", "checksum": tu.Sum("hola")}))
+	if d := e.OK(e.Q(tu.Admin, "documents.get", map[string]any{"id": id})); d["createdBy"] != fresh {
+		t.Fatalf("author %v", d["createdBy"])
+	}
+	ev := e.WaitEvent("document.created", func(ev tu.Event) bool { return ev.Body["entity"].(map[string]any)["id"] == id })
+	if ev.Body["actor"].(map[string]any)["name"] != "Recién llegada" {
+		t.Fatal(ev.Body["actor"])
+	}
+	if n := e.Core.CallCount("users.list") - before; n != 0 {
+		t.Fatalf("the api with actor consulted users.list %d times", n)
+	}
+	// Role rules of the ACL use actor.roles too: a folder readable only by `admin`.
+	adm := e.Folder("", "solo-admin", map[string]any{"inheritAcl": false})
+	e.ACL(adm, tu.Rule("role", "admin", "manage"))
+	e.Doc(tu.Admin, adm, "a.md", "a")
+	if n := len(e.Q(tu.APIUser, "documents.list", map[string]any{"filter": map[string]any{"folderId": adm}, "actor": a}).Items()); n != 0 {
+		t.Fatalf("user sees %d docs of an admin-only folder", n)
+	}
+	admin := map[string]any{"id": fresh, "roles": []string{"admin"}}
+	if n := len(e.Q(tu.APIUser, "documents.list", map[string]any{"filter": map[string]any{"folderId": adm}, "actor": admin}).Items()); n != 1 {
+		t.Fatalf("admin by actor.roles sees %d docs", n)
+	}
 }
 
 func TestCoreUnavailable(t *testing.T) {

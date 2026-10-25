@@ -23,6 +23,17 @@ info:
     - `documents.get` con `version` devuelve los metadatos de esa versión (`version`, `checksum`,
       `sizeBytes`, `title`, `updatedAt` y `updatedBy` son los de la versión pedida); relaciones,
       temas, lock y adjuntos son siempre los actuales.
+    - `actor` (D-11): `{ id, roles, name?, username?, email? }`, el mismo sobre que la api manda a core.
+      La clase de la persona sale de `actor.roles` (no se consulta `users.list`); los
+      `project-permissions` de un externo se siguen pidiendo a core. Un `actor` sin `roles` es
+      `invalid_fields`.
+    - Frontmatter oculto a externos (D-11): un `person-external` recibe `documents.get` sin
+      frontmatter, tanto en `content` como en `contentUrl`, y en esa respuesta `checksum` y `sizeBytes`
+      son los del cuerpo que recibe. Lo mismo en `documents.versions.list` (que para un externo solo
+      tiene la versión actual). En `documents.list`, `documents.changes` y los eventos, `checksum`
+      identifica la versión guardada (archivo completo): para un externo sirve para detectar cambios,
+      no para verificar el contenido recibido. Los snippets de `documents.search` nunca incluyen
+      frontmatter.
 defaultContentType: application/json
 
 servers:
@@ -143,9 +154,15 @@ components:
     Ulid: { type: string, pattern: '^[0-9A-HJKMNP-TV-Z]{26}$' }
     Actor:
       type: object
+      description: 'Persona en nombre de la cual actúa la `api` (D-11): el mismo `actor` que la api manda a core, armado con el token web ya verificado. Solo se acepta si el caller es la `api`. La clase de la persona sale de `roles` (`admin`/`user` → interna, `external-user` → externa, otro → `caller_not_authorized`); no se consulta `users.list`.'
       additionalProperties: false
-      required: [id]
-      properties: { id: { type: string } }
+      required: [id, roles]
+      properties:
+        id: { type: string, minLength: 1, maxLength: 200, description: '`sub` de Zitadel de la persona' }
+        roles: { type: array, maxItems: 50, items: { type: string }, description: 'Roles de producto del token web verificado.' }
+        name: { type: string, maxLength: 500 }
+        username: { type: string, maxLength: 500 }
+        email: { type: string, maxLength: 500 }
     DateRange:
       type: object
       additionalProperties: false

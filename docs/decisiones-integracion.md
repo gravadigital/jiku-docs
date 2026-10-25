@@ -153,6 +153,8 @@ copian a otro repo.
   consultando a core.
 - Contrato: el esquema `Actor` de los tres contratos de jiku-docs pasa a `{ id (req), roles (req, array de string),
   name?, username?, email? }`, `additionalProperties: false`.
+  En `jiku-docs-events.yaml` el esquema `Actor` es otro: describe al autor de un evento (`{ id, name, via }`), no lo
+  que manda la api, y no cambia; el `actor` de entrada solo existe en comandos y consultas.
 - La api **no** acepta tokens de machine users (decisión del dueño, 2026-10-25): las pruebas HTTP se hacen con
   usuarios humanos vía navegador.
 - Además: un `person-external` recibe el contenido de `documents.get` **sin frontmatter** (contiene ids internos de

@@ -120,7 +120,7 @@ func TestShares(t *testing.T) {
 
 	// Only the api, without actor, resolves.
 	e.Fail(e.Q(tu.Admin, "shares.resolve", map[string]any{"token": token}), protocol.CodeCallerNotAuthorized)
-	e.Fail(e.QRaw(tu.APIUser, "shares.resolve", map[string]any{"token": token, "actor": map[string]any{"id": tu.Admin}}), protocol.CodeCallerNotAuthorized)
+	e.Fail(e.QRaw(tu.APIUser, "shares.resolve", map[string]any{"token": token, "actor": actor(tu.Admin, "admin")}), protocol.CodeCallerNotAuthorized)
 	res := e.OK(e.Q(tu.APIUser, "shares.resolve", map[string]any{"token": token, "client": map[string]any{"ip": "203.0.113.9", "userAgent": "Firefox"}}))
 	html := res["html"].(string)
 	if !strings.Contains(html, `src="/p/docs/`+token+`/attachments/`+att+`"`) || strings.Contains(html, "<script") ||

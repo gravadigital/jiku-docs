@@ -6,6 +6,9 @@ Formato: [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/). Versionado
 
 ### Security
 
+- Un externo (`person-external`) recibe `documents.get` sin frontmatter, en `content` y en `contentUrl`
+  (copia derivada bajo `renders/`): el frontmatter tiene ids internos de requisitos y tareas (D-11). En esa
+  respuesta y en `documents.versions.list`, `checksum` y `sizeBytes` son los del cuerpo que recibe.
 - Un externo ya no lee versiones anteriores de un documento público (`documents.get` con `version`, y
   `documents.versions.list`): podían ser de cuando era `internal` y tener lo que se quitó para publicarlo.
 
@@ -51,7 +54,15 @@ Formato: [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/). Versionado
   - `page.limit` mayor a 200 se recorta en silencio (como core) en vez de ser inválido.
   - Notas: los externos no ven carpetas; `documents.search` devuelve un resultado por documento;
     `documents.get` con `version` devuelve los metadatos de esa versión.
+  - `Actor` (D-11): `{ id, roles, name?, username?, email? }` (`id` y `roles` obligatorios), el mismo sobre
+    que la api manda a core. La clase de la persona y las reglas ACL por rol salen de `actor.roles`; la api
+    con `actor` ya no consulta `users.list` (un usuario web que solo lee tenía roles viejos en el espejo de
+    core). Un `actor` sin `roles` es `invalid_fields`; con roles sin producto, `caller_not_authorized`
+    (antes, un id sin fila en `users` era `unknown_caller`).
+  - Nota: un externo recibe `documents.get` sin frontmatter; `checksum`/`sizeBytes` de esa respuesta son
+    los del cuerpo. En `documents.list`, `documents.changes` y eventos, `checksum` identifica la versión guardada.
 - `jiku-docs-commands.yaml`
+  - `Actor` (D-11): mismo esquema que en consultas; autoría siempre `actor.id`.
   - `link` de adjuntos: `{JIKU_WEB_URL}/docs/attachments/{id}` (D-5).
   - Adjuntos delegados en core (D-3): `attachments_not_configured` ya no figura en las operaciones;
     se agregan `upstream_unavailable` y, en `confirm`, `permission_denied`.

@@ -219,9 +219,19 @@ func (s *Service) translate(err error, method string) error {
 	}
 }
 
+// Actor is the person the api acts for (D-11): the same envelope the api sends to core, built
+// from the already verified web token. Only the api may send it.
+type Actor struct {
+	ID       string
+	Roles    []string
+	Name     string
+	Username string
+	Email    string
+}
+
 // splitActor validates the top level of the payload, extracts `actor` (only the api may send
 // it) and returns the payload without it.
-func (s *Service) splitActor(data []byte, callerID string) (json.RawMessage, *string, error) {
+func (s *Service) splitActor(data []byte, callerID string) (json.RawMessage, *Actor, error) {
 	trimmed := bytes.TrimSpace(data)
 	if len(trimmed) == 0 {
 		return json.RawMessage("{}"), nil, nil
@@ -240,38 +250,45 @@ func (s *Service) splitActor(data []byte, callerID string) (json.RawMessage, *st
 	if callerID != s.Set.APIUserID {
 		return nil, nil, protocol.InvalidField("actor", nil, nil, "Solo la api de Jiku puede enviar actor: la identidad sale del subject")
 	}
-	o := validate.ParseObject(raw, "actor", "id")
-	id, _ := o.String("id", true, validate.MinLen(1), validate.MaxLen(200))
+	if !validate.IsObject(raw) {
+		return nil, nil, protocol.InvalidField("actor", nil, nil, "actor tiene que ser { id, roles, name?, username?, email? }")
+	}
+	o := validate.ParseObject(raw, "actor", "id", "roles", "name", "username", "email")
+	a := &Actor{}
+	a.ID, _ = o.String("id", true, validate.MinLen(1), validate.MaxLen(200))
+	if o.Err() == nil && !o.Has("roles") {
+		o.Fail(protocol.InvalidField("actor.roles", nil, nil, "El campo %q es obligatorio", "actor.roles"))
+	}
+	a.Roles, _ = o.StringList("roles", nil, 50)
+	a.Name, _ = o.String("name", false, validate.MaxLen(500))
+	a.Username, _ = o.String("username", false, validate.MaxLen(500))
+	a.Email, _ = o.String("email", false, validate.MaxLen(500))
 	if err := o.Err(); err != nil {
 		return nil, nil, err
 	}
-	if !validate.IsObject(raw) {
-		return nil, nil, protocol.InvalidField("actor", nil, nil, "actor tiene que ser { id }")
-	}
 	delete(m, "actor")
 	rest, _ := json.Marshal(m)
-	return rest, &id, nil
+	return rest, a, nil
 }
 
 // ResolveCaller classifies the caller (section 4): the api without actor is a service; with
-// actor, the class of that person. Any other caller is classified by its row in core's `users`.
-func (s *Service) ResolveCaller(ctx context.Context, subjectID string, actor *string) (*caller.Caller, error) {
+// actor, the class comes from `actor.roles` (D-11: the roles of the verified web token, fresher
+// than core's `users` mirror) and `users.list` is not consulted. Any other caller is classified
+// by its row in core's `users`.
+func (s *Service) ResolveCaller(ctx context.Context, subjectID string, actor *Actor) (*caller.Caller, error) {
 	if subjectID == s.Set.APIUserID && s.Set.APIUserID != "" {
 		if actor == nil {
 			return &caller.Caller{SubjectID: subjectID, ViaAPI: true, ID: subjectID, Class: caller.Service, Name: "api"}, nil
 		}
-		u, err := s.Core.User(ctx, *actor)
-		if err != nil {
-			return nil, err
-		}
-		if u == nil {
-			return nil, protocol.E(protocol.CodeUnknownCaller)
-		}
-		class, ok := caller.ClassFor(u.Roles, u.IdentityType)
+		class, ok := caller.ClassFor(actor.Roles, "person")
 		if !ok || class == caller.Service {
 			return nil, protocol.Ef(protocol.CodeCallerNotAuthorized, "El actor tiene que ser una persona con un rol de producto")
 		}
-		return &caller.Caller{SubjectID: subjectID, ViaAPI: true, ID: u.ID, Name: u.Name, Class: class, Roles: u.Roles}, nil
+		name := actor.Name
+		if name == "" {
+			name = actor.Username
+		}
+		return &caller.Caller{SubjectID: subjectID, ViaAPI: true, ID: actor.ID, Name: name, Class: class, Roles: actor.Roles}, nil
 	}
 	u, err := s.Core.User(ctx, subjectID)
 	if err != nil {
