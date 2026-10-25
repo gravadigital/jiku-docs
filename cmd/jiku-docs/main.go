@@ -101,7 +101,7 @@ const usage = `jiku-docs — módulo de documentación de Jiku
   jiku-docs reindex             regenera el índice de búsqueda completo
   jiku-docs module deregister   borra la clave docs de JIKU_MODULES (desinstalar)
   jiku-docs import hedgedoc     importa notas de HedgeDoc (--help para las opciones)
-  jiku-docs storage init        crea el bucket de contenido con versionado (idempotente)
+  jiku-docs storage init        crea el bucket de contenido con versionado y ciclo de vida (idempotente)
   jiku-docs healthcheck          consulta /readyz del proceso local (para el HEALTHCHECK de Docker)
   jiku-docs version
 
@@ -372,19 +372,30 @@ func healthcheck(cfg config.Config) error {
 	return nil
 }
 
-// storageInit creates the content bucket idempotently, with versioning and the lifecycle rule of
-// uploads/. The local compose runs it as an init container against the MinIO of jiku.
+// storageInit creates the content bucket idempotently, with versioning and the lifecycle rules.
+// The local compose runs it as an init container against the MinIO of jiku.
 func storageInit(ctx context.Context, cfg config.Config, log *slog.Logger) error {
 	bs, err := openBlob(cfg)
 	if err != nil {
 		return err
 	}
-	if err := bs.EnsureBucket(ctx, cfg.S3Region, true); err != nil {
+	return initStorage(ctx, bs, cfg.S3Region, cfg.S3Bucket, log)
+}
+
+// initStorage is what `storage init` does: bucket with versioning, then the lifecycle rules
+// (uploads/ after one day; non-current versions after 7 days, the safety net of the history
+// compaction), read back to check that the provider kept them.
+func initStorage(ctx context.Context, bs *blob.S3, region, bucket string, log *slog.Logger) error {
+	if err := bs.EnsureBucket(ctx, region, true); err != nil {
 		return err
 	}
-	if err := bs.EnsureUploadsLifecycle(ctx); err != nil {
-		log.Warn("lifecycle rule not set (the janitor purges uploads anyway)", "err", err.Error())
+	if err := bs.EnsureLifecycle(ctx); err != nil {
+		log.Warn("lifecycle rules not set: the janitor still purges uploads, but objects deleted by the history "+
+			"compaction stay in the bucket as non-current versions until they are expired by hand", "err", err.Error())
+	} else if err := bs.CheckLifecycle(ctx); err != nil {
+		log.Warn("lifecycle rules not confirmed by the provider", "err", err.Error())
 	}
-	log.Info("content bucket ready", "bucket", cfg.S3Bucket, "versioning", true)
+	log.Info("content bucket ready", "bucket", bucket, "versioning", true,
+		"noncurrentVersionExpirationDays", blob.NoncurrentVersionTTL)
 	return nil
 }

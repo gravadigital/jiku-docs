@@ -135,7 +135,7 @@ func NewEnv(t *testing.T, opts ...Options) *Env {
 	if err := e.Blob.EnsureBucket(ctx, "us-east-1", true); err != nil {
 		t.Fatal(err)
 	}
-	if err := e.Blob.EnsureUploadsLifecycle(ctx); err != nil { // what `jiku-docs storage init` does
+	if err := e.Blob.EnsureLifecycle(ctx); err != nil { // what `jiku-docs storage init` does
 		t.Fatal(err)
 	}
 	e.CoreBlob, err = blob.New(blob.Config{Endpoint: c.MinIOEndpoint, Region: "us-east-1", Bucket: "core-" + randHex(6),
