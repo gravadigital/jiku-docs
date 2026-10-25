@@ -294,9 +294,16 @@ async function opusSuite(browser) {
     await login(p2, WEB, 'EXTERNAL', creds).catch(() => {});
     await p2.waitForTimeout(1500);
     const u = p2.url();
+    const att = await c2.request.get(`${WEB}/docs/attachments/${D.arqAttachment}`, { maxRedirects: 0 });
+    const doc = await c2.request.get(`${WEB}/docs/${D.arq}`, { maxRedirects: 0 });
+    const anon = await browser.newContext();
+    const anonAtt = await anon.request.get(`${WEB}/docs/attachments/${D.arqAttachment}`, { maxRedirects: 0 });
+    await anon.close();
     await c2.close();
     assert(u.includes('/unauthorized'), `terminó en ${u}`);
-    return u;
+    assert(att.status() === 403, `adjunto por la web con sesión de externo: ${att.status()}`);
+    assert(anonAtt.status() >= 300 && anonAtt.status() < 400, `adjunto sin sesión: ${anonAtt.status()}`);
+    return `${u}; /docs/{id} → ${doc.status()} ${doc.headers().location || ''}; adjunto con sesión externa → 403; sin sesión → ${anonAtt.status()} ${anonAtt.headers().location || ''}`;
   });
 
   await ctx.close();
@@ -646,9 +653,11 @@ async function webSuite(browser) {
     await step('W12', 'web: módulo caído → aviso y acciones deshabilitadas; vuelve', async () => {
       docker('stop', DOCS_CONTAINER);
       try {
-        const ms = await waitModule(ctx, WEB.replace(':3000', ':3100'), '/api/modules', 'unavailable').catch(() => null);
+        // La web pide /modules con el Bearer de la sesión: se espera el aviso en la UI (poll de 60 s).
+        const t0 = Date.now();
         await page.goto(`${WEB}/docs`);
-        await page.getByText(/no está disponible/).first().waitFor({ timeout: 90000 });
+        await page.getByText(/no está disponible/).first().waitFor({ timeout: 150000 });
+        const ms = Date.now() - t0;
         const disabled = await page.getByPlaceholder('Buscar en la documentación').isDisabled();
         await shot(page, 'web-modulo-caido-docs');
         await page.goto(`${WEB}/projects/${D.project}`);
