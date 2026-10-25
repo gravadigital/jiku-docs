@@ -321,6 +321,12 @@ func (s *Service) UpdateDocument(ctx context.Context, c *Call, id string, base i
 	return out, err
 }
 
+// UpdateDocumentContent is documents.{id}.update with inline content and no edit session, for
+// in-process callers (the importer). base is the version the content was built on.
+func (s *Service) UpdateDocumentContent(ctx context.Context, c *Call, id string, base int, content []byte, via, message string) (map[string]any, error) {
+	return s.UpdateDocument(ctx, c, id, base, &contentInput{raw: content}, "", via, message)
+}
+
 func versionChanges(before, after *docState, message string) map[string]any {
 	changes := map[string]any{"version": fromTo(before.doc.Version, after.doc.Version)}
 	if before.doc.Title != after.doc.Title {

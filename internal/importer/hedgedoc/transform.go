@@ -338,3 +338,139 @@ func readAll(r io.Reader, max int64) ([]byte, error) {
 	}
 	return b, nil
 }
+
+// MergeFrontmatter adds relations and topics to the frontmatter of a document, keeping what it
+// already has: the `jiku` lists and the topics are merged without duplicates, the topics
+// normalised as the service does (kebab-case without accents), and every other key stays as it
+// was. A document without a frontmatter gets one. With nothing to add the content is returned
+// as is.
+func MergeFrontmatter(content string, rel markdown.Relations, topics []string) (string, error) {
+	extraTopics, err := NormalizeTopics(topics)
+	if err != nil {
+		return "", err
+	}
+	if rel.Empty() && len(extraTopics) == 0 {
+		return content, nil
+	}
+	fm, _, ferr := markdown.Parse(content)
+	if ferr != nil {
+		return "", ferr
+	}
+	yamlText, body, present, _ := markdown.Split(content)
+	root := &yaml.Node{Kind: yaml.MappingNode}
+	if present && strings.TrimSpace(yamlText) != "" {
+		var doc yaml.Node
+		if err := yaml.Unmarshal([]byte(yamlText), &doc); err != nil {
+			return "", err
+		}
+		if len(doc.Content) > 0 {
+			root = doc.Content[0]
+		}
+	}
+	if !present {
+		body = "\n" + content
+	}
+	merged := markdown.Relations{}
+	for _, k := range markdown.RelationKinds {
+		merged.Set(k.Key, append(append([]int64{}, fm.Relations.Get(k.Key)...), rel.Get(k.Key)...))
+	}
+	merged = merged.Normalize()
+	allTopics, _ := NormalizeTopics(append(append([]string{}, fm.Topics...), extraTopics...))
+
+	if len(allTopics) > 0 {
+		seq := &yaml.Node{Kind: yaml.SequenceNode, Style: yaml.FlowStyle}
+		for _, t := range allTopics {
+			seq.Content = append(seq.Content, &yaml.Node{Kind: yaml.ScalarNode, Value: t})
+		}
+		setKey(root, "topics", seq, "title")
+	}
+	if !merged.Empty() {
+		block := &yaml.Node{Kind: yaml.MappingNode}
+		for _, k := range markdown.RelationKinds {
+			ids := merged.Get(k.Key)
+			if len(ids) == 0 {
+				continue
+			}
+			seq := &yaml.Node{Kind: yaml.SequenceNode, Style: yaml.FlowStyle}
+			for _, id := range ids {
+				seq.Content = append(seq.Content, &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!int", Value: fmt.Sprint(id)})
+			}
+			block.Content = append(block.Content, &yaml.Node{Kind: yaml.ScalarNode, Value: k.Key}, seq)
+		}
+		setKey(root, "jiku", block, "topics")
+	}
+	var buf bytes.Buffer
+	enc := yaml.NewEncoder(&buf)
+	enc.SetIndent(2)
+	if err := enc.Encode(root); err != nil {
+		return "", err
+	}
+	_ = enc.Close()
+	return "---\n" + buf.String() + "---\n" + body, nil
+}
+
+// setKey replaces the value of key in a mapping node or, when absent, inserts it right after the
+// key `after` (or first, when that is absent too).
+func setKey(m *yaml.Node, key string, val *yaml.Node, after string) {
+	for i := 0; i+1 < len(m.Content); i += 2 {
+		if m.Content[i].Value == key {
+			m.Content[i+1] = val
+			return
+		}
+	}
+	pos := 0
+	for i := 0; i+1 < len(m.Content); i += 2 {
+		if m.Content[i].Value == after {
+			pos = i + 2
+		}
+	}
+	pair := []*yaml.Node{{Kind: yaml.ScalarNode, Value: key}, val}
+	m.Content = append(m.Content[:pos], append(pair, m.Content[pos:]...)...)
+}
+
+// NormalizeTopics normalises topics as the service does, sorted and without duplicates. A topic
+// that is empty once normalised is an error.
+func NormalizeTopics(topics []string) ([]string, error) {
+	seen := map[string]bool{}
+	out := []string{}
+	for _, t := range topics {
+		s := markdown.NormalizeTopic(t)
+		if s == "" {
+			return nil, fmt.Errorf("el tema %q queda vacío al normalizarlo", t)
+		}
+		if !seen[s] {
+			seen[s] = true
+			out = append(out, s)
+		}
+	}
+	sort.Strings(out)
+	return out, nil
+}
+
+// WithoutRelation returns rel without one id of an entity type (client, project, requirement, task).
+func WithoutRelation(rel markdown.Relations, entityType string, id int64) (markdown.Relations, bool) {
+	out := markdown.Relations{}
+	removed := false
+	for _, k := range markdown.RelationKinds {
+		var kept []int64
+		for _, v := range rel.Get(k.Key) {
+			if k.EntityType == entityType && v == id {
+				removed = true
+				continue
+			}
+			kept = append(kept, v)
+		}
+		out.Set(k.Key, kept)
+	}
+	return out, removed
+}
+
+// ReimportMessage is the message of a version written by a later run of the import.
+func ReimportMessage(n Note) string {
+	return fmt.Sprintf("Reimportado de HedgeDoc (nota %s): contenido, relaciones y temas de la planilla actualizados.", n.ID)
+}
+
+// IsImportMessage reports whether a version message was written by the import.
+func IsImportMessage(msg string) bool {
+	return strings.HasPrefix(msg, "Importado de HedgeDoc") || strings.HasPrefix(msg, "Reimportado de HedgeDoc")
+}

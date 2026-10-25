@@ -317,7 +317,17 @@ func importHedgeDoc(ctx context.Context, cfg config.Config, log *slog.Logger, ar
 	if err != nil {
 		return err
 	}
-	if opts.DryRun || opts.ExportMapping != "" {
+	if opts.ExportMapping != "" || (opts.DryRun && !opts.CheckRelations) {
+		return hedgedoc.Run(ctx, opts, nil, log)
+	}
+	if opts.DryRun {
+		// --check-relations: only the bus, to ask core (read only); no base, no bucket.
+		client, core, err := connectReady(ctx, cfg, log)
+		if err != nil {
+			return err
+		}
+		defer client.Close()
+		opts.Relations = core
 		return hedgedoc.Run(ctx, opts, nil, log)
 	}
 	if err := cfg.ValidateServe(); err != nil {

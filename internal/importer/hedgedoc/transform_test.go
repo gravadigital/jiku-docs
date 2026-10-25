@@ -1,6 +1,7 @@
 package hedgedoc
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -108,5 +109,87 @@ func TestFileNames(t *testing.T) {
 	}
 	if !strings.Contains(Message(notes()[0]), "Autor original: Ana") {
 		t.Error("message")
+	}
+}
+
+func TestMergeFrontmatterOnGeneratedContent(t *testing.T) {
+	n := notes()[0] // tags: infra, Despliegue
+	content, _ := BuildContent(n, n.Content)
+	rel := markdown.Relations{Projects: []int64{31, 12, 12}, Clients: []int64{4}}
+	out, err := MergeFrontmatter(content, rel, []string{"Reuniones", "infra", "Técnico"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	fm, body, ferr := markdown.Parse(out)
+	if ferr != nil {
+		t.Fatalf("%v\n%s", ferr, out)
+	}
+	if got := strings.Join(fm.Topics, ","); got != "despliegue,infra,reuniones,tecnico" {
+		t.Errorf("topics = %s", got)
+	}
+	if fmt.Sprint(fm.Relations.Projects) != "[12 31]" || fmt.Sprint(fm.Relations.Clients) != "[4]" ||
+		len(fm.Relations.Requirements)+len(fm.Relations.Tasks) != 0 {
+		t.Errorf("relations = %+v", fm.Relations)
+	}
+	if fm.Title != "Guía" || !strings.Contains(out, "robots: noindex") || !strings.Contains(out, "id: "+n.ID) {
+		t.Errorf("the rest of the frontmatter must stay:\n%s", out)
+	}
+	if !strings.Contains(out, "jiku:\n  clients: [4]\n  projects: [12, 31]\n") || strings.Contains(out, "requirements") {
+		t.Errorf("jiku block:\n%s", out)
+	}
+	if strings.Index(out, "topics:") > strings.Index(out, "jiku:") || strings.Index(out, "jiku:") > strings.Index(out, "hedgedoc:") {
+		t.Errorf("order title, topics, jiku, hedgedoc:\n%s", out)
+	}
+	if !strings.HasPrefix(strings.TrimLeft(body, "\n"), "# Guía") {
+		t.Errorf("body %q", body)
+	}
+	// Idempotent: merging the same again changes nothing.
+	again, err := MergeFrontmatter(out, rel, []string{"reuniones"})
+	if err != nil || again != out {
+		t.Errorf("second merge changed the content:\n%s", again)
+	}
+}
+
+func TestMergeFrontmatterKeepsExistingRelations(t *testing.T) {
+	in := "---\ntitle: X\ntopics: [Infra]\njiku:\n  projects: [31]\n  tasks: [900]\nextra: 1\n---\n\ncuerpo\n"
+	out, err := MergeFrontmatter(in, markdown.Relations{Projects: []int64{12, 31}}, []string{"infra", "accesos"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	fm, body, ferr := markdown.Parse(out)
+	if ferr != nil {
+		t.Fatal(ferr)
+	}
+	if fmt.Sprint(fm.Relations.Projects) != "[12 31]" || fmt.Sprint(fm.Relations.Tasks) != "[900]" {
+		t.Errorf("%+v", fm.Relations)
+	}
+	if strings.Join(fm.Topics, ",") != "accesos,infra" || !strings.Contains(out, "extra: 1") || body != "\ncuerpo\n" {
+		t.Errorf("%s", out)
+	}
+}
+
+func TestMergeFrontmatterWithoutFrontmatterAndNoop(t *testing.T) {
+	out, err := MergeFrontmatter("# Hola\n", markdown.Relations{Clients: []int64{4}}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out != "---\njiku:\n  clients: [4]\n---\n\n# Hola\n" {
+		t.Errorf("%q", out)
+	}
+	if out, _ := MergeFrontmatter("# Hola\n", markdown.Relations{}, nil); out != "# Hola\n" {
+		t.Errorf("nothing to add must keep the content: %q", out)
+	}
+	if _, err := MergeFrontmatter("# Hola\n", markdown.Relations{}, []string{"--"}); err == nil {
+		t.Error("a topic that normalises to nothing is an error")
+	}
+}
+
+func TestWithoutRelation(t *testing.T) {
+	rel, ok := WithoutRelation(markdown.Relations{Projects: []int64{12, 99}, Clients: []int64{99}}, "project", 99)
+	if !ok || fmt.Sprint(rel.Projects) != "[12]" || fmt.Sprint(rel.Clients) != "[99]" {
+		t.Errorf("%v %+v", ok, rel)
+	}
+	if _, ok := WithoutRelation(rel, "task", 1); ok {
+		t.Error("absent relation")
 	}
 }

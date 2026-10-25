@@ -129,3 +129,105 @@ func TestHedgeDocImport(t *testing.T) {
 type roundTripFunc func(*http.Request) (*http.Response, error)
 
 func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
+
+// Relations and topics from the sheet: written in version 1, an invalid relation is discarded
+// and reported without failing the note, and a rerun with new relations updates what only the
+// import wrote.
+func TestHedgeDocImportRelations(t *testing.T) {
+	e := tu.NewEnv(t)
+	t0 := time.Date(2024, 1, 10, 9, 0, 0, 0, time.UTC)
+	notes := memSource{
+		{ID: "bbbbbbbb-0000-0000-0000-000000000001", ShortID: "rel01", Title: "Reunión kickoff", Owner: "Ana",
+			Content: "---\ntags: Reuniones\n---\n# Kickoff\n", CreatedAt: t0, UpdatedAt: t0},
+		{ID: "bbbbbbbb-0000-0000-0000-000000000002", ShortID: "rel02", Title: "Arquitectura", Owner: "Ana",
+			Content: "# Arquitectura\n", CreatedAt: t0.Add(time.Hour), UpdatedAt: t0.Add(time.Hour)},
+		{ID: "bbbbbbbb-0000-0000-0000-000000000003", ShortID: "rel03", Title: "Editada", Owner: "Ana",
+			Content: "# Editada\n", CreatedAt: t0.Add(2 * time.Hour), UpdatedAt: t0.Add(2 * time.Hour)},
+	}
+	dir := t.TempDir()
+	mapping := filepath.Join(dir, "mapping.csv")
+	report := filepath.Join(dir, "report.csv")
+	write := func(sheet string) {
+		if err := os.WriteFile(mapping, []byte(sheet), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("note,folder,projects,clients,requirements,topics\n" +
+		"rel01,/clientes/acme/web/reuniones/,12;99,4,812,reuniones;Técnico\n" +
+		"rel02,/clientes/acme/web/tecnico/,,,,\n" +
+		"rel03,/clientes/acme/web/tecnico/,,,,\n")
+	opts := hedgedoc.Options{Source: notes, Mapping: mapping, Report: report, HedgeDocURL: "https://hd.test", MaxAssetBytes: 1 << 20}
+	ctx := context.Background()
+	svc := e.Inst.Svc
+
+	// Dry run with --check-relations (core of the service): reports the discard, writes nothing.
+	dry := opts
+	dry.DryRun, dry.CheckRelations = true, true
+	if err := hedgedoc.Run(ctx, dry, svc, logging.Discard()); err != nil {
+		t.Fatal(err)
+	}
+	if rep, _ := os.ReadFile(report); !strings.Contains(string(rep), "project 99: invalid_relation") {
+		t.Fatalf("dry run report:\n%s", rep)
+	}
+	if n := len(e.Q(tu.Admin, "documents.list", nil).Items()); n != 0 {
+		t.Fatalf("dry run created %d documents", n)
+	}
+
+	if err := hedgedoc.Run(ctx, opts, svc, logging.Discard()); err != nil {
+		t.Fatal(err)
+	}
+	byProject := e.Q(tu.Admin, "documents.list", map[string]any{"filter": map[string]any{"projectId": 12}, "fields": []string{"path"}}).Items()
+	if len(byProject) != 1 || byProject[0]["path"] != "/clientes/acme/web/reuniones/Reunión kickoff.md" {
+		t.Fatalf("documents of project 12: %v", byProject)
+	}
+	id := byProject[0]["id"].(string)
+	g := e.OK(e.Q(tu.Admin, "documents.get", map[string]any{"id": id, "include": []string{"content", "relations", "topics"}}))
+	content := g["content"].(string)
+	if !strings.Contains(content, "jiku:\n  clients: [4]\n  projects: [12]\n  requirements: [812]\n") || strings.Contains(content, "99") {
+		t.Fatalf("version 1 without project 99:\n%s", content)
+	}
+	if strings.Join(toStrings(g["topics"]), ",") != "reuniones,tecnico" || g["version"].(float64) != 1 {
+		t.Fatalf("topics %v version %v", g["topics"], g["version"])
+	}
+	rep, _ := os.ReadFile(report)
+	if !strings.Contains(string(rep), "project 99: invalid_relation") || strings.Contains(string(rep), ",failed,") {
+		t.Fatalf("report:\n%s", rep)
+	}
+
+	// A person edits rel03 in jiku-docs.
+	edited := e.Q(tu.Admin, "documents.list", map[string]any{"filter": map[string]any{"path": "/clientes/acme/web/tecnico/Editada.md"}}).Items()[0]["id"].(string)
+	body := "# Editada a mano\n"
+	e.OK(e.Cmd(tu.Admin, "documents."+edited+".update", map[string]any{"baseVersion": 1, "content": body, "checksum": tu.Sum(body)}))
+
+	// Rerun with new relations: rel02 (only the import wrote it) gets version 2; rel03 is not
+	// overwritten; rel01 stays unchanged.
+	write("note,folder,projects,clients,requirements,topics\n" +
+		"rel01,/clientes/acme/web/reuniones/,12;99,4,812,reuniones;Técnico\n" +
+		"rel02,/clientes/acme/web/tecnico/,31,,,tecnico\n" +
+		"rel03,/clientes/acme/web/tecnico/,31,,,\n")
+	if err := hedgedoc.Run(ctx, opts, svc, logging.Discard()); err != nil {
+		t.Fatal(err)
+	}
+	byProject = e.Q(tu.Admin, "documents.list", map[string]any{"filter": map[string]any{"projectId": 31}, "fields": []string{"path", "version"}}).Items()
+	if len(byProject) != 1 || byProject[0]["path"] != "/clientes/acme/web/tecnico/Arquitectura.md" || byProject[0]["version"].(float64) != 2 {
+		t.Fatalf("documents of project 31: %v", byProject)
+	}
+	v := e.Q(tu.Admin, "documents.versions.list", map[string]any{"filter": map[string]any{"documentId": byProject[0]["id"]}}).Items()
+	if len(v) != 2 || !strings.Contains(v[0]["message"].(string)+v[1]["message"].(string), "Reimportado de HedgeDoc") {
+		t.Fatalf("versions %v", v)
+	}
+	rep, _ = os.ReadFile(report)
+	lines := map[string]string{}
+	for _, l := range strings.Split(string(rep), "\n") {
+		if len(l) > 40 {
+			lines[l[:36]] = l
+		}
+	}
+	if !strings.Contains(lines[notes[0].ID], ",unchanged,") || !strings.Contains(lines[notes[1].ID], ",updated,") ||
+		!strings.Contains(lines[notes[2].ID], ",exists,editada en jiku-docs") {
+		t.Fatalf("rerun report:\n%s", rep)
+	}
+	if g := e.OK(e.Q(tu.Admin, "documents.get", map[string]any{"id": edited, "include": []string{"content"}})); g["content"] != body {
+		t.Fatalf("a document edited in jiku-docs must not be overwritten: %v", g["content"])
+	}
+}
