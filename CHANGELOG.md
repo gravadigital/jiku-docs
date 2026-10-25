@@ -4,6 +4,11 @@ Formato: [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/). Versionado
 
 ## [Unreleased]
 
+### Security
+
+- Un externo ya no lee versiones anteriores de un documento público (`documents.get` con `version`, y
+  `documents.versions.list`): podían ser de cuando era `internal` y tener lo que se quitó para publicarlo.
+
 ### Added
 
 - Servicio `jiku-docs` en Go 1.25: servicios NATS micro `jiku-docs-commands` (18 comandos) y

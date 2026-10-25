@@ -157,6 +157,35 @@ func TestExternalVisibility(t *testing.T) {
 	}
 }
 
+// An external person reads a public document as it is now, never the versions it had while
+// it was internal: those can hold exactly what was removed before publishing it.
+func TestExternalSeesOnlyTheCurrentVersion(t *testing.T) {
+	e := tu.NewEnv(t)
+	clientes := e.Folder("", "clientes", nil)
+	id := e.Doc(tu.Admin, clientes, "acta.md", fm("12", "internal", "")+"# Acta\nnota interna: margen del 40%\n")
+	v2 := fm("12", "public", "") + "# Acta\nresumen para el cliente\n"
+	e.OK(e.Cmd(tu.Admin, "documents."+id+".update", map[string]any{"baseVersion": 1, "content": v2, "checksum": tu.Sum(v2)}))
+
+	cur := e.OK(e.Q(tu.External, "documents.get", map[string]any{"id": id, "include": []string{"content"}}))
+	if cur["version"] != float64(2) || cur["content"] != v2 {
+		t.Fatalf("current version: %v", cur)
+	}
+	e.OK(e.Q(tu.External, "documents.get", map[string]any{"id": id, "version": 2}))
+	e.Fail(e.Q(tu.External, "documents.get", map[string]any{"id": id, "version": 1, "include": []string{"content"}}),
+		protocol.CodeDocumentNotFound)
+	hist := e.Q(tu.External, "documents.versions.list", map[string]any{"filter": map[string]any{"documentId": id}}).Items()
+	if len(hist) != 1 || hist[0]["version"] != float64(2) {
+		t.Fatalf("external history: %v", hist)
+	}
+	// The api acting for the external person gets the same; internal people keep the whole history.
+	e.Fail(e.Q(tu.APIUser, "documents.get", map[string]any{"id": id, "version": 1, "actor": map[string]any{"id": tu.External}}),
+		protocol.CodeDocumentNotFound)
+	if n := len(e.Q(tu.Admin, "documents.versions.list", map[string]any{"filter": map[string]any{"documentId": id}}).Items()); n != 2 {
+		t.Errorf("internal history has %d versions", n)
+	}
+	e.OK(e.Q(tu.Admin, "documents.get", map[string]any{"id": id, "version": 1}))
+}
+
 func TestSearch(t *testing.T) {
 	e := tu.NewEnv(t)
 	f := e.Folder("", "docs", nil)

@@ -60,12 +60,14 @@ channels:
       reply: { payload: { $ref: '#/components/schemas/ReplyDocumentPage' } }
   documents.get:
     address: '{instance}.{userId}.jiku-docs-queries.v1.documents.get'
+    description: Un externo solo lee la versión actual; otra `version` responde document_not_found (puede ser de antes de publicarlo).
     parameters: *p
     messages:
       request: { payload: { $ref: '#/components/schemas/DocumentsGetQuery' } }
       reply: { payload: { $ref: '#/components/schemas/ReplyDocument' } }
   documents.versions.list:
     address: '{instance}.{userId}.jiku-docs-queries.v1.documents.versions.list'
+    description: A un externo solo se le lista la versión actual.
     parameters: *p
     messages:
       request: { payload: { $ref: '#/components/schemas/VersionsListQuery' } }

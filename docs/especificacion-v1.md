@@ -241,7 +241,7 @@ No existen reglas de denegación: para restringir una subcarpeta se pone `inheri
 
 ### Clientes externos
 
-Un usuario externo ve un documento si se cumplen las tres condiciones: `visibility = public`, el documento tiene una relación con un proyecto (o un requisito o tarea de un proyecto) que aparece en sus `project-permissions`, y la carpeta del documento no tiene la marca `externalBlocked = true`. Esa marca permite cerrar carpetas enteras (por ejemplo `/infra/`) a clientes aunque alguien publique un documento por error.
+Un usuario externo ve un documento si se cumplen las tres condiciones: `visibility = public`, el documento tiene una relación con un proyecto (o un requisito o tarea de un proyecto) que aparece en sus `project-permissions`, y la carpeta del documento no tiene la marca `externalBlocked = true`. Esa marca permite cerrar carpetas enteras (por ejemplo `/infra/`) a clientes aunque alguien publique un documento por error. El externo lee solo la versión actual: las anteriores pueden ser de antes de publicarlo.
 
 ### Links compartidos
 

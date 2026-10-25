@@ -303,6 +303,11 @@ func (s *Service) documentsGet(ctx context.Context, c *Call) (any, error) {
 	}
 	key := ""
 	full := d.view()
+	if hasVersion && int(version) != d.Version && v.c.IsExternal() {
+		// An external person sees the document because it is public NOW. Earlier versions may be
+		// from before it was published, and hold what was removed to publish it.
+		return nil, protocol.Ef(protocol.CodeDocumentNotFound, "La versión %d no existe", version).With("version", version)
+	}
 	if hasVersion && int(version) != d.Version {
 		var ver struct {
 			key, checksum, title, author string
@@ -398,6 +403,10 @@ func (s *Service) versionsList(ctx context.Context, c *Call) (any, error) {
 	}
 	var a args
 	where := []string{"v.document_id = " + a.add(docCond.Strings[0])}
+	if v.c.IsExternal() {
+		// Only the current version, the one that is public (see documentsGet).
+		where = append(where, "v.version = (SELECT cur.current_version FROM documents cur WHERE cur.id = v.document_id)")
+	}
 	if cnd, ok := q.Filter.Get("author"); ok {
 		where = append(where, "v.author = ANY("+a.add(cnd.Strings)+")")
 	}
