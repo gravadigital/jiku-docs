@@ -67,6 +67,8 @@ E2E_JIKU_DB=${E2E_JIKU_DB:-jiku-local-database}
 E2E_DOCS_DB=${E2E_DOCS_DB:-jiku-docs-local-database}
 E2E_DOCS_CONTAINER=${E2E_DOCS_CONTAINER:-jiku-docs-local}
 E2E_DISRUPTIVE=${E2E_DISRUPTIVE:-0}
+E2E_STORAGE_CONTAINER=${E2E_STORAGE_CONTAINER:-jiku-local-storage}
+E2E_DOCS_BUCKET=${E2E_DOCS_BUCKET:-jiku-docs-content}
 
 if [[ -z "${JIKU_ISSUER:-}" || -z "${JIKU_PROJECT_ID:-}" ]]; then
   [[ -f "$JIKU_ENV_FILE" ]] || { echo "falta $JIKU_ENV_FILE (o JIKU_ISSUER y JIKU_PROJECT_ID)" >&2; exit 2; }
@@ -555,11 +557,22 @@ if docsdb "SELECT 1" >/dev/null 2>&1; then
   DRY=$(docker exec "$E2E_DOCS_CONTAINER" jiku-docs history compact --document "$HDOC" --dry-run 2>/dev/null)
   grep -q 'versionsPruned=4 ' <<<"$DRY" && [[ $(docsdb "SELECT count(*) FROM document_versions WHERE document_id = '$HDOC'") == 8 ]] \
     && ok "history compact --dry-run informa 4 y no borra" || bad "dry-run" "$DRY"
+  HKEY3=$(docsdb "SELECT storage_key FROM document_versions WHERE document_id = '$HDOC' AND version = 3")
   RUN=$(docker exec "$E2E_DOCS_CONTAINER" jiku-docs history compact --document "$HDOC" 2>/dev/null)
   [[ $(docsdb "SELECT string_agg(version::text, ',' ORDER BY version) FROM document_versions WHERE document_id = '$HDOC'") == "1,4,7,8" ]] \
     && ok "compactación: quedan la creación, la del mensaje, la última del bloque y la actual" || bad "compactación" "$RUN"
-  [[ $(docsdb "SELECT count(*) FROM pruned_objects WHERE document_id = '$HDOC'") == 0 ]] \
-    && ok "objetos borrados de S3 (pruned_objects vacío)" || bad "pruned_objects con filas"
+  [[ $(docsdb "SELECT count(*) FROM pruned_objects WHERE document_id = '$HDOC'") == 0 ]] && grep -q 'objectsTrashed=4 ' <<<"$RUN" \
+    && ok "objetos movidos a la papelera (pruned_objects vacío, objectsTrashed=4)" || bad "pruned_objects con filas" "$RUN"
+  # Los cuatro objetos compactados quedaron en papelera/ y nada de ellos bajo docs/ (con el mc del
+  # MinIO de Jiku y sus credenciales de root, dentro del contenedor).
+  if docker exec "$E2E_STORAGE_CONTAINER" sh -c 'mc alias set e2e http://127.0.0.1:9000 "$MINIO_ROOT_USER" "$MINIO_ROOT_PASSWORD"' >/dev/null 2>&1; then
+    s3count() { docker exec "$E2E_STORAGE_CONTAINER" mc ls --recursive "e2e/$E2E_DOCS_BUCKET/$1" 2>/dev/null | grep -c '\.md$'; }
+    [[ $(s3count "papelera/docs/$HDOC/") == 4 && $(s3count "docs/$HDOC/") == 4 ]] \
+      && ok "papelera/: los 4 objetos compactados están en papelera/docs/<id>/ y bajo docs/<id>/ quedan solo los 4 conservados" \
+      || bad "papelera/" "papelera=$(s3count "papelera/docs/$HDOC/") docs=$(s3count "docs/$HDOC/")"
+  else
+    skip "papelera/ por S3 (sin mc en $E2E_STORAGE_CONTAINER)"
+  fi
   as user docs query documents.get --id "$HDOC" -o json
   [[ $(json 'd["prunedVersionsCount"]' <<<"$OUT") == 4 ]] && ok "documents.get: prunedVersionsCount" || bad "prunedVersionsCount" "$OUT"
   as user docs get "$HDOC" --version 3
@@ -573,8 +586,17 @@ if docsdb "SELECT 1" >/dev/null 2>&1; then
   grep -q '"protected"' <<<"$OUT" && grep -q '"kind"' <<<"$OUT" && ok "history muestra kind y protected" || bad "history sin kind/protected" "$OUT"
   RUN2=$(docker exec "$E2E_DOCS_CONTAINER" jiku-docs history compact --document "$HDOC" 2>/dev/null)
   grep -q 'versionsPruned=0 ' <<<"$RUN2" && ok "segunda corrida: no borra nada" || bad "segunda corrida" "$RUN2"
+  # Recuperar la versión 3 desde la papelera: objeto y fila del historial (queda protegida).
+  REST=$(docker exec "$E2E_DOCS_CONTAINER" jiku-docs storage restore-from-trash --key "$HKEY3" --version-row 2>/dev/null)
+  grep -q '"objectRestored":true' <<<"$REST" && grep -q '"rowRestored":true' <<<"$REST" \
+    && [[ $(docsdb "SELECT string_agg(version::text || ':' || protected, ',' ORDER BY version) FROM document_versions WHERE document_id = '$HDOC'") == \
+      "1:true,3:true,4:true,7:false,8:false" ]] \
+    && ok "storage restore-from-trash --version-row: vuelven el objeto y la versión 3, protegida" || bad "restore-from-trash" "$REST"
+  as user docs get "$HDOC" --version 3
+  expect "la versión recuperada se lee de nuevo" 0
   if M=$(curl -fsS "${E2E_DOCS_METRICS:-http://127.0.0.1:8090/metrics}" 2>/dev/null); then
     grep -q '^docs_history_pruned_objects_pending' <<<"$M" && ok "métricas docs_history_*" || bad "faltan métricas docs_history_*"
+    grep -q '^# TYPE docs_trash_objects_moved_total' <<<"$M" && ok "métrica docs_trash_objects_moved_total" || bad "falta docs_trash_objects_moved_total"
   else
     skip "métricas (sin acceso a /metrics)"
   fi

@@ -68,4 +68,8 @@ en la cabecera del script). Los user-id salen de `jiku whoami`.
 - El externo es una persona real que puede tener ya `project-permissions` sobre el proyecto que
   elige el script: si lo tiene, se le quita durante la corrida y se le devuelve al terminar
   (también si el script se corta).
+- El escenario `8b` (compactación del historial) compacta a demanda dentro del contenedor y
+  verifica que los objetos compactados quedaron en `papelera/` del bucket (con el `mc` del MinIO
+  de Jiku, `E2E_STORAGE_CONTAINER`, default `jiku-local-storage`) y que `jiku-docs storage
+  restore-from-trash --version-row` devuelve una versión.
 - Sale con 0 si todo pasó.
