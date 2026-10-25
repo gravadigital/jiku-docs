@@ -368,23 +368,31 @@ func TestHistory11UnchangedDocumentSkipped(t *testing.T) {
 	}
 }
 
-// Without new activity, a document whose versions crossed a threshold of the policy since its
-// last compaction is processed again: otherwise the session of the day before a run would stay
-// whole forever.
-func TestHistoryThresholdCrossingWithoutActivity(t *testing.T) {
+// Case 24: the session of the day before, without later activity, is compacted by the run that
+// follows its crossing of 24 h. A document whose versions crossed a threshold of the policy
+// (24 h or 30 days) since its last compaction is processed again without new activity:
+// otherwise the session of the day before a run would stay whole forever.
+func TestHistory24SessionOfTheDayBefore(t *testing.T) {
 	h := newHist(t)
-	id := h.doc(tu.User, histNow.Add(-6*time.Hour))
-	_, last := h.burst(id, tu.User, "", histNow.Add(-5*time.Hour), 10, time.Minute)
+	// Yesterday afternoon (15:00 to 15:09 in Buenos Aires), 12 h before the 03:00 run.
+	afternoon := histNow.Add(-12 * time.Hour)
+	id := h.doc(tu.User, afternoon.Add(-time.Hour))
+	_, last := h.burst(id, tu.User, "", afternoon, 10, time.Minute)
 	h.compact(histNow, service.HistoryOptions{})
 	h.expect(id, span(1, last)...)
 	if rep := h.compact(histNow.Add(2*time.Hour), service.HistoryOptions{}); rep.Documents != 0 {
 		t.Fatalf("nothing crossed a threshold yet: %+v", rep)
 	}
+	// The next daily run: the session crossed 24 h and nobody edited the document since.
 	rep := h.compact(histNow.Add(24*time.Hour), service.HistoryOptions{})
-	if rep.Documents != 1 {
+	if rep.Documents != 1 || rep.VersionsPruned != last-2 {
 		t.Fatalf("the versions crossed 24 h: %+v", rep)
 	}
 	h.expect(id, 1, last)
+	// Nothing else crosses a threshold until 30 days: the following runs skip it.
+	if rep := h.compact(histNow.Add(48*time.Hour), service.HistoryOptions{}); rep.Documents != 0 {
+		t.Fatalf("%+v", rep)
+	}
 }
 
 // Case 12: two runs in a row: the second removes nothing.

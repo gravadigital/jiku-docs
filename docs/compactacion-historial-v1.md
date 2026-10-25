@@ -1,6 +1,6 @@
 # jiku-docs: compactación del historial de versiones
 
-Oct 24, 2026 · @Lautaro Alvarez · revisado 2026-10-25 contra la implementación (ver sección 8)
+Oct 24, 2026 · @Lautaro Alvarez · revisado 2026-10-25 contra la implementación y con las decisiones del dueño (ver sección 8)
 
 ## 1. Resumen
 
@@ -79,9 +79,12 @@ Un proceso del propio servicio `jiku-docs` corre una vez por día, procesa docum
 ### Ejecución
 
 - Corre una vez por día a partir de la hora configurada (`DOCS_HISTORY_COMPACTION_HOUR`, default 3) en la zona configurada, con el mismo mecanismo que las demás tareas periódicas del servicio (`JobDue` sobre `service_state`). Si hay varias réplicas del servicio, solo una ejecuta: toma un advisory lock de PostgreSQL (`pg_try_advisory_lock`) y las demás lo saltean.
-- Procesa solo documentos con actividad nueva desde su última compactación: `documents.updated_at > documents.last_compacted_at`, o documentos con un link compartido fijado que venció o se revocó desde entonces.
+- Procesa los documentos que cumplen alguna de estas condiciones desde su última compactación (los que nunca se compactaron, siempre):
+  - **Actividad nueva:** `documents.updated_at > documents.last_compacted_at`.
+  - **Link fijado que venció o se revocó:** un link compartido con `mode = pinned` cuyo `expires_at` o `revoked_at` es posterior a `last_compacted_at`.
+  - **Cruce de umbral:** alguna versión no protegida (y que no es la actual) cruzó el umbral de 24 h o el de 30 días entre la última compactación y ahora. Sin esta regla, la sesión de edición del día anterior a la corrida (todas sus versiones tienen menos de 24 h al compactar) quedaría entera para siempre si nadie vuelve a editar el documento; con ella, se compacta en la corrida siguiente al cruce de 24 h (caso 24).
+- Un documento sin actividad nueva cuyas versiones no cruzaron ningún umbral no se procesa (caso 11).
 - Recorre los documentos en lotes (default 100), ordenados por `id`, para poder retomar donde quedó si se corta.
-- **Nota de implementación (2026-10-25, a confirmar):** además de los dos casos anteriores, la implementación procesa los documentos sin actividad nueva que tienen alguna versión no protegida que cruzó un umbral de la política (24 h o 30 días) desde su última compactación. Sin esto, la sesión de edición del día anterior a la corrida (todas sus versiones tienen menos de 24 h al compactar) quedaría entera para siempre si nadie vuelve a editar el documento. Un documento cuyas versiones no cruzaron ningún umbral sigue sin procesarse (caso 11).
 - También se puede ejecutar a demanda con un comando de mantenimiento: `jiku-docs history compact [--document <id>] [--dry-run]`. Con `--dry-run` informa qué borraría sin borrar nada.
 
 ### Algoritmo por documento
@@ -294,10 +297,11 @@ Los casos cubren cada regla de la política, los bordes entre tramos y la seguri
 | 21 | Un externo pide con `documents.get` una versión compactada de un documento público | `document_not_found`, sin `errorDetails` |
 | 22 | Versión de agente con `message`, hace 60 días | Se conserva |
 | 23 | Versión de `service` sin mensaje, hace 60 días | Se conserva |
+| 24 | Sesión del día anterior sin actividad posterior | Se compacta en la corrida siguiente al cruce de 24 h; las corridas siguientes no lo procesan hasta otro cruce |
 
 ## 8. Revisión contra la implementación (2026-10-25)
 
-Cambios acordados respecto del borrador del 2026-10-24:
+Cambios acordados respecto del borrador del 2026-10-24, y decisiones del dueño del mismo día:
 
 1. Las versiones de `via: agent` siguen la regla de bloques; solo `service` queda protegido por origen.
 2. Un externo nunca recibe `version_pruned`.
@@ -308,3 +312,4 @@ Cambios acordados respecto del borrador del 2026-10-24:
 7. Programación con hora del día (`DOCS_HISTORY_COMPACTION_HOUR`), como el resto de las tareas del servicio, en lugar de cron.
 8. Pendiente para otra etapa: la pantalla de historial y el campo de mensaje en la web (REQ en jiku).
 9. Fuera de alcance, anotado: el volumen de eventos, changelog y notificaciones por guardado no cambia con la compactación.
+10. Criterio de selección confirmado: además de los documentos con actividad nueva o con un link fijado que venció o se revocó, se procesan los que tienen alguna versión no protegida que cruzó el umbral de 24 h o el de 30 días desde la última compactación (sección 3, caso 24).

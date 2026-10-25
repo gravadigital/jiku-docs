@@ -11,8 +11,10 @@ Formato: [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/). Versionado
   versiones intermedias viejas: todas las de menos de 24 h se conservan; hasta 30 días, la última de cada bloque
   de edición; después, la última de cada día. Nunca borra la actual, la creación, restauraciones, versiones con
   `message`, de `via: service` ni las fijadas por un link `pinned` activo. Las de `via: agent` no se protegen por
-  su origen. Los objetos se borran de S3 después del commit vía `pruned_objects` (`DeleteObjects` en lotes).
-  Comando `jiku-docs history compact [--document <id>] [--dry-run]`. Migración `0003`: `kind` y `protected` en
+  su origen. Además de los documentos con actividad nueva o con un link fijado que venció o se revocó, procesa
+  los que tienen alguna versión no protegida que cruzó el umbral de 24 h o el de 30 días desde su última
+  compactación (la sesión del día anterior se compacta en la corrida siguiente al cruce de 24 h). Los objetos
+  se borran de S3 después del commit vía `pruned_objects` (`DeleteObjects` en lotes). Comando `jiku-docs history compact [--document <id>] [--dry-run]`. Migración `0003`: `kind` y `protected` en
   `document_versions` (con backfill), `last_compacted_at` y `pruned_versions_count` en `documents`, tabla
   `pruned_objects`.
 - Contratos 1.2.0: `documents.versions.list` devuelve `kind` (`create`, `update`, `restore`) y `protected`, y los
