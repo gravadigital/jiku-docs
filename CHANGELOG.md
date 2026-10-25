@@ -14,6 +14,13 @@ Formato: [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/). Versionado
 
 ### Added
 
+- Importador de HedgeDoc: columnas `projects`, `clients`, `requirements`, `tasks` y `topics` en la planilla;
+  la versión 1 sale con el bloque `jiku:` y los temas en el frontmatter, fusionados con los que ya tenga. Ante
+  `invalid_relation` la nota se reintenta sin esa relación y el informe la registra (`droppedRelations`);
+  `--dry-run --check-relations` las valida contra core antes de importar. El resumen cuenta notas con
+  proyecto, cliente, requisito, tarea y temas.
+- La reimportación actualiza con `documents.{id}.update` (estado `updated`) las notas cuyo contenido cambió
+  mientras la última versión sea del importador; las editadas, movidas o borradas en jiku-docs no se pisan.
 - Servicio `jiku-docs` en Go 1.25: servicios NATS micro `jiku-docs-commands` (18 comandos) y
   `jiku-docs-queries` (13 consultas) con queue group propio, identidad desde el subject, clases de caller
   (`person-internal`, `person-external`, `service`, la `api` con `actor`), ACL heredable por carpeta,

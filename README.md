@@ -183,6 +183,7 @@ docker exec -i jiku-docs-hedgedoc-db mariadb -uroot -phedgedoc codimd < .local/c
 go run ./cmd/jiku-docs import hedgedoc --export-mapping .local/hedgedoc-mapping.csv
 
 # 3. Simulación: plan + informe, sin escribir ni descargar nada
+#    (--check-relations además valida las relaciones contra core por el bus, solo lectura)
 go run ./cmd/jiku-docs import hedgedoc --mapping .local/hedgedoc-mapping.csv --dry-run
 
 # 4. Importación real (variables de .env exportadas: base, bucket, bus)
@@ -193,6 +194,12 @@ go run ./cmd/jiku-docs import hedgedoc --mapping .local/hedgedoc-mapping.csv
   `fileName` y `skip`; las demás columnas se ignoran (sirven para revisar). Una fila sin `folder`, `fileName`
   ni `skip` no cuenta como mapeada. Las notas sin carpeta van a `/importado/`, que se crea sin herencia y con
   una única regla `manage` para el rol `admin`.
+- **Relaciones y temas**: columnas opcionales `projects`, `clients`, `requirements` y `tasks` (ids de Jiku
+  separados por `;` o `,`) y `topics` (separados por `;`). Con algún valor, la versión 1 sale con el bloque
+  `jiku:` y los `topics` en el frontmatter, fusionados con lo que ya tenga (sin duplicar; temas
+  normalizados como el servicio). Solas no seleccionan una nota: aplican a las que se importan. Si core
+  responde `invalid_relation`, la nota se reintenta sin esa relación y el informe dice cuál se descartó y
+  por qué (`droppedRelations`); con `--dry-run --check-relations` se ven antes de importar.
 - **Qué se importa**: notas con contenido. Las anónimas (sin dueño) se omiten salvo que estén mapeadas en la planilla o se
   pase `--include-anonymous`: en el dump real son ~10.000 y casi todas spam. `--only-mapped` importa solo lo
   mapeado y `--limit N` sirve para probar.
@@ -205,10 +212,13 @@ go run ./cmd/jiku-docs import hedgedoc --mapping .local/hedgedoc-mapping.csv
 - **Enlaces entre notas** (`{--hedgedoc-url}/{alias|shortid|id}`, `/s/…`, `/p/…`) se reescriben a
   `{JIKU_WEB_URL}/docs/{id}`; los que no resuelven quedan como estaban y se informan.
 - **Idempotente**: ids deterministas (ULID con la fecha de la nota); reimportar no duplica. En una
-  reimportación las notas ya importadas quedan `unchanged` en el informe y los adjuntos ya confirmados no se
-  vuelven a descargar; solo se reintentan los que fallaron.
+  reimportación las notas ya importadas con el mismo contenido quedan `unchanged` y los adjuntos ya
+  confirmados no se vuelven a descargar; solo se reintentan los que fallaron. Si el contenido cambió (por
+  ejemplo, la planilla ahora trae relaciones), la nota se actualiza con `documents.{id}.update` sobre la
+  versión actual (`updated`, mensaje "Reimportado de HedgeDoc…"), siempre que la última versión sea del
+  importador; si alguien la editó, movió, renombró o borró en jiku-docs, queda `exists` y no se pisa.
 - **Informe** (`--report`, default `.local/hedgedoc-import-report.csv`): estado por nota, ruta destino,
-  adjuntos, enlaces sin resolver y **posibles secretos** (regla y línea, nunca el valor). Esas notas fueron
+  adjuntos, enlaces sin resolver, relaciones y temas finales, relaciones descartadas y **posibles secretos** (regla y línea, nunca el valor). Esas notas fueron
   públicas en HedgeDoc: hay que rotar esas credenciales antes de apagarlo.
 
 ## Desarrollo
