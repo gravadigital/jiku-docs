@@ -139,3 +139,22 @@ copian a otro repo.
   ni orden, solo `include`. Test que pruebe ambos lados.
 - Va como REQ-017 de seguimiento en jiku. Los enlaces entre documentos usan la ruta que ya sirve la web,
   `{JIKU_WEB_URL}/docs/{id}`; el importador de HedgeDoc los reescribe a ese formato.
+
+## D-11. La api manda el `actor` completo y jiku-docs usa sus roles
+
+- Problema (prueba e2e en navegador): core actualiza los roles de una persona en `users` solo cuando esa persona ejecuta
+  un comando de core o se conecta directo a NATS. Un usuario web que solo lee queda con roles viejos o sin fila, y
+  jiku-docs le responde `caller_not_authorized` / `unknown_caller`.
+- Decisión: la api manda a jiku-docs el mismo `actor` que manda a core (`buildActor`):
+  `{ id, roles, name?, username?, email? }`, con `roles` tomados del token web ya verificado. Solo la api puede mandar
+  `actor` (se identifica por `JIKU_API_USER_ID`). jiku-docs, cuando el caller es la api y el `actor` trae `roles`,
+  clasifica a la persona con esos roles (`admin`/`user` → `person-internal`, `external-user` → `person-external`,
+  otro → sin acceso) y no consulta `users.list` para ese dato. Los `project-permissions` del externo se siguen
+  consultando a core.
+- Contrato: el esquema `Actor` de los tres contratos de jiku-docs pasa a `{ id (req), roles (req, array de string),
+  name?, username?, email? }`, `additionalProperties: false`.
+- La api **no** acepta tokens de machine users (decisión del dueño, 2026-10-25): las pruebas HTTP se hacen con
+  usuarios humanos vía navegador.
+- Además: un `person-external` recibe el contenido de `documents.get` **sin frontmatter** (contiene ids internos de
+  requisitos y tareas); opus-web muestra como texto los enlaces a documentos (`/docs/{id}`) en lugar de enlazar a la
+  web interna.
