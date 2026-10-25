@@ -1,7 +1,7 @@
 asyncapi: 3.0.0
 info:
   title: jiku-docs — comandos
-  version: 1.1.0
+  version: 1.2.0
   description: |
     Plano de escritura de jiku-docs (servicio NATS micro `jiku-docs-commands`).
     Request/reply sin persistencia. La identidad del caller es el `user-id` del subject,
@@ -28,6 +28,15 @@ info:
     - Subida de contenido grande: `uploadUrl` es un `PUT` prefirmado de S3 (300 s) del contenido crudo.
       La firma solo cubre el host: `Content-Type` no forma parte de ella; se recomienda
       `text/markdown; charset=utf-8`, que es lo que manda jiku-go.
+
+    Compactación del historial (1.2.0, docs/compactacion-historial-v1.md):
+    - `documents.{id}.restore` con un `fromVersion` compactado y `shares.new` con `mode: pinned` y una
+      `version` compactada responden `version_pruned`, con `errorDetails`
+      `{ requestedVersion, previousAvailable, nextAvailable }` (las versiones conservadas más
+      cercanas, o `null`). No se crea versión ni link. Una versión mayor que la actual sigue siendo
+      `document_not_found`.
+    - Guardar con `message` (o como servicio) protege la versión para siempre; las de `via: agent`
+      sin mensaje se compactan por bloques como las humanas.
 defaultContentType: application/json
 
 servers:
@@ -161,7 +170,7 @@ operations:
   documentsUpdate:     { action: receive, channel: { $ref: '#/channels/documents.update' },     reply: { channel: { $ref: '#/channels/documents.update' } },     x-permission: write, x-error-codes: [document_not_found, version_conflict, document_locked, frontmatter_invalid, invalid_relation, content_too_large, checksum_mismatch, upload_not_found, permission_denied, upstream_unavailable] }
   documentsMove:       { action: receive, channel: { $ref: '#/channels/documents.move' },       reply: { channel: { $ref: '#/channels/documents.move' } },       x-permission: write (origen y destino), x-error-codes: [document_not_found, folder_not_found, version_conflict, document_locked, already_exists, file_name_invalid, permission_denied] }
   documentsDelete:     { action: receive, channel: { $ref: '#/channels/documents.delete' },     reply: { channel: { $ref: '#/channels/documents.delete' } },     x-permission: write, x-error-codes: [document_not_found, version_conflict, document_locked, permission_denied] }
-  documentsRestore:    { action: receive, channel: { $ref: '#/channels/documents.restore' },    reply: { channel: { $ref: '#/channels/documents.restore' } },    x-permission: write, x-error-codes: [document_not_found, version_conflict, document_locked, permission_denied] }
+  documentsRestore:    { action: receive, channel: { $ref: '#/channels/documents.restore' },    reply: { channel: { $ref: '#/channels/documents.restore' } },    x-permission: write, x-error-codes: [document_not_found, version_pruned, version_conflict, document_locked, permission_denied] }
   documentsLock:       { action: receive, channel: { $ref: '#/channels/documents.lock' },       reply: { channel: { $ref: '#/channels/documents.lock' } },       x-permission: write, x-error-codes: [document_not_found, document_locked, permission_denied] }
   documentsUnlock:     { action: receive, channel: { $ref: '#/channels/documents.unlock' },     reply: { channel: { $ref: '#/channels/documents.unlock' } },     x-permission: write (force exige manage), x-error-codes: [document_not_found, lock_not_held, permission_denied] }
   contentUpload:       { action: receive, channel: { $ref: '#/channels/documents.request-content-upload' }, reply: { channel: { $ref: '#/channels/documents.request-content-upload' } }, x-permission: persona interna o servicio, x-error-codes: [content_too_large, caller_not_authorized] }
@@ -170,7 +179,7 @@ operations:
   attachmentsDownload: { action: receive, channel: { $ref: '#/channels/attachments.request-download' }, reply: { channel: { $ref: '#/channels/attachments.request-download' } }, x-permission: read (documento), x-error-codes: [attachment_not_found, upstream_unavailable] }
   attachmentsDelete:   { action: receive, channel: { $ref: '#/channels/attachments.delete' },   reply: { channel: { $ref: '#/channels/attachments.delete' } },   x-permission: write (documento), x-error-codes: [attachment_not_found, permission_denied] }
 
-  sharesNew:           { action: receive, channel: { $ref: '#/channels/shares.new' },           reply: { channel: { $ref: '#/channels/shares.new' } },           x-permission: manage (carpeta del documento), x-error-codes: [document_not_found, permission_denied, sharing_blocked, share_expiry_invalid, secret_warning_not_acknowledged, already_exists] }
+  sharesNew:           { action: receive, channel: { $ref: '#/channels/shares.new' },           reply: { channel: { $ref: '#/channels/shares.new' } },           x-permission: manage (carpeta del documento), x-error-codes: [document_not_found, version_pruned, permission_denied, sharing_blocked, share_expiry_invalid, secret_warning_not_acknowledged, already_exists] }
   sharesRevoke:        { action: receive, channel: { $ref: '#/channels/shares.revoke' },        reply: { channel: { $ref: '#/channels/shares.revoke' } },        x-permission: manage (carpeta) o creador del link, x-error-codes: [share_not_found, permission_denied] }
 
 components:
@@ -400,7 +409,7 @@ components:
         errorCode:
           type: string
           description: Catálogo abierto dentro de v1; un código desconocido se trata como error genérico.
-          examples: [invalid_fields, document_not_found, folder_not_found, attachment_not_found, permission_denied, version_conflict, document_locked, lock_not_held, already_exists, file_name_invalid, frontmatter_invalid, invalid_relation, content_too_large, checksum_mismatch, upload_not_found, folder_not_empty, attachment_type_not_allowed, attachment_too_large, share_not_found, sharing_blocked, share_expiry_invalid, secret_warning_not_acknowledged, attachments_not_configured, unknown_caller, caller_not_authorized, upstream_unavailable, internal_error]
+          examples: [invalid_fields, document_not_found, folder_not_found, attachment_not_found, permission_denied, version_conflict, version_pruned, document_locked, lock_not_held, already_exists, file_name_invalid, frontmatter_invalid, invalid_relation, content_too_large, checksum_mismatch, upload_not_found, folder_not_empty, attachment_type_not_allowed, attachment_too_large, share_not_found, sharing_blocked, share_expiry_invalid, secret_warning_not_acknowledged, attachments_not_configured, unknown_caller, caller_not_authorized, upstream_unavailable, internal_error]
         errorMessage: { type: string, description: Texto en español para la interfaz. No decidir por este campo. }
         errorDetails: { type: object }
     ReplyId:

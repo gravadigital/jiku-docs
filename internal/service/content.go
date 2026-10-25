@@ -256,8 +256,17 @@ func writeMeta(ctx context.Context, tx pgx.Tx, docID string, p *prepared) error 
 	return nil
 }
 
+// Kinds of version (docs/compactacion-historial-v1.md, section 4). documents.move creates no
+// version, so there is no kind for it.
+const (
+	KindCreate  = "create"
+	KindUpdate  = "update"
+	KindRestore = "restore"
+)
+
 type versionInput struct {
 	docID     string
+	kind      string
 	version   int
 	key       string
 	p         *prepared
@@ -268,10 +277,21 @@ type versionInput struct {
 	at        time.Time
 }
 
+// versionProtected is the permanent protection of a version, decided on insert: creations,
+// restorations, versions with a message and versions written by a service are never compacted.
+// Agent versions are not protected by their origin: they follow the block rule like human ones.
+func versionProtected(kind, via, message string) bool {
+	return kind == KindCreate || kind == KindRestore || message != "" || via == "service"
+}
+
 func insertVersion(ctx context.Context, tx pgx.Tx, v versionInput) error {
+	if v.kind == "" {
+		v.kind = KindUpdate
+	}
 	_, err := tx.Exec(ctx, `INSERT INTO document_versions (document_id, version, storage_key, checksum, size_bytes, title, author, via,
-		session_id, message, created_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,NULLIF($9,''),NULLIF($10,''),$11)`,
-		v.docID, v.version, v.key, v.p.checksum, v.p.size, v.p.title, v.author, v.via, v.sessionID, v.message, v.at)
+		session_id, message, created_at, kind, protected) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,NULLIF($9,''),NULLIF($10,''),$11,$12,$13)`,
+		v.docID, v.version, v.key, v.p.checksum, v.p.size, v.p.title, v.author, v.via, v.sessionID, v.message, v.at,
+		v.kind, versionProtected(v.kind, v.via, v.message))
 	return err
 }
 

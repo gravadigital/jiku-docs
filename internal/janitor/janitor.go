@@ -1,12 +1,16 @@
 // Package janitor runs the periodic work: lock expiry (with document.unlocked), purges (deleted
-// documents after 30 days, uploads, pending attachments after 24 h, orphan objects, share accesses
-// after 180 days, share retry ciphers after 5 min, changelog after 30 days) and the daily review
-// of relations against core. One replica runs it at a time (advisory lock).
+// documents after 30 days, uploads, pending attachments after 24 h, share accesses after 180
+// days, share retry ciphers after 5 min, changelog after 30 days), the weekly orphan sweep (one
+// page per minute), the daily review of relations against core and the daily history
+// compaction. One replica runs it at a time (advisory lock); the compaction takes its own lock
+// and runs beside the frequent jobs, so lock expiry never waits for it.
 package janitor
 
 import (
 	"context"
 	"log/slog"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -27,6 +31,14 @@ type Janitor struct {
 	ReviewHour int
 	// Tick is the period of the frequent jobs (lock expiry).
 	Tick time.Duration
+
+	// History compaction: daily from HistoryHour (in HistoryLocation), when enabled.
+	HistoryEnabled  bool
+	HistoryHour     int
+	HistoryLocation *time.Location
+
+	compacting atomic.Bool
+	wg         sync.WaitGroup
 }
 
 // Run loops until ctx ends.
@@ -37,6 +49,7 @@ func (j *Janitor) Run(ctx context.Context) error {
 	}
 	t := time.NewTicker(tick)
 	defer t.Stop()
+	defer j.wg.Wait()
 	for {
 		j.RunOnce(ctx)
 		select {
@@ -89,11 +102,21 @@ func (j *Janitor) RunOnce(ctx context.Context) {
 		j.logCount("changelog rows purged", int(n))
 		return err
 	})
-	j.job(ctx, "orphans", 24*time.Hour, func() error {
-		n, err := j.Svc.PurgeOrphans(ctx)
+	// Weekly sweep of the whole bucket, one page per minute with a cursor in service_state: the
+	// objects of compacted versions are deleted by pruned_objects, not by this sweep.
+	j.job(ctx, "orphans", 7*24*time.Hour, func() error { return j.Svc.StartOrphanSweep(ctx) })
+	j.job(ctx, "orphans-page", time.Minute, func() error {
+		n, done, err := j.Svc.PurgeOrphans(ctx)
 		j.logCount("orphan objects deleted", n)
+		if done && err == nil && n > 0 {
+			j.Log.Info("janitor: orphan sweep finished")
+		}
 		return err
 	})
+	if n, age, err := j.Svc.PrunedObjectsPending(ctx); err == nil {
+		j.Metrics.HistoryPending(n, age)
+	}
+	j.historyCompaction(ctx)
 	if time.Now().UTC().Hour() == j.ReviewHour {
 		j.job(ctx, "relation-review", 20*time.Hour, func() error {
 			n, err := j.Svc.ReviewRelations(ctx)
@@ -101,6 +124,30 @@ func (j *Janitor) RunOnce(ctx context.Context) {
 			return err
 		})
 	}
+}
+
+// historyCompaction starts the daily compaction in its own goroutine when due. The run takes
+// its own advisory lock: a manual `jiku-docs history compact` or another replica never overlap.
+func (j *Janitor) historyCompaction(ctx context.Context) {
+	if !j.HistoryEnabled || j.HistoryLocation == nil || j.compacting.Load() {
+		return
+	}
+	due, err := j.Svc.JobDueDaily(ctx, "history-compaction", j.HistoryLocation, j.HistoryHour)
+	if err != nil || !due {
+		return
+	}
+	j.compacting.Store(true)
+	j.wg.Add(1)
+	go func() {
+		defer j.wg.Done()
+		defer j.compacting.Store(false)
+		rep, err := j.Svc.CompactHistory(ctx, service.HistoryOptions{})
+		if rep == nil || rep.Skipped {
+			return
+		}
+		j.Metrics.HistoryRun(rep.VersionsPruned, rep.BytesFreed, rep.Duration, err == nil && rep.Errors == 0)
+		j.Metrics.HistoryPending(rep.ObjectsPending, 0)
+	}()
 }
 
 func (j *Janitor) job(ctx context.Context, name string, every time.Duration, fn func() error) {

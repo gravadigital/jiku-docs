@@ -15,6 +15,7 @@ const (
 	CodeAttachmentNotFound          = "attachment_not_found"
 	CodePermissionDenied            = "permission_denied"
 	CodeVersionConflict             = "version_conflict"
+	CodeVersionPruned               = "version_pruned"
 	CodeDocumentLocked              = "document_locked"
 	CodeLockNotHeld                 = "lock_not_held"
 	CodeAlreadyExists               = "already_exists"
@@ -54,6 +55,7 @@ var messages = map[string]string{
 	CodeAttachmentNotFound:          "El adjunto no existe o no es visible",
 	CodePermissionDenied:            "No tenés permiso para esta operación",
 	CodeVersionConflict:             "La versión base no coincide con la versión actual del documento",
+	CodeVersionPruned:               "La versión pedida fue compactada: usá una de las versiones conservadas más cercanas",
 	CodeDocumentLocked:              "Otra sesión está editando el documento",
 	CodeLockNotHeld:                 "La sesión no tiene el lock del documento",
 	CodeAlreadyExists:               "Ya existe un recurso con ese identificador o nombre",

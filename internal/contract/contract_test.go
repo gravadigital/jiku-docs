@@ -231,7 +231,7 @@ func TestErrorCatalog(t *testing.T) {
 		known[c.(string)] = true
 	}
 	for _, c := range []string{protocol.CodeInvalidFields, protocol.CodeDocumentNotFound, protocol.CodeVersionConflict,
-		protocol.CodeDocumentLocked, protocol.CodeShareNotFound, protocol.CodeUpstreamUnavailable} {
+		protocol.CodeDocumentLocked, protocol.CodeShareNotFound, protocol.CodeUpstreamUnavailable, protocol.CodeVersionPruned} {
 		if !known[c] {
 			t.Errorf("%s missing from the catalog", c)
 		}

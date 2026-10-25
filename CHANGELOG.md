@@ -4,6 +4,27 @@ Formato: [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/). Versionado
 
 ## [Unreleased]
 
+### Changed
+
+- Compactación del historial de versiones (`docs/compactacion-historial-v1.md`): un proceso diario (desde
+  `DOCS_HISTORY_COMPACTION_HOUR` en `DOCS_HISTORY_TIMEZONE`, una sola réplica por advisory lock) borra las
+  versiones intermedias viejas: todas las de menos de 24 h se conservan; hasta 30 días, la última de cada bloque
+  de edición; después, la última de cada día. Nunca borra la actual, la creación, restauraciones, versiones con
+  `message`, de `via: service` ni las fijadas por un link `pinned` activo. Las de `via: agent` no se protegen por
+  su origen. Los objetos se borran de S3 después del commit vía `pruned_objects` (`DeleteObjects` en lotes).
+  Comando `jiku-docs history compact [--document <id>] [--dry-run]`. Migración `0003`: `kind` y `protected` en
+  `document_versions` (con backfill), `last_compacted_at` y `pruned_versions_count` en `documents`, tabla
+  `pruned_objects`.
+- Contratos 1.2.0: `documents.versions.list` devuelve `kind` (`create`, `update`, `restore`) y `protected`, y los
+  acepta como filtros (también en `meta.describe`); la numeración puede tener huecos. `documents.get` devuelve
+  `prunedVersionsCount` como campo base (no a externos).
+- Código de error `version_pruned` (`errorDetails`: `requestedVersion`, `previousAvailable`, `nextAvailable`) en
+  `documents.get` con `version`, `documents.{id}.restore` y `shares.new` con `mode: pinned`.
+- `PurgeOrphans` pasa a un barrido semanal y paginado (1.000 objetos por minuto) con cursor en `service_state`;
+  los objetos de versiones compactadas los borra `pruned_objects`.
+- `jiku-docs storage init` agrega la regla de ciclo de vida que expira las versiones no actuales a los 7 días y
+  relee las reglas. Variables `DOCS_HISTORY_*` y métricas `docs_history_*`.
+
 ### Security
 
 - Un externo (`person-external`) recibe `documents.get` sin frontmatter, en `content` y en `contentUrl`
@@ -11,6 +32,7 @@ Formato: [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/). Versionado
   respuesta y en `documents.versions.list`, `checksum` y `sizeBytes` son los del cuerpo que recibe.
 - Un externo ya no lee versiones anteriores de un documento público (`documents.get` con `version`, y
   `documents.versions.list`): podían ser de cuando era `internal` y tener lo que se quitó para publicarlo.
+  Responde `document_not_found` sin `errorDetails` (antes traía `version`), y nunca `version_pruned`.
 
 ### Added
 

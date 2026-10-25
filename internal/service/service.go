@@ -58,6 +58,8 @@ type Service struct {
 	HTTP  *http.Client
 	Hooks Hooks
 	Now   func() time.Time
+	// History is the retention policy of the history compaction (zero values = defaults).
+	History HistoryPolicy
 	// PageBudget is the byte budget of a list page (half the NATS max_payload, like core).
 	PageBudget int
 

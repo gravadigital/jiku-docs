@@ -23,6 +23,14 @@ type Metrics struct {
 	indexerLag    prometheus.Gauge
 	indexed       prometheus.Counter
 	locks         prometheus.Gauge
+
+	historyPruned      prometheus.Counter
+	historyBytes       prometheus.Counter
+	historyDuration    prometheus.Gauge
+	historyRuns        *prometheus.CounterVec
+	historyLastSuccess prometheus.Gauge
+	historyPending     prometheus.Gauge
+	historyPendingAge  prometheus.Gauge
 }
 
 // New registers the metrics.
@@ -50,7 +58,22 @@ func New() *Metrics {
 		locks: prometheus.NewGauge(prometheus.GaugeOpts{
 			Name: "jiku_docs_locks_active", Help: "Live edit locks."}),
 	}
+	m.historyPruned = prometheus.NewCounter(prometheus.CounterOpts{
+		Name: "docs_history_versions_pruned_total", Help: "Versions removed by the history compaction."})
+	m.historyBytes = prometheus.NewCounter(prometheus.CounterOpts{
+		Name: "docs_history_bytes_freed_total", Help: "Bytes of the versions removed by the history compaction."})
+	m.historyDuration = prometheus.NewGauge(prometheus.GaugeOpts{
+		Name: "docs_history_run_duration_seconds", Help: "Duration of the last history compaction run."})
+	m.historyRuns = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "docs_history_runs_total", Help: "History compaction runs by result (success, failure)."}, []string{"result"})
+	m.historyLastSuccess = prometheus.NewGauge(prometheus.GaugeOpts{
+		Name: "docs_history_last_success_timestamp_seconds", Help: "Unix time of the last successful compaction (alert when older than 48 h)."})
+	m.historyPending = prometheus.NewGauge(prometheus.GaugeOpts{
+		Name: "docs_history_pruned_objects_pending", Help: "Rows in pruned_objects: objects of compacted versions still in S3."})
+	m.historyPendingAge = prometheus.NewGauge(prometheus.GaugeOpts{
+		Name: "docs_history_pruned_objects_oldest_seconds", Help: "Age of the oldest row in pruned_objects (alert above 86400)."})
 	reg.MustRegister(m.requests, m.duration, m.published, m.outboxAge, m.notifications, m.indexerLag, m.indexed, m.locks,
+		m.historyPruned, m.historyBytes, m.historyDuration, m.historyRuns, m.historyLastSuccess, m.historyPending, m.historyPendingAge,
 		collectors.NewGoCollector(), collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}))
 	return m
 }
@@ -96,6 +119,30 @@ func (m *Metrics) Indexed() {
 func (m *Metrics) Locks(n int) {
 	if m != nil {
 		m.locks.Set(float64(n))
+	}
+}
+
+// HistoryRun records one compaction run (dry runs and skipped runs are not recorded).
+func (m *Metrics) HistoryRun(pruned int, bytes int64, d time.Duration, ok bool) {
+	if m == nil {
+		return
+	}
+	m.historyPruned.Add(float64(pruned))
+	m.historyBytes.Add(float64(bytes))
+	m.historyDuration.Set(d.Seconds())
+	if ok {
+		m.historyRuns.WithLabelValues("success").Inc()
+		m.historyLastSuccess.SetToCurrentTime()
+	} else {
+		m.historyRuns.WithLabelValues("failure").Inc()
+	}
+}
+
+// HistoryPending records the backlog of pruned_objects.
+func (m *Metrics) HistoryPending(n int, oldest time.Duration) {
+	if m != nil {
+		m.historyPending.Set(float64(n))
+		m.historyPendingAge.Set(oldest.Seconds())
 	}
 }
 

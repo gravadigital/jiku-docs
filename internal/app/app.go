@@ -44,6 +44,10 @@ type Options struct {
 	// JanitorTick overrides the janitor period (tests).
 	JanitorTick time.Duration
 	ReviewHour  int
+	// History is the compaction policy; HistoryEnabled runs it daily from HistoryHour.
+	History        service.HistoryPolicy
+	HistoryEnabled bool
+	HistoryHour    int
 }
 
 // Instance is a started service.
@@ -66,6 +70,7 @@ func Start(ctx context.Context, o Options) (*Instance, error) {
 		o.Log = slog.Default()
 	}
 	svc := service.New(o.DB, o.Blob, o.Core, o.Log, o.Settings)
+	svc.History = o.History
 	svc.Hooks.Request = o.Metrics.Request
 	if mp := o.NC.MaxPayload(); mp > 0 {
 		svc.PageBudget = int(mp / 2)
@@ -95,7 +100,8 @@ func Start(ctx context.Context, o Options) (*Instance, error) {
 		inst.goRun(func() { _ = inst.Indexer.Run(runCtx, js, outbox.StreamName, o.Settings.Instance) })
 	}
 	if o.Janitor {
-		j := &janitor.Janitor{DB: o.DB, Svc: svc, Log: o.Log, Metrics: o.Metrics, ReviewHour: o.ReviewHour, Tick: o.JanitorTick}
+		j := &janitor.Janitor{DB: o.DB, Svc: svc, Log: o.Log, Metrics: o.Metrics, ReviewHour: o.ReviewHour, Tick: o.JanitorTick,
+			HistoryEnabled: o.HistoryEnabled, HistoryHour: o.HistoryHour, HistoryLocation: o.History.Location}
 		inst.goRun(func() { _ = j.Run(runCtx) })
 	}
 	if o.Register {

@@ -51,6 +51,16 @@ type Config struct {
 	JanitorEnabled     bool
 	OutboxEnabled      bool
 	RelationReviewHour int
+
+	// History compaction (docs/compactacion-historial-v1.md, section 6)
+	HistoryCompactionEnabled bool
+	HistoryCompactionHour    int
+	HistoryTimezone          string
+	HistoryKeepAll           time.Duration
+	HistoryKeepBlocks        time.Duration
+	HistoryBlockGap          time.Duration
+	HistoryBatchSize         int
+	HistoryS3DeleteBatch     int
 }
 
 // FromEnv reads the configuration. It does not validate: each subcommand validates what it needs.
@@ -87,7 +97,78 @@ func FromEnv() Config {
 		JanitorEnabled:     envBool("DOCS_JANITOR_ENABLED", true),
 		OutboxEnabled:      envBool("DOCS_OUTBOX_ENABLED", true),
 		RelationReviewHour: envInt("DOCS_RELATION_REVIEW_HOUR_UTC", 6),
+
+		HistoryCompactionEnabled: envBool("DOCS_HISTORY_COMPACTION_ENABLED", true),
+		HistoryCompactionHour:    envInt("DOCS_HISTORY_COMPACTION_HOUR", 3),
+		HistoryTimezone:          env("DOCS_HISTORY_TIMEZONE", "America/Argentina/Buenos_Aires"),
+		HistoryKeepAll:           envDays("DOCS_HISTORY_KEEP_ALL", 24*time.Hour),
+		HistoryKeepBlocks:        envDays("DOCS_HISTORY_KEEP_BLOCKS", 30*24*time.Hour),
+		HistoryBlockGap:          envDays("DOCS_HISTORY_BLOCK_GAP", 30*time.Minute),
+		HistoryBatchSize:         envInt("DOCS_HISTORY_BATCH_SIZE", 100),
+		HistoryS3DeleteBatch:     envInt("DOCS_HISTORY_S3_DELETE_BATCH", 1000),
 	}
+}
+
+// ParseDays is time.ParseDuration plus a whole-day suffix: "30d", "1d12h".
+func ParseDays(v string) (time.Duration, error) {
+	v = strings.TrimSpace(v)
+	if i := strings.IndexByte(v, 'd'); i > 0 {
+		days, err := strconv.Atoi(v[:i])
+		if err != nil || days < 0 {
+			return 0, fmt.Errorf("invalid duration %q", v)
+		}
+		d := time.Duration(days) * 24 * time.Hour
+		if rest := v[i+1:]; rest != "" {
+			r, err := time.ParseDuration(rest)
+			if err != nil {
+				return 0, fmt.Errorf("invalid duration %q", v)
+			}
+			d += r
+		}
+		return d, nil
+	}
+	return time.ParseDuration(v)
+}
+
+func envDays(key string, def time.Duration) time.Duration {
+	v := env(key, "")
+	if v == "" {
+		return def
+	}
+	d, err := ParseDays(v)
+	if err != nil || d <= 0 {
+		return def
+	}
+	return d
+}
+
+// ValidateHistory checks the compaction settings: a wrong threshold must stop the service, not
+// silently change what gets deleted.
+func (c Config) ValidateHistory() (*time.Location, error) {
+	for _, k := range []string{"DOCS_HISTORY_KEEP_ALL", "DOCS_HISTORY_KEEP_BLOCKS", "DOCS_HISTORY_BLOCK_GAP"} {
+		if v := env(k, ""); v != "" {
+			if d, err := ParseDays(v); err != nil || d <= 0 {
+				return nil, fmt.Errorf("%s: %q is not a positive duration (examples: 24h, 30d, 30m)", k, v)
+			}
+		}
+	}
+	if c.HistoryKeepBlocks < c.HistoryKeepAll {
+		return nil, errors.New("DOCS_HISTORY_KEEP_BLOCKS must be at least DOCS_HISTORY_KEEP_ALL")
+	}
+	if c.HistoryCompactionHour < 0 || c.HistoryCompactionHour > 23 {
+		return nil, fmt.Errorf("DOCS_HISTORY_COMPACTION_HOUR must be 0-23, got %d", c.HistoryCompactionHour)
+	}
+	if c.HistoryBatchSize < 1 {
+		return nil, errors.New("DOCS_HISTORY_BATCH_SIZE must be at least 1")
+	}
+	if c.HistoryS3DeleteBatch < 1 || c.HistoryS3DeleteBatch > 1000 {
+		return nil, errors.New("DOCS_HISTORY_S3_DELETE_BATCH must be 1-1000 (DeleteObjects limit)")
+	}
+	loc, err := time.LoadLocation(c.HistoryTimezone)
+	if err != nil {
+		return nil, fmt.Errorf("DOCS_HISTORY_TIMEZONE: %w", err)
+	}
+	return loc, nil
 }
 
 func env(key, def string) string {

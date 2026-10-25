@@ -35,6 +35,7 @@ func (d *docRow) view() map[string]any {
 		"version": d.Version, "checksum": d.Checksum, "sizeBytes": d.Size, "visibility": d.Visibility,
 		"createdAt": protocol.FormatTime(d.CreatedAt), "createdBy": d.CreatedBy,
 		"updatedAt": protocol.FormatTime(d.UpdatedAt), "updatedBy": d.UpdatedBy, "deletedAt": deleted,
+		"prunedVersionsCount": d.PrunedVersions,
 	}
 }
 
@@ -288,13 +289,13 @@ func (s *Service) documentsGet(ctx context.Context, c *Call) (any, error) {
 	o := validate.ParseObject(c.Payload, "", "id", "version", "fields", "include")
 	id, _ := o.ULID("id", true)
 	version, hasVersion := o.Int("version", false, 1, 1<<31-1)
-	fields, _ := o.StringList("fields", documentFields, 0)
+	fields, _ := o.StringList("fields", documentGetFields, 0)
 	include, _ := o.StringList("include", documentGetIncludes, 0)
 	if err := o.Err(); err != nil {
 		return nil, err
 	}
 	if len(fields) == 0 {
-		fields = documentFields
+		fields = documentGetFields
 	}
 	fields = append([]string{"id"}, fields...)
 	v, err := s.viewer(ctx, c.Caller, nil)
@@ -309,8 +310,9 @@ func (s *Service) documentsGet(ctx context.Context, c *Call) (any, error) {
 	full := d.view()
 	if hasVersion && int(version) != d.Version && v.c.IsExternal() {
 		// An external person sees the document because it is public NOW. Earlier versions may be
-		// from before it was published, and hold what was removed to publish it.
-		return nil, protocol.Ef(protocol.CodeDocumentNotFound, "La versión %d no existe", version).With("version", version)
+		// from before it was published, and hold what was removed to publish it. No details: not
+		// even whether the version exists or was compacted (that would reveal the history).
+		return nil, protocol.E(protocol.CodeDocumentNotFound)
 	}
 	if hasVersion && int(version) != d.Version {
 		var ver struct {
@@ -321,7 +323,7 @@ func (s *Service) documentsGet(ctx context.Context, c *Call) (any, error) {
 		err := s.DB.QueryRow(ctx, `SELECT storage_key, checksum, size_bytes, title, author, created_at FROM document_versions
 			WHERE document_id = $1 AND version = $2`, id, version).Scan(&ver.key, &ver.checksum, &ver.size, &ver.title, &ver.author, &ver.at)
 		if errors.Is(err, pgx.ErrNoRows) {
-			return nil, protocol.Ef(protocol.CodeDocumentNotFound, "La versión %d no existe", version).With("version", version)
+			return nil, missingVersion(ctx, s.DB, id, d.Version, int(version))
 		}
 		if err != nil {
 			return nil, err
@@ -346,6 +348,9 @@ func (s *Service) documentsGet(ctx context.Context, c *Call) (any, error) {
 		}
 		external = []byte(markdown.StripFrontmatter(string(raw)))
 		full["checksum"], full["sizeBytes"] = Checksum(external), len(external)
+	}
+	if v.c.IsExternal() {
+		delete(full, "prunedVersionsCount") // externals see the current version, never the history
 	}
 	out := project(full, fields)
 	for _, inc := range include {
@@ -448,6 +453,12 @@ func (s *Service) versionsList(ctx context.Context, c *Call) (any, error) {
 	if cnd, ok := q.Filter.Get("via"); ok {
 		where = append(where, "v.via = "+a.add(cnd.Strings[0]))
 	}
+	if cnd, ok := q.Filter.Get("kind"); ok {
+		where = append(where, "v.kind = "+a.add(cnd.Strings[0]))
+	}
+	if cnd, ok := q.Filter.Get("protected"); ok {
+		where = append(where, "v.protected = "+a.add(*cnd.Bool))
+	}
 	if cnd, ok := q.Filter.Get("createdAt"); ok {
 		if cnd.Gte != nil {
 			where = append(where, "v.created_at >= "+a.add(*cnd.Gte))
@@ -463,8 +474,8 @@ func (s *Service) versionsList(ctx context.Context, c *Call) (any, error) {
 	if ks != "" {
 		where = append(where, ks)
 	}
-	rows, err := s.DB.Query(ctx, `SELECT v.version, v.checksum, v.size_bytes, v.author, v.via, v.session_id, v.message, v.created_at
-		FROM document_versions v WHERE `+strings.Join(where, " AND ")+` ORDER BY `+orderBy(q.Sort, versionSortCols)+` LIMIT `+a.add(q.Limit+1), a...)
+	rows, err := s.DB.Query(ctx, `SELECT v.version, v.checksum, v.size_bytes, v.author, v.via, v.session_id, v.message, v.created_at,
+		v.kind, v.protected FROM document_versions v WHERE `+strings.Join(where, " AND ")+` ORDER BY `+orderBy(q.Sort, versionSortCols)+` LIMIT `+a.add(q.Limit+1), a...)
 	if err != nil {
 		return nil, err
 	}
@@ -472,15 +483,17 @@ func (s *Service) versionsList(ctx context.Context, c *Call) (any, error) {
 	var keys [][]any
 	for rows.Next() {
 		var version, size int
-		var checksum, author, via string
+		var checksum, author, via, kind string
 		var session, message *string
 		var at time.Time
-		if err := rows.Scan(&version, &checksum, &size, &author, &via, &session, &message, &at); err != nil {
+		var protected bool
+		if err := rows.Scan(&version, &checksum, &size, &author, &via, &session, &message, &at, &kind, &protected); err != nil {
 			rows.Close()
 			return nil, err
 		}
 		items = append(items, map[string]any{"version": version, "checksum": checksum, "sizeBytes": size, "author": author,
-			"via": via, "sessionId": strOrNil(session), "message": strOrNil(message), "createdAt": protocol.FormatTime(at)})
+			"via": via, "sessionId": strOrNil(session), "message": strOrNil(message), "createdAt": protocol.FormatTime(at),
+			"kind": kind, "protected": protected})
 		keys = append(keys, []any{int64(version)})
 	}
 	rows.Close()

@@ -75,6 +75,10 @@ var documentsSpec = &query.Spec{
 	Levers:          []string{"filter", "sort", "page", "fields", "include", "count"},
 }
 
+// documents.get also returns prunedVersionsCount: how many versions the history compaction
+// removed (docs/compactacion-historial-v1.md). Never to an external person.
+var documentGetFields = append(append([]string{}, documentFields...), "prunedVersionsCount")
+
 // documents.get accepts more includes than the list.
 var documentGetIncludes = []string{"content", "relations", "topics", "lock", "attachments"}
 
@@ -87,18 +91,20 @@ var searchSpec = &query.Spec{
 
 var versionsSpec = &query.Spec{
 	Name:       "documents.versions",
-	Base:       []string{"version", "checksum", "sizeBytes", "author", "via", "sessionId", "message", "createdAt"},
-	Fields:     []string{"version", "checksum", "sizeBytes", "author", "via", "sessionId", "message", "createdAt"},
-	Filterable: []string{"documentId", "author", "via", "createdAt"},
+	Base:       []string{"version", "checksum", "sizeBytes", "author", "via", "sessionId", "message", "createdAt", "kind", "protected"},
+	Fields:     []string{"version", "checksum", "sizeBytes", "author", "via", "sessionId", "message", "createdAt", "kind", "protected"},
+	Filterable: []string{"documentId", "author", "via", "createdAt", "kind", "protected"},
 	FilterableSpecs: map[string]query.FilterSpec{
 		"documentId": {Kind: query.KindString, ULID: true, Required: true},
 		"author":     {Kind: query.KindString, List: true},
 		"via":        {Kind: query.KindString, Enum: "via"},
 		"createdAt":  {Kind: query.KindDate, Range: true},
+		"kind":       {Kind: query.KindString, Enum: "kind"},
+		"protected":  {Kind: query.KindBoolean},
 	},
 	Sortable:    []string{"version"},
 	DefaultSort: []string{"-version"},
-	Enums:       map[string][]string{"via": {"human", "agent", "service"}},
+	Enums:       map[string][]string{"via": {"human", "agent", "service"}, "kind": {KindCreate, KindUpdate, KindRestore}},
 	Levers:      []string{"filter", "sort", "page"},
 	Key:         "version",
 }

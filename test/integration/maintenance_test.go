@@ -3,12 +3,14 @@ package integration
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/gravadigital/jiku-docs/internal/blob"
 	"github.com/gravadigital/jiku-docs/internal/protocol"
+	"github.com/gravadigital/jiku-docs/internal/service"
 	tu "github.com/gravadigital/jiku-docs/internal/testutil"
 )
 
@@ -43,11 +45,11 @@ func TestPurges(t *testing.T) {
 		t.Fatal(err)
 	}
 	svc.Now = func() time.Time { return time.Now().Add(2 * time.Hour) }
-	if n, err := svc.PurgeOrphans(ctx); err != nil || n != 1 {
-		t.Fatal(n, err)
+	if n := sweepOrphans(t, svc); n != 1 {
+		t.Fatal(n)
 	}
 	live := e.Doc(tu.User, f, "vivo.md", "vivo")
-	if n, _ := svc.PurgeOrphans(ctx); n != 0 {
+	if n := sweepOrphans(t, svc); n != 0 {
 		t.Fatalf("live versions are never orphans (%d)", n)
 	}
 	svc.Now = protocol.Now
@@ -122,5 +124,67 @@ func TestRelationReview(t *testing.T) {
 	}
 	if n, _ := e.Inst.Svc.ReviewRelations(ctx); n != 0 {
 		t.Fatal("second run has nothing to do")
+	}
+}
+
+// sweepOrphans runs a whole orphan sweep (what the janitor spreads over a week, a page per
+// minute) and returns the objects it deleted.
+func sweepOrphans(t *testing.T, svc *service.Service) int {
+	t.Helper()
+	ctx := context.Background()
+	if err := svc.StartOrphanSweep(ctx); err != nil {
+		t.Fatal(err)
+	}
+	total := 0
+	for i := 0; i < 100; i++ {
+		n, done, err := svc.PurgeOrphans(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		total += n
+		if done {
+			return total
+		}
+	}
+	t.Fatal("the sweep never ends")
+	return 0
+}
+
+// The orphan sweep is paginated: the cursor in service_state survives between pages, and an
+// object recorded in pruned_objects is left to the compaction.
+func TestOrphanSweepPaginated(t *testing.T) {
+	e := tu.NewEnv(t, tu.Options{NoJanitor: true})
+	ctx := context.Background()
+	svc := e.Inst.Svc
+	for i := 0; i < service.OrphanPage+5; i++ {
+		if err := e.Blob.Put(ctx, fmt.Sprintf("docs/HUERFANO/%04d.md", i), []byte("x"), "text/markdown"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := e.DB.Exec(ctx, `INSERT INTO pruned_objects (storage_key, document_id, version) VALUES ('docs/HUERFANO/0000.md', 'X', 2)`); err != nil {
+		t.Fatal(err)
+	}
+	svc.Now = func() time.Time { return time.Now().Add(2 * time.Hour) }
+	defer func() { svc.Now = protocol.Now }()
+	if n, done, err := svc.PurgeOrphans(ctx); n != 0 || !done || err != nil {
+		t.Fatalf("no sweep in progress: %d %v %v", n, done, err)
+	}
+	if err := svc.StartOrphanSweep(ctx); err != nil {
+		t.Fatal(err)
+	}
+	n, done, err := svc.PurgeOrphans(ctx)
+	if err != nil || done || n != service.OrphanPage-1 {
+		t.Fatalf("first page: %d %v %v", n, done, err)
+	}
+	var cursor string
+	if err := e.DB.QueryRow(ctx, `SELECT value->>'after' FROM service_state WHERE key = 'orphan_sweep'`).Scan(&cursor); err != nil ||
+		cursor != fmt.Sprintf("docs/HUERFANO/%04d.md", service.OrphanPage-1) {
+		t.Fatalf("cursor %q %v", cursor, err)
+	}
+	if rest := sweepOrphans(t, svc); rest != 5 {
+		t.Fatal(rest)
+	}
+	if _, err := e.Blob.Get(ctx, "docs/HUERFANO/0000.md", 0); err != nil {
+		t.Fatal("the object waiting in pruned_objects is not the sweep's")
 	}
 }

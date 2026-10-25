@@ -11,6 +11,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
+	"github.com/gravadigital/jiku-docs/internal/blob"
 	"github.com/gravadigital/jiku-docs/internal/coreapi"
 	"github.com/gravadigital/jiku-docs/internal/markdown"
 	"github.com/gravadigital/jiku-docs/internal/store"
@@ -213,53 +214,133 @@ func (s *Service) PurgeChangelog(ctx context.Context) (int64, error) {
 	return n, err
 }
 
-// PurgeOrphans deletes objects no metadata points to: document contents of failed transactions,
-// uploads without a row, and rendered share pages older than a day.
-func (s *Service) PurgeOrphans(ctx context.Context) (int, error) {
+// OrphanPage is how many objects one step of the orphan sweep examines.
+const OrphanPage = 1000
+
+// orphanPrefixes are swept in this order.
+var orphanPrefixes = []string{"docs/", "uploads/", "renders/"}
+
+const orphanSweepKey = "orphan_sweep"
+
+type orphanCursor struct {
+	Prefix string `json:"prefix"`
+	After  string `json:"after"`
+}
+
+// StartOrphanSweep begins a sweep of the bucket (weekly). A sweep already in progress goes on
+// from where it is.
+func (s *Service) StartOrphanSweep(ctx context.Context) error {
+	val, _ := json.Marshal(orphanCursor{Prefix: orphanPrefixes[0]})
+	_, err := s.DB.Exec(ctx, `INSERT INTO service_state (key, value, updated_at) VALUES ($1, $2, now()) ON CONFLICT (key) DO NOTHING`,
+		orphanSweepKey, val)
+	return err
+}
+
+// PurgeOrphans runs one page of the orphan sweep and reports whether the sweep finished (also
+// when none is in progress). It deletes objects no metadata points to: document contents of
+// failed transactions (versions removed by the history compaction go through pruned_objects
+// instead), uploads without a row, and rendered pages older than a day. The cursor lives in
+// service_state, so the sweep survives restarts and one page never takes long.
+func (s *Service) PurgeOrphans(ctx context.Context) (deleted int, done bool, err error) {
+	var raw []byte
+	err = s.DB.QueryRow(ctx, `SELECT value FROM service_state WHERE key = $1`, orphanSweepKey).Scan(&raw)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return 0, true, nil
+	}
+	if err != nil {
+		return 0, false, err
+	}
+	var cur orphanCursor
+	if err := json.Unmarshal(raw, &cur); err != nil || cur.Prefix == "" {
+		cur = orphanCursor{Prefix: orphanPrefixes[0]}
+	}
 	now := s.now()
-	n := 0
-	err := s.Blob.List(ctx, "docs/", func(key string, modified time.Time) error {
-		if now.Sub(modified) < OrphanGrace {
-			return nil
-		}
-		var used bool
-		if err := s.DB.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM document_versions WHERE storage_key = $1)`, key).Scan(&used); err != nil {
-			return err
-		}
-		if !used {
-			n++
-			return s.Blob.Delete(ctx, key)
+	type obj struct {
+		key      string
+		modified time.Time
+	}
+	var page []obj
+	err = s.Blob.ListFrom(ctx, cur.Prefix, cur.After, func(key string, modified time.Time) error {
+		page = append(page, obj{key, modified})
+		if len(page) >= OrphanPage {
+			return blob.ErrStopList
 		}
 		return nil
 	})
 	if err != nil {
-		return n, err
+		return 0, false, err
 	}
-	err = s.Blob.List(ctx, "uploads/", func(key string, modified time.Time) error {
-		if now.Sub(modified) < UploadTTL+OrphanGrace {
-			return nil
+	keys := make([]string, len(page))
+	for i, o := range page {
+		keys[i] = o.key
+	}
+	used := map[string]bool{}
+	var usedSQL string
+	switch cur.Prefix {
+	case "docs/":
+		usedSQL = `SELECT storage_key FROM document_versions WHERE storage_key = ANY($1)
+			UNION SELECT storage_key FROM pruned_objects WHERE storage_key = ANY($1)`
+	case "uploads/":
+		usedSQL = `SELECT storage_key FROM content_uploads WHERE storage_key = ANY($1)`
+	}
+	if usedSQL != "" && len(keys) > 0 {
+		rows, err := s.DB.Query(ctx, usedSQL, keys)
+		if err != nil {
+			return 0, false, err
 		}
-		var used bool
-		if err := s.DB.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM content_uploads WHERE storage_key = $1)`, key).Scan(&used); err != nil {
-			return err
+		for rows.Next() {
+			var k string
+			if err := rows.Scan(&k); err != nil {
+				rows.Close()
+				return 0, false, err
+			}
+			used[k] = true
 		}
-		if !used {
-			n++
-			return s.Blob.Delete(ctx, key)
+		rows.Close()
+		if err := rows.Err(); err != nil {
+			return 0, false, err
 		}
-		return nil
-	})
+	}
+	var orphans []string
+	for _, o := range page {
+		age := now.Sub(o.modified)
+		switch cur.Prefix {
+		case "docs/":
+			if age >= OrphanGrace && !used[o.key] {
+				orphans = append(orphans, o.key)
+			}
+		case "uploads/":
+			if age >= UploadTTL+OrphanGrace && !used[o.key] {
+				orphans = append(orphans, o.key)
+			}
+		case "renders/":
+			if age > RenderRetention {
+				orphans = append(orphans, o.key)
+			}
+		}
+	}
+	gone, err := s.Blob.DeleteMany(ctx, orphans)
 	if err != nil {
-		return n, err
+		return len(gone), false, err
 	}
-	err = s.Blob.List(ctx, "renders/", func(key string, modified time.Time) error {
-		if now.Sub(modified) > RenderRetention {
-			n++
-			return s.Blob.Delete(ctx, key)
+	next := cur
+	if len(page) < OrphanPage {
+		next = orphanCursor{}
+		for i, p := range orphanPrefixes {
+			if p == cur.Prefix && i+1 < len(orphanPrefixes) {
+				next = orphanCursor{Prefix: orphanPrefixes[i+1]}
+			}
 		}
-		return nil
-	})
-	return n, err
+	} else {
+		next.After = page[len(page)-1].key
+	}
+	if next.Prefix == "" {
+		_, err = s.DB.Exec(ctx, `DELETE FROM service_state WHERE key = $1`, orphanSweepKey)
+		return len(gone), err == nil, err
+	}
+	val, _ := json.Marshal(next)
+	_, err = s.DB.Exec(ctx, `UPDATE service_state SET value = $2, updated_at = now() WHERE key = $1`, orphanSweepKey, val)
+	return len(gone), false, err
 }
 
 // fresh is implemented by the cached core client: the review must see deletions immediately.

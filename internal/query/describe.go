@@ -41,6 +41,7 @@ var enumLabels = map[string]string{
 	"latest": "Última versión", "pinned": "Versión fija",
 	"active": "Activo", "revoked": "Revocado", "expired": "Vencido",
 	"role": "Rol", "user": "Usuario",
+	"create": "Creación", "update": "Edición", "restore": "Restauración",
 }
 
 // Describe projects a spec. It reads the very structures the validator reads.

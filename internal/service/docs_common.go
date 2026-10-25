@@ -34,15 +34,18 @@ type docRow struct {
 	UpdatedBy     string
 	UpdatedAt     time.Time
 	DeletedAt     *time.Time
+	// PrunedVersions is how many versions the history compaction removed.
+	PrunedVersions int
 }
 
 const docCols = `d.id, d.folder_id, d.file_name, d.path, d.title, d.visibility, d.current_version, d.checksum,
-	d.size_bytes, d.secret_warning, d.created_by, d.created_at, d.updated_by, d.updated_at, d.deleted_at`
+	d.size_bytes, d.secret_warning, d.created_by, d.created_at, d.updated_by, d.updated_at, d.deleted_at,
+	d.pruned_versions_count`
 
 func scanDoc(row pgx.Row) (*docRow, error) {
 	d := &docRow{}
 	err := row.Scan(&d.ID, &d.FolderID, &d.FileName, &d.Path, &d.Title, &d.Visibility, &d.Version, &d.Checksum,
-		&d.Size, &d.SecretWarning, &d.CreatedBy, &d.CreatedAt, &d.UpdatedBy, &d.UpdatedAt, &d.DeletedAt)
+		&d.Size, &d.SecretWarning, &d.CreatedBy, &d.CreatedAt, &d.UpdatedBy, &d.UpdatedAt, &d.DeletedAt, &d.PrunedVersions)
 	if err != nil {
 		return nil, err
 	}

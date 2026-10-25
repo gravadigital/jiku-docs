@@ -6,12 +6,15 @@
 //	jiku-docs reindex              rebuild the full-text index
 //	jiku-docs module deregister    delete the `docs` key of JIKU_MODULES (uninstall)
 //	jiku-docs import hedgedoc ...  import notes from a HedgeDoc database
+//	jiku-docs history compact      compact the version history now (--document, --dry-run)
 //	jiku-docs version
 package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"flag"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -20,6 +23,7 @@ import (
 	"strings"
 	"syscall"
 	"time"
+	_ "time/tzdata" // DOCS_HISTORY_TIMEZONE works on an image without zoneinfo
 
 	"github.com/gravadigital/jiku-go"
 	"github.com/gravadigital/jiku-go/auth"
@@ -34,6 +38,7 @@ import (
 	"github.com/gravadigital/jiku-docs/internal/indexer"
 	"github.com/gravadigital/jiku-docs/internal/logging"
 	"github.com/gravadigital/jiku-docs/internal/metrics"
+	"github.com/gravadigital/jiku-docs/internal/protocol"
 	"github.com/gravadigital/jiku-docs/internal/registry"
 	"github.com/gravadigital/jiku-docs/internal/service"
 	"github.com/gravadigital/jiku-docs/internal/store"
@@ -73,6 +78,12 @@ func main() {
 			break
 		}
 		err = importHedgeDoc(ctx, cfg, log, args[1:])
+	case "history":
+		if len(args) == 0 || args[0] != "compact" {
+			err = errors.New("usage: jiku-docs history compact [--document <id>] [--dry-run]")
+			break
+		}
+		err = historyCompact(ctx, cfg, log, args[1:])
 	case "storage":
 		if len(args) != 1 || args[0] != "init" {
 			err = errors.New("usage: jiku-docs storage init")
@@ -101,6 +112,8 @@ const usage = `jiku-docs — módulo de documentación de Jiku
   jiku-docs reindex             regenera el índice de búsqueda completo
   jiku-docs module deregister   borra la clave docs de JIKU_MODULES (desinstalar)
   jiku-docs import hedgedoc     importa notas de HedgeDoc (--help para las opciones)
+  jiku-docs history compact     compacta el historial de versiones ahora
+                                [--document <id>] [--dry-run]
   jiku-docs storage init        crea el bucket de contenido con versionado y ciclo de vida (idempotente)
   jiku-docs healthcheck          consulta /readyz del proceso local (para el HEALTHCHECK de Docker)
   jiku-docs version
@@ -201,6 +214,10 @@ func serve(ctx context.Context, cfg config.Config, log *slog.Logger) error {
 	if err := cfg.ValidateServe(); err != nil {
 		return err
 	}
+	history, err := historyPolicy(cfg)
+	if err != nil {
+		return err
+	}
 	pool, err := openDB(ctx, cfg, log, true)
 	if err != nil {
 		return err
@@ -227,6 +244,7 @@ func serve(ctx context.Context, cfg config.Config, log *slog.Logger) error {
 		},
 		Indexer: cfg.IndexerEnabled, Janitor: cfg.JanitorEnabled, Outbox: cfg.OutboxEnabled, Register: true,
 		ReviewHour: cfg.RelationReviewHour,
+		History:    history, HistoryEnabled: cfg.HistoryCompactionEnabled, HistoryHour: cfg.HistoryCompactionHour,
 	})
 	if err != nil {
 		return err
@@ -352,6 +370,70 @@ func importHedgeDoc(ctx context.Context, cfg config.Config, log *slog.Logger, ar
 		WebURL: cfg.WebURL, PublicURL: cfg.PublicURL, SecretKey: cfg.SecretKey,
 	})
 	return hedgedoc.Run(ctx, opts, svc, log)
+}
+
+func historyPolicy(cfg config.Config) (service.HistoryPolicy, error) {
+	loc, err := cfg.ValidateHistory()
+	if err != nil {
+		return service.HistoryPolicy{}, err
+	}
+	return service.HistoryPolicy{KeepAll: cfg.HistoryKeepAll, KeepBlocks: cfg.HistoryKeepBlocks, BlockGap: cfg.HistoryBlockGap,
+		Location: loc, BatchSize: cfg.HistoryBatchSize, DeleteBatch: cfg.HistoryS3DeleteBatch}, nil
+}
+
+// historyCompact runs the compaction on demand: the base and the bucket, no bus. With
+// --dry-run it prints what it would remove (one JSON line per document) and touches nothing.
+// If the daily run (or another manual one) holds the lock, it says so and exits with an error.
+func historyCompact(ctx context.Context, cfg config.Config, log *slog.Logger, args []string) error {
+	fs := flag.NewFlagSet("history compact", flag.ContinueOnError)
+	doc := fs.String("document", "", "compactar solo este documento (ULID), tenga o no actividad nueva")
+	dry := fs.Bool("dry-run", false, "informar qué borraría, sin borrar filas ni objetos")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if fs.NArg() > 0 {
+		return fmt.Errorf("unexpected arguments: %v", fs.Args())
+	}
+	if *doc != "" && !protocol.IsULID(*doc) {
+		return fmt.Errorf("--document must be a ULID, got %q", *doc)
+	}
+	policy, err := historyPolicy(cfg)
+	if err != nil {
+		return err
+	}
+	pool, err := openDB(ctx, cfg, log, true)
+	if err != nil {
+		return err
+	}
+	defer pool.Close()
+	bs, err := openBlob(cfg)
+	if err != nil {
+		return err
+	}
+	svc := service.New(pool, bs, nil, log, service.Settings{Instance: cfg.Instance, ServiceName: cfg.ServiceName})
+	svc.History = policy
+	rep, err := svc.CompactHistory(ctx, service.HistoryOptions{DocumentID: *doc, DryRun: *dry})
+	if err != nil {
+		return err
+	}
+	if rep.Skipped {
+		return service.ErrCompactionBusy
+	}
+	if *dry {
+		enc := json.NewEncoder(os.Stdout)
+		for _, p := range rep.Plans {
+			if err := enc.Encode(p); err != nil {
+				return err
+			}
+		}
+	}
+	fmt.Printf("documents=%d versionsPruned=%d bytesFreed=%d objectsDeleted=%d objectsPending=%d errors=%d dryRun=%v duration=%s\n",
+		rep.Documents, rep.VersionsPruned, rep.BytesFreed, rep.ObjectsDeleted, rep.ObjectsPending, rep.Errors, rep.DryRun,
+		rep.Duration.Round(time.Millisecond))
+	if rep.Errors > 0 {
+		return fmt.Errorf("%d documents failed (see the log)", rep.Errors)
+	}
+	return nil
 }
 
 // healthcheck asks the local process for readiness; used by Docker, where the image has no shell.

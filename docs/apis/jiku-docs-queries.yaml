@@ -1,7 +1,7 @@
 asyncapi: 3.0.0
 info:
   title: jiku-docs — consultas
-  version: 1.1.0
+  version: 1.2.0
   description: |
     Plano de lectura de jiku-docs (servicio NATS micro `jiku-docs-queries`).
     Misma gramática que `jiku-queries` de core: filter / sort / page / fields / include / count.
@@ -34,6 +34,21 @@ info:
       identifica la versión guardada (archivo completo): para un externo sirve para detectar cambios,
       no para verificar el contenido recibido. Los snippets de `documents.search` nunca incluyen
       frontmatter.
+
+    Compactación del historial (1.2.0, docs/compactacion-historial-v1.md):
+    - Un proceso diario borra versiones intermedias viejas: la numeración de
+      `documents.versions.list` puede tener huecos. Cada versión trae `kind` (`create`, `update`,
+      `restore`; mover no crea versión) y `protected` (protección permanente: creación,
+      restauración, con `message` o de `via: service`). La versión actual y las fijadas por un link
+      `pinned` activo tampoco se borran, aunque `protected` sea `false`. Filtros nuevos: `kind` y
+      `protected`.
+    - `documents.get` con una `version` compactada responde `version_pruned` con `errorDetails`
+      `{ requestedVersion, previousAvailable, nextAvailable }` (las conservadas más cercanas, o
+      `null`). Una versión mayor que la actual sigue siendo `document_not_found`.
+    - Un `person-external` nunca recibe `version_pruned`: cualquier versión que no sea la actual es
+      `document_not_found`, sin `errorDetails`.
+    - `documents.get` devuelve `prunedVersionsCount` (cuántas versiones se compactaron) como campo
+      base; a un externo no se le devuelve.
 defaultContentType: application/json
 
 servers:
@@ -71,14 +86,14 @@ channels:
       reply: { payload: { $ref: '#/components/schemas/ReplyDocumentPage' } }
   documents.get:
     address: '{instance}.{userId}.jiku-docs-queries.v1.documents.get'
-    description: Un externo solo lee la versión actual; otra `version` responde document_not_found (puede ser de antes de publicarlo).
+    description: Un externo solo lee la versión actual; otra `version` responde document_not_found sin errorDetails (puede ser de antes de publicarlo). A un interno, una versión compactada responde version_pruned.
     parameters: *p
     messages:
       request: { payload: { $ref: '#/components/schemas/DocumentsGetQuery' } }
       reply: { payload: { $ref: '#/components/schemas/ReplyDocument' } }
   documents.versions.list:
     address: '{instance}.{userId}.jiku-docs-queries.v1.documents.versions.list'
-    description: A un externo solo se le lista la versión actual.
+    description: A un externo solo se le lista la versión actual. La numeración puede tener huecos (versiones compactadas).
     parameters: *p
     messages:
       request: { payload: { $ref: '#/components/schemas/VersionsListQuery' } }
@@ -134,7 +149,7 @@ operations:
   foldersList:       { action: receive, channel: { $ref: '#/channels/folders.list' },            reply: { channel: { $ref: '#/channels/folders.list' } },            x-error-codes: [invalid_fields, invalid_cursor, query_timeout] }
   foldersGet:        { action: receive, channel: { $ref: '#/channels/folders.get' },             reply: { channel: { $ref: '#/channels/folders.get' } },             x-error-codes: [invalid_fields, folder_not_found, permission_denied] }
   documentsList:     { action: receive, channel: { $ref: '#/channels/documents.list' },          reply: { channel: { $ref: '#/channels/documents.list' } },          x-error-codes: [invalid_fields, invalid_cursor, query_timeout, upstream_unavailable] }
-  documentsGet:      { action: receive, channel: { $ref: '#/channels/documents.get' },           reply: { channel: { $ref: '#/channels/documents.get' } },           x-error-codes: [invalid_fields, document_not_found] }
+  documentsGet:      { action: receive, channel: { $ref: '#/channels/documents.get' },           reply: { channel: { $ref: '#/channels/documents.get' } },           x-error-codes: [invalid_fields, document_not_found, version_pruned] }
   versionsList:      { action: receive, channel: { $ref: '#/channels/documents.versions.list' }, reply: { channel: { $ref: '#/channels/documents.versions.list' } }, x-error-codes: [invalid_fields, invalid_cursor, document_not_found] }
   documentsSearch:   { action: receive, channel: { $ref: '#/channels/documents.search' },        reply: { channel: { $ref: '#/channels/documents.search' } },        x-error-codes: [invalid_fields, query_timeout, upstream_unavailable, semantic_search_not_configured] }
   documentsChanges:  { action: receive, channel: { $ref: '#/channels/documents.changes' },       reply: { channel: { $ref: '#/channels/documents.changes' } },       x-error-codes: [invalid_fields, invalid_cursor] }
@@ -296,6 +311,8 @@ components:
             author: { $ref: '#/components/schemas/StrOrList' }
             via: { type: string, enum: [human, agent, service] }
             createdAt: { $ref: '#/components/schemas/DateRange' }
+            kind: { type: string, enum: [create, update, restore] }
+            protected: { type: boolean, description: 'Protección permanente (columna protected).' }
         sort: { type: array, items: { type: string, enum: [version, -version] } }
         page: { $ref: '#/components/schemas/Page' }
     SearchQuery:
@@ -395,6 +412,7 @@ components:
         updatedAt: { type: string, format: date-time }
         updatedBy: { type: string }
         deletedAt: { type: [string, 'null'], format: date-time }
+        prunedVersionsCount: { type: integer, minimum: 0, description: 'Solo documents.get, campo base (nunca a un externo): cuántas versiones borró la compactación del historial.' }
         content: { type: string, description: 'Solo con include content y tamaño <= 256 KiB.' }
         contentUrl: { type: string, format: uri, description: 'En lugar de content si supera 256 KiB. Vence a los 300 s.' }
         relations: { $ref: '#/components/schemas/Relations' }
@@ -412,6 +430,8 @@ components:
         sessionId: { type: [string, 'null'] }
         message: { type: [string, 'null'] }
         createdAt: { type: string, format: date-time }
+        kind: { type: string, enum: [create, update, restore], description: 'Origen de la versión. Mover un documento no crea versión.' }
+        protected: { type: boolean, description: 'Protección permanente: creación, restauración, con message o via service. La compactación nunca la borra. La versión actual y las fijadas por un link pinned activo tampoco se borran aunque valga false.' }
     SearchHit:
       type: object
       properties:
@@ -511,7 +531,7 @@ components:
       required: [status, errorCode, errorMessage]
       properties:
         status: { const: failure }
-        errorCode: { type: string, examples: [invalid_fields, invalid_cursor, document_not_found, folder_not_found, share_not_found, permission_denied, query_timeout, unknown_caller, caller_not_authorized, upstream_unavailable, internal_error] }
+        errorCode: { type: string, examples: [invalid_fields, invalid_cursor, document_not_found, version_pruned, folder_not_found, share_not_found, permission_denied, query_timeout, unknown_caller, caller_not_authorized, upstream_unavailable, internal_error] }
         errorMessage: { type: string }
         errorDetails: { type: object }
     ReplyAny:

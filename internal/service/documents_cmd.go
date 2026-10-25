@@ -9,6 +9,7 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"github.com/gravadigital/jiku-docs/internal/acl"
+	"github.com/gravadigital/jiku-docs/internal/blob"
 	"github.com/gravadigital/jiku-docs/internal/protocol"
 	"github.com/gravadigital/jiku-docs/internal/store"
 	"github.com/gravadigital/jiku-docs/internal/validate"
@@ -165,7 +166,7 @@ func (s *Service) CreateDocument(ctx context.Context, c *Call, in NewDocument) (
 		if err != nil {
 			return err
 		}
-		if err := insertVersion(ctx, tx, versionInput{docID: in.ID, version: 1, key: key, p: p, author: c.Caller.ID,
+		if err := insertVersion(ctx, tx, versionInput{docID: in.ID, kind: KindCreate, version: 1, key: key, p: p, author: c.Caller.ID,
 			via: via, message: in.Message, at: created}); err != nil {
 			return err
 		}
@@ -288,7 +289,7 @@ func (s *Service) UpdateDocument(ctx context.Context, c *Call, id string, base i
 			return err
 		}
 		now := s.now()
-		if err := insertVersion(ctx, tx, versionInput{docID: id, version: newVersion, key: key, p: p, author: c.Caller.ID,
+		if err := insertVersion(ctx, tx, versionInput{docID: id, kind: KindUpdate, version: newVersion, key: key, p: p, author: c.Caller.ID,
 			via: via, sessionID: sessionID, message: message, at: now}); err != nil {
 			return err
 		}
@@ -527,12 +528,16 @@ func (s *Service) documentsRestore(ctx context.Context, c *Call) (any, error) {
 	var srcKey string
 	err = s.DB.QueryRow(ctx, `SELECT storage_key FROM document_versions WHERE document_id = $1 AND version = $2`, id, from).Scan(&srcKey)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return nil, protocol.Ef(protocol.CodeDocumentNotFound, "La versión %d no existe", from).With("version", from)
+		return nil, missingVersion(ctx, s.DB, id, cur.Version, int(from))
 	}
 	if err != nil {
 		return nil, err
 	}
 	raw, err := s.Blob.Get(ctx, srcKey, MaxDocumentBytes)
+	if errors.Is(err, blob.ErrNotFound) {
+		// The compaction removed it between the read of the row and the read of the object.
+		return nil, missingVersion(ctx, s.DB, id, cur.Version, int(from))
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -575,6 +580,16 @@ func (s *Service) documentsRestore(ctx context.Context, c *Call) (any, error) {
 		if int(base) != d.Version {
 			return protocol.E(protocol.CodeVersionConflict).With("currentVersion", d.Version)
 		}
+		// With the row locked the compaction cannot run: if the version is still there now, the
+		// content read above is that version's.
+		var still bool
+		if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM document_versions WHERE document_id = $1 AND version = $2)`,
+			id, from).Scan(&still); err != nil {
+			return err
+		}
+		if !still {
+			return missingVersion(ctx, tx, id, d.Version, int(from))
+		}
 		if p.fm.Visibility == "public" && d.Visibility != "public" && perm < acl.Manage {
 			return protocol.Ef(protocol.CodePermissionDenied, "Marcar un documento como público exige permiso de administración sobre la carpeta")
 		}
@@ -592,7 +607,7 @@ func (s *Service) documentsRestore(ctx context.Context, c *Call) (any, error) {
 			return err
 		}
 		now := s.now()
-		if err := insertVersion(ctx, tx, versionInput{docID: id, version: newVersion, key: key, p: p, author: c.Caller.ID,
+		if err := insertVersion(ctx, tx, versionInput{docID: id, kind: KindRestore, version: newVersion, key: key, p: p, author: c.Caller.ID,
 			via: c.Caller.DefaultVia(""), message: message, at: now}); err != nil {
 			return err
 		}

@@ -234,8 +234,17 @@ func (s *Service) sharesNew(ctx context.Context, c *Call) (any, error) {
 		if !expiresAt.After(now) || expiresAt.After(now.Add(ShareMaxTTL+time.Minute)) {
 			return protocol.E(protocol.CodeShareExpiryInvalid).With("maxDays", 180)
 		}
-		if mode == "pinned" && int(version) > d.Version {
-			return protocol.Ef(protocol.CodeDocumentNotFound, "La versión %d no existe", version).With("version", version)
+		if mode == "pinned" {
+			// The document row is locked: the compaction cannot remove the version until the share
+			// exists, and from then on the share protects it.
+			var exists bool
+			if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM document_versions WHERE document_id = $1 AND version = $2)`,
+				docID, version).Scan(&exists); err != nil {
+				return err
+			}
+			if !exists {
+				return missingVersion(ctx, tx, docID, d.Version, int(version))
+			}
 		}
 		if d.SecretWarning && !ack {
 			return protocol.E(protocol.CodeSecretWarningNotAcked)
