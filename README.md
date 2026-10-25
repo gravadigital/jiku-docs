@@ -218,6 +218,11 @@ Los tests de integración levantan PostgreSQL 16 y MinIO con testcontainers (con
 core, y validan **cada** pedido, respuesta, evento y notificación contra `docs/apis/`. Los tests de contrato
 verifican además que las fichas de recursos (las que alimentan `meta.describe`) coinciden con el YAML.
 
+`test/e2e/local-bus.sh` recorre el módulo de punta a punta por el bus real, con el stack local levantado y
+el CLI `jiku` de jiku-go como admin, user y external-user (árbol y ACL, documentos, permisos, locks,
+búsqueda, adjuntos, links, feed, sync y logs; `E2E_DISRUPTIVE=1` suma módulo caído y deregister). Las
+variables y sus defaults están en su encabezado.
+
 `jiku-go` se usa en su versión publicada (`v1.3.0`, desde el proxy de Go); no hace falta ningún `replace`.
 
 CI (`.github/workflows/`): `ci.yml` (build, vet, lint, tests, `docker build`), `dev-images.yml` (imagen
