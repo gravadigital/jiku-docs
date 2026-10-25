@@ -20,6 +20,12 @@ Estados:
 | 9 | Documentos de más de 256 KiB: no se pueden crear ni editar desde la web, que no tiene subida por URL | Informe de REQ-016 | a confirmar |
 | 10 | **Bug JIKU-WEB-1:** el visor interno (`/docs/{id}`) muestra el frontmatter como texto. La UX (`docs/ux/surfaces/web/screens/documento.md:160`) dice que no se muestra, y `MarkdownViewer mode="document"` no lo quita. Propuesta: quitarlo antes de renderizar, como opus-web con `stripFrontmatter` | e2e en navegador con usuario humano | a confirmar (recomendado) |
 | 11 | **Bug JIKU-WEB-2:** "Crear y editar" en "Nuevo documento" deja `/docs/{id}?editar=1` con el botón Editar en spinner y nunca toma el lock. Se reprodujo 5 de 5 veces; con recarga completa funciona. Causa probable: carrera entre `onClose()` + `router.push` en `NewDocumentDialog` y el efecto de `DocumentView` (`router.replace` + `session.start`) | e2e en navegador con usuario humano | a confirmar (recomendado) |
+| 13 | web, detalle de requisito: la tabla de la card "Documentación" desborda la card y corta la columna Ruta a 1440 px | Relevamiento de capturas | a confirmar |
+| 14 | web, detalle de requisito: las pills de estado, tipo y prioridad se anuncian las tres como "Estado: …" en lectores de pantalla | Relevamiento de capturas | a confirmar |
+| 15 | web, listado de tareas: una tarea muestra "Vencido hace: 32666 día(s)" (fecha inválida o nula) | Relevamiento de capturas | a confirmar |
+| 16 | 404 de web y opus-web: es la página por defecto de Next.js, sin estilos ni navegación | Relevamiento de capturas | a confirmar |
+| 17 | opus-web a 390 px: sin navegación ni "Nuevo requisito"; la vista Columnas se ignora; tocar una card abre la página en lugar del modal | Relevamiento de capturas | a confirmar |
+| 18 | opus-web: el externo que abre un requisito interno ve "Error al cargar el requisito" con "Reintentar", sin header ni explicación | Relevamiento de capturas | a confirmar |
 | 12 | La web muestra "por otra persona" en el lock cuando el que edita es el propio usuario o el servicio, porque `persons` no resuelve esos ids | e2e en navegador | a confirmar |
 
 ## Pedidos del dueño
