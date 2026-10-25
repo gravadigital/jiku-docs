@@ -17,7 +17,7 @@ copian a otro repo.
 
 ## D-1. Identidad del servicio: rol `docs` + `internal-app`
 
-- El machine user `jiku_docs` (userId `396551947454251010`) tiene **dos roles** en Zitadel: `internal-app`
+- El machine user `jiku_docs` (userId `396604660191854594`) tiene **dos roles** en Zitadel: `internal-app`
   y `docs`.
 - **core no cambia por esto.** Para core es un `internal-app` más: clase `connector` (sin recorte de filas),
   `identity_type = service`, `queries: ALL`, `commands: ALL`. El rol `docs` es desconocido para core y se
@@ -115,7 +115,7 @@ copian a otro repo.
 
 | Archivo | Rol | userId |
 | --- | --- | --- |
-| `jiku_docs.service_user.json` | `internal-app` + `docs` | `396551947454251010` |
+| `jiku_docs.service_user.json` | `internal-app` + `docs` | `396604660191854594` |
 | `testing_admin.service_user.json` | `admin` | `396554146460729346` |
 | `testing_user.service_user.json` | `user` | `396554027241832450` |
 | `testing_external_user.service_user.json` | `external-user` | `396554218317545474` |
