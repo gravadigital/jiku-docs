@@ -81,6 +81,7 @@ Un proceso del propio servicio `jiku-docs` corre una vez por día, procesa docum
 - Corre una vez por día a partir de la hora configurada (`DOCS_HISTORY_COMPACTION_HOUR`, default 3) en la zona configurada, con el mismo mecanismo que las demás tareas periódicas del servicio (`JobDue` sobre `service_state`). Si hay varias réplicas del servicio, solo una ejecuta: toma un advisory lock de PostgreSQL (`pg_try_advisory_lock`) y las demás lo saltean.
 - Procesa solo documentos con actividad nueva desde su última compactación: `documents.updated_at > documents.last_compacted_at`, o documentos con un link compartido fijado que venció o se revocó desde entonces.
 - Recorre los documentos en lotes (default 100), ordenados por `id`, para poder retomar donde quedó si se corta.
+- **Nota de implementación (2026-10-25, a confirmar):** además de los dos casos anteriores, la implementación procesa los documentos sin actividad nueva que tienen alguna versión no protegida que cruzó un umbral de la política (24 h o 30 días) desde su última compactación. Sin esto, la sesión de edición del día anterior a la corrida (todas sus versiones tienen menos de 24 h al compactar) quedaría entera para siempre si nadie vuelve a editar el documento. Un documento cuyas versiones no cruzaron ningún umbral sigue sin procesarse (caso 11).
 - También se puede ejecutar a demanda con un comando de mantenimiento: `jiku-docs history compact [--document <id>] [--dry-run]`. Con `--dry-run` informa qué borraría sin borrar nada.
 
 ### Algoritmo por documento
@@ -175,7 +176,7 @@ La protección por link compartido fijado no se guarda en la columna: se calcula
 ### Storage
 
 - Los objetos de versiones compactadas se borran de `jiku-docs-content` (sección 3).
-- El versionado del bucket se mantiene como red de seguridad, con una regla de ciclo de vida que expira las versiones no actuales de objetos a los 7 días. **A verificar:** que DigitalOcean Spaces soporte `NoncurrentVersionExpiration` (MinIO, en local, lo soporta). Si no lo soporta, definir otra red de seguridad antes de activar la compactación en producción. Así, un borrado por error de la compactación se puede recuperar durante una semana, y el espacio se libera de verdad pasado ese plazo.
+- El versionado del bucket se mantiene como red de seguridad, con una regla de ciclo de vida que expira las versiones no actuales de objetos a los 7 días. **A verificar:** que DigitalOcean Spaces soporte `NoncurrentVersionExpiration` (MinIO, en local, lo soporta). Si no lo soporta, definir otra red de seguridad antes de activar la compactación en producción. Estado al 2026-10-25: la documentación pública de Spaces no lo confirma ni lo descarta (ver README, sección "Bucket y ciclo de vida"); `jiku-docs storage init` aplica la regla, la relee y avisa si el proveedor no la guardó. Así, un borrado por error de la compactación se puede recuperar durante una semana, y el espacio se libera de verdad pasado ese plazo.
 - El respaldo diario de la base no cambia. Restaurar un backup anterior a una compactación deja filas apuntando a objetos que pueden haberse borrado hace más de 7 días; el proceso de restauración debe verificar los objetos y descartar las filas sin objeto.
 
 ## 5. Cambios en contratos y en jiku-go

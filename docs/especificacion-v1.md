@@ -94,7 +94,7 @@ Sigue el mismo patrón que `core`: no tiene HTTP propio, atiende request/reply e
 
 ### Decisiones de diseño
 
-1. **El storage es la fuente de verdad del contenido; Postgres la de los metadatos.** Cada versión es un objeto inmutable en S3. El índice es derivado y se puede regenerar.
+1. **El storage es la fuente de verdad del contenido; Postgres la de los metadatos.** Cada versión es un objeto inmutable en S3 hasta que la compactación la elimina (política de retención del historial: [`compactacion-historial-v1.md`](compactacion-historial-v1.md)). El índice es derivado y se puede regenerar.
 2. **El frontmatter es la fuente de verdad de las relaciones, temas y visibilidad.** Se parsea en cada escritura. Así un documento editado localmente puede vincularse a un proyecto sin usar otra herramienta.
 3. **La identidad la pone el subject.** `jiku-docs` no valida tokens; confía en el auth-callout, igual que `core`.
 4. **Los comandos son idempotentes.** Ids generados por el cliente (ULID) y versión base obligatoria en las modificaciones.
@@ -315,6 +315,7 @@ Se decide siempre por `errorCode`; `errorMessage` es texto en español para la i
 | `document_not_found` / `folder_not_found` / `attachment_not_found` | No existe o no es visible | No |
 | `permission_denied` | Se puede leer pero no escribir o administrar | No |
 | `version_conflict` | `baseVersion` distinta de la actual. `errorDetails.currentVersion` | Releer, combinar y reintentar |
+| `version_pruned` | Se pide (`documents.get` con `version`), restaura (`restore`) o fija (`shares.new` con `mode: pinned`) una versión que la compactación del historial borró. `errorDetails`: `requestedVersion`, `previousAvailable` y `nextAvailable` (las conservadas más cercanas, o `null`). Un `person-external` nunca lo recibe: para él cualquier versión que no sea la actual es `document_not_found` sin `errorDetails`. Ver [`compactacion-historial-v1.md`](compactacion-historial-v1.md) | Pedir una de las versiones conservadas |
 | `document_locked` | Otra sesión tiene el lock. `errorDetails`: `holder`, `via`, `expiresAt` | Esperar o pedir liberación |
 | `lock_not_held` | La sesión no tiene el lock que intenta renovar o liberar | Volver a tomarlo |
 | `already_exists` | Un `id` de cliente ya usado con otro contenido, o nombre de archivo repetido en la carpeta | No |
@@ -441,8 +442,8 @@ Notas:
 | `folders.list` | Navegar el árbol | `filter`: `parentId`, `pathPrefix`, `id[]`; `include`: `effectivePermission` |
 | `folders.get` | Detalle de una carpeta | `id`; `include`: `acl` (solo con `manage`), `effectivePermission` |
 | `documents.list` | Catálogo filtrable | ver filtros abajo |
-| `documents.get` | Documento con su contenido | `id`, `version?`; `include`: `content`, `relations`, `topics`, `lock`, `attachments` |
-| `documents.versions.list` | Historial | `documentId`; orden por `version` |
+| `documents.get` | Documento con su contenido | `id`, `version?`; `include`: `content`, `relations`, `topics`, `lock`, `attachments`. Trae `prunedVersionsCount` (no a externos); una `version` compactada responde `version_pruned` |
+| `documents.versions.list` | Historial (con huecos en la numeración por la compactación) | `documentId`, `author`, `via`, `createdAt`, `kind`, `protected`; orden por `version`. Cada versión trae `kind` (`create`, `update`, `restore`) y `protected` |
 | `documents.search` | Búsqueda por texto completo | `query`, `mode`, `filter`, `limit` |
 | `documents.changes` | Feed de cambios para reconciliar | `sinceSeq`, `limit`, `filter.pathPrefix?` |
 | `topics.list` | Temas en uso, con cantidad de documentos | `filter.prefix?` |
@@ -937,11 +938,34 @@ CREATE INDEX share_accesses_share ON share_accesses (share_id, accessed_at DESC)
 
 Los registros de `share_accesses` se conservan 180 días.
 
+Compactación del historial (migración `0003`, [`compactacion-historial-v1.md`](compactacion-historial-v1.md), sección 4):
+
+```sql
+ALTER TABLE document_versions
+  ADD COLUMN kind text NOT NULL DEFAULT 'update' CHECK (kind IN ('create','update','restore')),
+  ADD COLUMN protected boolean NOT NULL DEFAULT false;   -- create, restore, con message o via service
+
+ALTER TABLE documents
+  ADD COLUMN last_compacted_at timestamptz,
+  ADD COLUMN pruned_versions_count integer NOT NULL DEFAULT 0;
+CREATE INDEX documents_pending_compaction ON documents (id)
+  WHERE deleted_at IS NULL AND (last_compacted_at IS NULL OR updated_at > last_compacted_at);
+
+CREATE TABLE pruned_objects (                            -- objetos a borrar de S3 después del commit
+  storage_key text PRIMARY KEY,
+  document_id text NOT NULL,
+  version     integer NOT NULL,
+  pruned_at   timestamptz NOT NULL DEFAULT now()
+);
+```
+
+Los datos existentes se marcan al migrar: la versión 1 es `create`, las que tienen el mensaje fijo `Restaurado desde la versión N` son `restore`, y quedan protegidas las creaciones, restauraciones, versiones con mensaje y versiones de `via` `service`.
+
 ### Storage
 
 | Bucket | Clave | Notas |
 | --- | --- | --- |
-| `jiku-docs-content` | `docs/<documentId>/<version>-<sha256>.md` | Objetos inmutables; versionado del bucket activado como red de seguridad |
+| `jiku-docs-content` | `docs/<documentId>/<version>-<sha256>.md` | Objetos inmutables hasta que la compactación borra la versión; versionado del bucket activado como red de seguridad, con una regla de ciclo de vida que expira las versiones no actuales a los 7 días |
 | `jiku-docs-content` | `uploads/<contentUploadId>` | Contenido grande en tránsito; regla de ciclo de vida a 24 h |
 | `jiku-docs-attachments` | `att/<attachmentId>` | Sin acceso público; solo URLs prefirmadas |
 
@@ -1036,11 +1060,12 @@ Integrar `jiku-docs` requiere cambios de seguridad en el repositorio de Jiku (ro
 | Logs | Estructurados en JSON: método, caller, `correlationId`, duración, `errorCode` |
 | Métricas | Latencia y errores por método; antigüedad del changelog sin publicar; lag del indexador; locks activos; fan-out de notificaciones |
 | Alertas | Changelog sin publicar con más de 60 s; indexador con lag de más de 5 min; tasa de `upstream_unavailable` |
+| Compactación del historial | Log por ejecución (inicio y fin, documentos, versiones borradas, bytes liberados, duración, errores); log por documento solo con `--dry-run` o nivel debug. Métricas `docs_history_versions_pruned_total`, `docs_history_bytes_freed_total`, `docs_history_run_duration_seconds`, `docs_history_pruned_objects_pending`, más `docs_history_runs_total{result}`, `docs_history_last_success_timestamp_seconds` y `docs_history_pruned_objects_oldest_seconds`. Alertas: una ejecución que falla o no corre en 48 h; `pruned_objects` con filas de más de 24 h. Ver [`compactacion-historial-v1.md`](compactacion-historial-v1.md), sección 6 |
 | Salud | Endpoints de NATS micro (`nats micro info jiku-docs-commands`) |
 
 ### Respaldo
 
-Backup diario de `jiku_docs` con retención de 30 días y versionado en los buckets. Restaurar la base a un punto anterior es seguro porque los objetos en S3 son inmutables: ninguna versión referenciada desaparece. El índice no se respalda; se regenera.
+Backup diario de `jiku_docs` con retención de 30 días y versionado en los buckets. El índice no se respalda; se regenera. Con la compactación del historial, restaurar un backup anterior a una compactación puede dejar filas de versiones cuyo objeto se borró hace más de 7 días (las versiones no actuales del bucket expiran a la semana): el proceso de restauración debe verificar los objetos y descartar las filas sin objeto.
 
 ## 13. Módulo opcional y autodescubrimiento
 
@@ -1132,6 +1157,8 @@ El cuarto contrato, `jiku-modules.yaml`, describe el registro de módulos (secci
 Se sugiere ubicarlos en `docs/apis/` del repositorio de `jiku-docs` y validarlos en CI, como los de `core`.
 
 ### Referencias
+
+- [Compactación del historial de versiones](compactacion-historial-v1.md): política de retención del historial; manda sobre este documento donde lo contradice.
 
 - [Guía para construir un conector de Jiku (v1.6.0)](https://github.com/gravadigital/jiku/tree/v1.6.0)
 - [Contratos de core: `docs/apis/`](https://github.com/gravadigital/jiku/tree/v1.6.0/docs/apis)

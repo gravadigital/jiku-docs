@@ -136,7 +136,8 @@ si la credencial lo permite).
 | `jiku-docs migrate` | Aplica migraciones (también lo hace `serve`; seguras con varias réplicas) |
 | `jiku-docs reindex` | Regenera el índice de búsqueda completo (en proceso; no inyecta eventos en el stream) |
 | `jiku-docs module deregister` | Borra la clave `docs` (desinstalar). Un apagado normal **no** la borra |
-| `jiku-docs storage init` | Crea el bucket con versionado y la regla de ciclo de vida de `uploads/` |
+| `jiku-docs storage init` | Crea el bucket con versionado y las reglas de ciclo de vida (`uploads/` a 1 día, versiones no actuales a 7 días) y las relee |
+| `jiku-docs history compact [--document <id>] [--dry-run]` | Compacta el historial de versiones ahora (solo base y bucket, sin bus). `--dry-run` imprime una línea JSON por documento con cada versión, si se conserva y el motivo, y no toca nada. Si la corrida diaria tiene el lock, sale con error |
 | `jiku-docs import hedgedoc` | Importador (ver abajo) |
 | `jiku-docs healthcheck` | Consulta `/readyz` (HEALTHCHECK de la imagen) |
 
@@ -151,6 +152,9 @@ si la credencial lo permite).
 | `jiku_docs_indexer_lag_seconds` | > 300 |
 | `jiku_docs_requests_total{code="upstream_unavailable"}` | tasa sostenida |
 | `jiku_docs_request_duration_seconds`, `jiku_docs_locks_active`, `jiku_docs_notifications_total`, `jiku_docs_outbox_published_total` | — |
+| `docs_history_last_success_timestamp_seconds` | más de 48 h atrás (la compactación falla o no corre); también `docs_history_runs_total{result="failure"}` |
+| `docs_history_pruned_objects_oldest_seconds` | > 86400 (el borrado en S3 no avanza); `docs_history_pruned_objects_pending` da el volumen |
+| `docs_history_versions_pruned_total`, `docs_history_bytes_freed_total`, `docs_history_run_duration_seconds` | — |
 
 **Logs**: JSON por stderr con método, caller, actor, `correlationId`, duración y `errorCode`. Nunca contenido,
 tokens ni URLs prefirmadas.
@@ -158,12 +162,47 @@ tokens ni URLs prefirmadas.
 **Tareas periódicas** (una sola réplica a la vez, por advisory lock): vencimiento de locks con
 `document.unlocked` (cada 10 s), borrado de cifrados de reintento de shares (5 min), subidas vencidas,
 adjuntos pendientes de más de 24 h, documentos borrados hace más de 30 días (con sus objetos), changelog
-de más de 30 días, objetos huérfanos (diario), accesos a links de más de 180 días y la revisión diaria
+de más de 30 días, objetos huérfanos (barrido semanal y paginado: una página de 1.000 objetos por minuto,
+con el cursor en `service_state`), accesos a links de más de 180 días y la revisión diaria
 de relaciones contra core (`DOCS_RELATION_REVIEW_HOUR_UTC`), que quita relaciones a entidades
 inexistentes reescribiendo el frontmatter en una versión nueva firmada por el servicio.
 
-**Respaldo**: backup diario de la base (30 días) y versionado del bucket. Restaurar la base a un punto
-anterior es seguro: los objetos de contenido son inmutables. El índice no se respalda: `reindex`.
+**Compactación del historial** ([`docs/compactacion-historial-v1.md`](docs/compactacion-historial-v1.md)):
+cada guardado sigue creando una versión, y una vez por día, a partir de `DOCS_HISTORY_COMPACTION_HOUR` en
+`DOCS_HISTORY_TIMEZONE`, se borran las versiones intermedias viejas: menos de 24 h, todas; hasta 30 días, la
+última de cada bloque de edición (mismo autor, mismo `via`, pausas de menos de 30 min); más viejas, la última
+de cada día. Nunca se borran la versión actual, la creación, las restauraciones, las versiones con `message`,
+las de `via: service` ni las fijadas por un link `pinned` activo; las de agente siguen la regla de bloques
+(para proteger una, guardarla con `--message`). Procesa documento por documento con `FOR UPDATE` y
+transacciones cortas, y borra los objetos de S3 después del commit vía `pruned_objects` (`DeleteObjects` en
+lotes). Corre en una sola réplica (`pg_try_advisory_lock`), también frente a un `history compact` manual.
+Los parámetros están en `.env.dist`; `DOCS_HISTORY_COMPACTION_ENABLED=false` la apaga.
+
+**Bucket y ciclo de vida.** `storage init` deja el versionado activado y dos reglas: `uploads/` expira a 1
+día y las versiones no actuales de cualquier objeto expiran a los 7 días. Así un objeto borrado por la
+compactación (o por una purga) se puede recuperar durante una semana y después libera el espacio. Verificado
+contra MinIO (test `TestStorageInitLifecycle`). Las marcas de borrado (delete markers) quedan en el bucket;
+son objetos vacíos.
+
+*DigitalOcean Spaces y `NoncurrentVersionExpiration` (revisado 2026-10-25): no confirmado.* La página de
+compatibilidad S3 de Spaces dice que el ciclo de vida está "Supported for time-based expiration and removing
+incomplete multipart uploads" y no menciona versiones no actuales
+([S3 Compatibility](https://docs.digitalocean.com/products/spaces/reference/s3-compatibility/)); la guía de
+reglas de ciclo de vida solo muestra expiración y multipart
+([Configure Lifecycle Rules](https://docs.digitalocean.com/products/spaces/how-to/configure-lifecycle-rules/));
+la referencia de la API lista `PutBucketLifecycleConfiguration` sin detallar elementos
+([Spaces API](https://docs.digitalocean.com/reference/api/spaces/)). En cambio, el provider de Terraform
+de DigitalOcean expone `lifecycle_rule.noncurrent_version_expiration { days }` para `digitalocean_spaces_bucket`
+([spaces_bucket](https://docs.digitalocean.com/reference/terraform/reference/resources/spaces_bucket/)), lo que
+indica que la API lo acepta. Antes de activar la compactación en producción: correr `jiku-docs storage init`
+contra el Space (relee las reglas y avisa si el proveedor no guardó la de versiones no actuales) y comprobar
+con un objeto de prueba borrado que su versión anterior desaparece pasados 7 días. Si no funciona, la red de
+seguridad alternativa es dejar `DOCS_HISTORY_COMPACTION_ENABLED=false` hasta definir otra (por ejemplo, un
+barrido propio de versiones no actuales con `ListObjectVersions`).
+
+**Respaldo**: backup diario de la base (30 días) y versionado del bucket. Restaurar un backup anterior a una
+compactación puede dejar filas de versiones cuyo objeto ya expiró (más de 7 días): al restaurar, verificar los
+objetos y descartar las filas sin objeto. El índice no se respalda: `reindex`.
 
 **Varias réplicas**: los comandos y consultas se reparten por queue group; outbox y janitor eligen líder
 con advisory locks de PostgreSQL; el indexador comparte el durable.
