@@ -532,6 +532,56 @@ as docs docs put "$PP/aduana.md" ad.md --base-version "$AV" >/dev/null
 as user docs sync "$SYNC" --once --only "$P/"
 ls "$SYNC$PP/" | grep -q 'aduana.remoto-v' && ok "conflicto → .remoto-vN.md" || bad "conflicto sin copia remota" "$ERR"
 
+# ---- 8b. compactación del historial ---------------------------------------------------------------
+
+# Documento con siete guardados seguidos (uno con mensaje); se envejecen en la base todos menos el
+# actual y se compacta a demanda dentro del contenedor (docs/compactacion-historial-v1.md).
+section "8b. compactación del historial"
+if docsdb "SELECT 1" >/dev/null 2>&1; then
+  cp arq.md h.md
+  as user docs new h.md --folder "$PP/" --name historial.md
+  expect "documento para compactar" 0 "version 1"
+  HDOC=$(json 'd["id"]' <<<"$OUT")
+  for i in 1 2 3 4 5 6 7; do
+    echo "Guardado $i." >> h.md
+    if [[ $i == 3 ]]; then as user docs put "$HDOC" h.md --base-version "$i" --message "Hito e2e"
+    else as user docs put "$HDOC" h.md --base-version "$i"; fi
+    [[ $RC == 0 ]] || bad "put $i del historial" "$ERR"
+  done
+  docsdb "UPDATE document_versions SET created_at = created_at - interval '3 days' WHERE document_id = '$HDOC' AND version < 8" >/dev/null
+  [[ $(docsdb "SELECT string_agg(kind || ':' || protected, ',' ORDER BY version) FROM document_versions WHERE document_id = '$HDOC'") == \
+    "create:true,update:false,update:false,update:true,update:false,update:false,update:false,update:false" ]] \
+    && ok "kind y protected al escribir (create, mensaje)" || bad "kind/protected al escribir"
+  DRY=$(docker exec "$E2E_DOCS_CONTAINER" jiku-docs history compact --document "$HDOC" --dry-run 2>/dev/null)
+  grep -q 'versionsPruned=4 ' <<<"$DRY" && [[ $(docsdb "SELECT count(*) FROM document_versions WHERE document_id = '$HDOC'") == 8 ]] \
+    && ok "history compact --dry-run informa 4 y no borra" || bad "dry-run" "$DRY"
+  RUN=$(docker exec "$E2E_DOCS_CONTAINER" jiku-docs history compact --document "$HDOC" 2>/dev/null)
+  [[ $(docsdb "SELECT string_agg(version::text, ',' ORDER BY version) FROM document_versions WHERE document_id = '$HDOC'") == "1,4,7,8" ]] \
+    && ok "compactación: quedan la creación, la del mensaje, la última del bloque y la actual" || bad "compactación" "$RUN"
+  [[ $(docsdb "SELECT count(*) FROM pruned_objects WHERE document_id = '$HDOC'") == 0 ]] \
+    && ok "objetos borrados de S3 (pruned_objects vacío)" || bad "pruned_objects con filas"
+  as user docs query documents.get --id "$HDOC" -o json
+  [[ $(json 'd["prunedVersionsCount"]' <<<"$OUT") == 4 ]] && ok "documents.get: prunedVersionsCount" || bad "prunedVersionsCount" "$OUT"
+  as user docs get "$HDOC" --version 3
+  expect "get de una versión compactada → version_pruned (sale con 5)" 5 "version_pruned"
+  as user docs restore "$HDOC" --from-version 2 --base-version 8
+  expect "restore desde una versión compactada → version_pruned (sale con 5)" 5 "version_pruned"
+  as docs docs cmd shares.new "{\"id\":\"$(ulid)\",\"documentId\":\"$HDOC\",\"mode\":\"pinned\",\"version\":5,\"expiresAt\":\"$(date -u -d '+1 day' +%Y-%m-%dT%H:%M:%S.000Z)\",\"includeAttachments\":false}"
+  [[ $RC != 0 ]] && grep -q version_pruned <<<"$OUT$ERR" && ok "shares.new pinned sobre una versión compactada → version_pruned" \
+    || bad "shares.new pinned sobre una versión compactada" "$ERR"
+  as user docs history "$HDOC" -o json
+  grep -q '"protected"' <<<"$OUT" && grep -q '"kind"' <<<"$OUT" && ok "history muestra kind y protected" || bad "history sin kind/protected" "$OUT"
+  RUN2=$(docker exec "$E2E_DOCS_CONTAINER" jiku-docs history compact --document "$HDOC" 2>/dev/null)
+  grep -q 'versionsPruned=0 ' <<<"$RUN2" && ok "segunda corrida: no borra nada" || bad "segunda corrida" "$RUN2"
+  if M=$(curl -fsS "${E2E_DOCS_METRICS:-http://127.0.0.1:8090/metrics}" 2>/dev/null); then
+    grep -q '^docs_history_pruned_objects_pending' <<<"$M" && ok "métricas docs_history_*" || bad "faltan métricas docs_history_*"
+  else
+    skip "métricas (sin acceso a /metrics)"
+  fi
+else
+  skip "compactación del historial (sin acceso a $E2E_DOCS_DB)"
+fi
+
 # ---- 9. módulo caído y deregister --------------------------------------------------------------
 
 section "9. módulo caído y deregister"
