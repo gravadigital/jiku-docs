@@ -97,6 +97,12 @@ const migrationLock = 7_301_000_001
 // Migrate applies pending migrations, each in its own transaction. Safe to run from several
 // processes at once.
 func Migrate(ctx context.Context, pool *pgxpool.Pool, log *slog.Logger) (applied int, err error) {
+	return MigrateTo(ctx, pool, log, 0)
+}
+
+// MigrateTo applies pending migrations up to version upTo (0 = all). Tests use it to load data
+// with an older schema and check what a migration does with it.
+func MigrateTo(ctx context.Context, pool *pgxpool.Pool, log *slog.Logger, upTo int) (applied int, err error) {
 	migs, err := loadMigrations()
 	if err != nil {
 		return 0, err
@@ -131,7 +137,7 @@ func Migrate(ctx context.Context, pool *pgxpool.Pool, log *slog.Logger) (applied
 	}
 	rows.Close()
 	for _, m := range migs {
-		if done[m.version] {
+		if done[m.version] || (upTo > 0 && m.version > upTo) {
 			continue
 		}
 		tx, err := conn.Begin(ctx)
