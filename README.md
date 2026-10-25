@@ -186,9 +186,10 @@ go run ./cmd/jiku-docs import hedgedoc --mapping .local/hedgedoc-mapping.csv
 ```
 
 - **Planilla**: CSV con columnas `note` (id, shortid o alias), `folder` (`/infra/servidores/`) y opcionales
-  `fileName` y `skip`. Las notas sin carpeta van a `/importado/`, que se crea sin herencia y con una única
-  regla `manage` para el rol `admin`.
-- **Qué se importa**: notas con contenido. Las anónimas (sin dueño) se omiten salvo que estén en la planilla o se
+  `fileName` y `skip`; las demás columnas se ignoran (sirven para revisar). Una fila sin `folder`, `fileName`
+  ni `skip` no cuenta como mapeada. Las notas sin carpeta van a `/importado/`, que se crea sin herencia y con
+  una única regla `manage` para el rol `admin`.
+- **Qué se importa**: notas con contenido. Las anónimas (sin dueño) se omiten salvo que estén mapeadas en la planilla o se
   pase `--include-anonymous`: en el dump real son ~10.000 y casi todas spam. `--only-mapped` importa solo lo
   mapeado y `--limit N` sirve para probar.
 - **Contenido**: frontmatter con `title`, `topics` (de los `tags` de HedgeDoc) y un bloque `hedgedoc` con id,

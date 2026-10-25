@@ -176,6 +176,11 @@ func readMapping(file string, r *Resolver) (map[string]mapping, error) {
 		if m.FileName != "" && !service.ValidFileName(m.FileName) {
 			return nil, fmt.Errorf("mapping línea %d: fileName %q inválido (tiene que terminar en .md)", line, m.FileName)
 		}
+		// A row left blank (as --export-mapping writes every note) is not a decision: it must not
+		// count as mapped, or the ~10.000 anonymous spam notes of the exported sheet would be imported.
+		if m.Folder == "" && m.FileName == "" && !m.Skip {
+			continue
+		}
 		out[n.ID] = m
 	}
 	return out, nil
