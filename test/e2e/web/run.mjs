@@ -1,6 +1,6 @@
 // Recorrido end-to-end en navegador de la integración de jiku-docs en web y opus-web.
 //
-//   node run.mjs [--only web|opus] [--down] [--headed]
+//   node run.mjs [--only web|opus|public] [--down] [--headed] [--steps W1,W11]
 //
 // Ver README.md: variables, prerrequisitos y datos que espera el stack local.
 import { chromium } from 'playwright';
@@ -18,8 +18,10 @@ const WEB = process.env.E2E_WEB_URL || 'http://localhost:3000';
 const OPUS = process.env.E2E_OPUS_URL || 'http://localhost:3001';
 const PUBLIC = process.env.E2E_PUBLIC_URL || 'http://127.0.0.1:3100';
 const DOCS_CONTAINER = process.env.E2E_DOCS_CONTAINER || 'jiku-docs-local';
-// Comando (con argumentos) que corre `jiku` como admin, p. ej. "/ruta/as.sh admin".
-const CLI_ADMIN = process.env.E2E_CLI_ADMIN || '';
+// Comando (con argumentos) que corre `jiku` como el machine user del servicio jiku-docs (rol
+// docs, clase service: lee y escribe todo), p. ej. "/ruta/as.sh docs". E2E_CLI_ADMIN es el nombre
+// anterior y se sigue aceptando.
+const CLI_DOCS = process.env.E2E_CLI_DOCS || process.env.E2E_CLI_ADMIN || '';
 const OUT =
   process.env.E2E_OUT ||
   path.join(repoRoot, '.local/e2e-web', new Date().toISOString().replace(/[:.]/g, '-'));
@@ -62,10 +64,32 @@ const creds = loadCreds();
 const results = [];
 const log = (...a) => console.log(redact(a.join(' '), creds));
 
+// Bugs conocidos de Jiku (no de jiku-docs), reportados y sin arreglar. Un escenario que los
+// encuentra sigue con lo demás y termina como "bug jiku" en vez de "ok"; no cuenta como falla
+// para el código de salida salvo con E2E_STRICT=1. Si el bug se arregla, el escenario vuelve a "ok"
+// solo: la condición se sigue verificando.
+const KNOWN = {
+  'JIKU-WEB-1': 'el visor de la web interna muestra el frontmatter (documento.md: "el frontmatter no se muestra")',
+  'JIKU-WEB-2': '"Crear y editar" no entra en edición: tras router.push la página queda en ?editar=1 sin pedir el lock',
+};
+const STRICT = process.env.E2E_STRICT === '1';
+
+// --steps W1,W11: corre solo esos escenarios (para depurar; los que dependen de otro fallan).
+const STEPS = args.includes('--steps') ? args[args.indexOf('--steps') + 1].split(',') : null;
+
 async function step(id, name, fn) {
+  if (STEPS && !STEPS.includes(id)) return;
   const t0 = Date.now();
+  const bugs = [];
+  const bug = (code, detail = '') => bugs.push(`${code} ${KNOWN[code]}${detail ? ` (${detail})` : ''}`);
   try {
-    const note = (await fn()) || '';
+    let note = (await fn(bug)) || '';
+    if (bugs.length) {
+      note = `${bugs.join('; ')}${note ? ' — resto: ' + note : ''}`;
+      results.push({ id, name, status: 'bug jiku', note });
+      log(`BUG   ${id} ${name} — ${note} (${Date.now() - t0} ms)`);
+      return;
+    }
     results.push({ id, name, status: 'ok', note });
     log(`ok    ${id} ${name}${note ? ' — ' + note : ''} (${Date.now() - t0} ms)`);
   } catch (e) {
@@ -88,9 +112,15 @@ const shot = (page, name, opts = {}) =>
   });
 
 function cli(...cmdArgs) {
-  if (!CLI_ADMIN) throw skip('E2E_CLI_ADMIN no definido');
-  const [bin, ...pre] = CLI_ADMIN.split(' ');
-  return execFileSync(bin, [...pre, ...cmdArgs], { encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'] });
+  if (!CLI_DOCS) throw skip('E2E_CLI_DOCS no definido');
+  const [bin, ...pre] = CLI_DOCS.split(' ');
+  try {
+    return execFileSync(bin, [...pre, ...cmdArgs], { encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'] });
+  } catch (e) {
+    // El primer renglón del error es lo que llega a la tabla: que diga qué contestó jiku.
+    const why = String(e.stderr || '').split('\n').filter((l) => /error|code|:/.test(l)).slice(0, 2).join(' ').trim();
+    throw Object.assign(new Error(`jiku ${cmdArgs.slice(0, 2).join(' ')}: ${why || e.message}`), { stderr: e.stderr });
+  }
 }
 const cliJSON = (...a) => JSON.parse(cli(...a, '-o', 'json'));
 
@@ -103,6 +133,19 @@ function watch(page) {
   });
   page.on('pageerror', (e) => w.errors.push(e.message));
   return w;
+}
+
+// page.goto puede dar net::ERR_ABORTED si una navegación del router de Next (router.replace de un
+// efecto, un Link) arranca a la vez: se reintenta una vez si la página no quedó en la URL pedida.
+async function go(page, url) {
+  try {
+    return await page.goto(url);
+  } catch (e) {
+    if (!/ERR_ABORTED/.test(e.message)) throw e;
+    await page.waitForTimeout(1500);
+    if (page.url() === url) return null;
+    return page.goto(url);
+  }
 }
 
 async function waitText(page, locator, re, timeout = 15000) {
@@ -322,7 +365,7 @@ async function opusSuite(browser) {
 
   await step('O10', 'opus-web: sin project-permissions → aviso "sin acceso" (no "no disponible")', async () => {
     const ext = await (await ctx.request.get(OPUS + '/api/auth/session')).json();
-    const uid = process.env.E2E_EXTERNAL_USER_ID || ext?.user?.id || ext?.user?.sub;
+    const uid = process.env.E2E_EXTERNAL_USER_ID || ext?.user?.zitadelId || ext?.user?.sub || ext?.user?.id;
     if (!uid) throw skip(`la sesión no expone el id del externo (definir E2E_EXTERNAL_USER_ID): ${Object.keys(ext?.user || {})}`);
     const before = jikuSQL(`SELECT count(*) FROM user_project_permissions WHERE user_id='${uid}' AND project_id=${D.project}`);
     assert(before === '1', `el externo no tiene permiso sobre ${D.project} (${before})`);
@@ -366,7 +409,7 @@ async function opusSuite(browser) {
 }
 
 // ------------------------------------------------------------------------------------------
-// Link público (creado por CLI admin) abierto en un navegador sin sesión
+// Link público (creado por el CLI del servicio) abierto en un navegador sin sesión
 // ------------------------------------------------------------------------------------------
 async function publicSuite(browser) {
   await step('P1', 'link público: página sin sesión, cabeceras, sin JS, adjunto, revocar → 404', async () => {
@@ -424,21 +467,28 @@ async function webSuite(browser) {
   page.on('response', (r) => {
     if (/\/api\/docs|\/docs\/attachments|\/api\/modules/.test(r.url())) net.push(`${r.status()} ${r.request().method()} ${r.url()}`);
   });
+  // La web habla con la api desde Server Actions de Next (POST a la propia página con la cabecera
+  // `next-action`), no con fetch del navegador: lo que se puede observar es el cuerpo del POST
+  // (los argumentos serializados) y la respuesta RSC.
+  const actions = [];
+  page.on('request', (r) => {
+    if (r.method() === 'POST' && r.headers()['next-action']) actions.push({ url: r.url(), body: r.postData() || '', req: r });
+  });
+  const lockOf = (id) => cliJSON('docs', 'query', 'documents.get', '--id', id, '--include', 'lock').lock || null;
   let logged = false;
   const all = ['W2', 'W3', 'W4b', 'W4', 'W5', 'W6', 'W7', 'W8', 'W9', 'W10', 'W11', 'W12'];
 
   await step('W1', 'web: login del interno, /modules y entrada "Documentación"', async () => {
-    const modResp = page.waitForResponse((r) => /\/api\/modules$/.test(r.url()), { timeout: 60000 });
-    modResp.catch(() => {}); // si el login falla, el contexto se cierra con la promesa pendiente
     await login(page, WEB, 'USER', creds);
     logged = true;
-    const r = await modResp;
-    const mods = await r.json();
-    const docs = mods.find((m) => m.module === 'docs');
-    assert(docs?.status === 'available', `GET /modules: ${JSON.stringify(mods)}`);
-    await page.getByRole('link', { name: 'Documentación' }).first().waitFor({ timeout: 15000 });
+    // GET /modules lo hace el servidor de Next (Server Action): desde el navegador se ve su efecto.
+    // La entrada del menú aparece solo con el módulo instalado; /docs sin aviso, solo disponible.
+    await page.getByRole('link', { name: 'Documentación' }).first().waitFor({ timeout: 30000 });
     await shot(page, 'web-home');
-    return `docs=${docs.status}, sharing=${docs.features?.sharing}`;
+    await go(page, `${WEB}/docs`);
+    await page.locator('[aria-label="Contenido de la carpeta"]').waitFor({ timeout: 30000 });
+    assert((await page.getByText(/no está disponible/).count()) === 0, 'aviso de módulo no disponible');
+    return 'entrada "Documentación" en el menú; /docs lista carpetas sin aviso (docs=available)';
   });
   if (!logged) {
     const why = results.find((r) => r.id === 'W1')?.note || '';
@@ -447,28 +497,28 @@ async function webSuite(browser) {
   }
 
   const panelTitles = async () => {
-    const card = page.locator('table[aria-label="Documentos vinculados"]');
+    const card = page.locator('[aria-label="Documentos vinculados"]');
     await card.waitFor({ timeout: 20000 });
     return card.locator('a').allInnerTexts();
   };
 
   await step('W2', 'web: card "Documentación" en proyecto, requisito y tarea', async () => {
     const out = [];
-    await page.goto(`${WEB}/projects/${D.project}`);
+    await go(page, `${WEB}/projects/${D.project}`);
     let t = await panelTitles();
     assert(t.includes(D.arqTitle) && t.includes(D.infraTitle), `proyecto: ${t}`);
     await shot(page, 'web-ficha-proyecto-1440');
     out.push(`proyecto: ${t.length} (${t.join(' | ')})`);
-    await page.goto(`${WEB}/requirements/${D.requirement}`);
+    await go(page, `${WEB}/requirements/${D.requirement}`);
     t = await panelTitles();
     assert(t.includes(D.arqTitle), `requisito: ${t}`);
     out.push(`requisito: ${t.join(' | ')}`);
-    await page.goto(`${WEB}/objectives/${D.task}`);
+    await go(page, `${WEB}/objectives/${D.task}`);
     t = await panelTitles();
     assert(t.includes(D.arqTitle), `tarea: ${t}`);
     out.push(`tarea: ${t.join(' | ')}`);
     await page.setViewportSize({ width: 390, height: 844 });
-    await page.goto(`${WEB}/projects/${D.project}`);
+    await go(page, `${WEB}/projects/${D.project}`);
     await panelTitles();
     await shot(page, 'web-ficha-proyecto-390');
     await page.setViewportSize({ width: 1440, height: 900 });
@@ -476,32 +526,49 @@ async function webSuite(browser) {
   });
 
   await step('W3', 'web: /docs, carpetas (incluidas importadas), búsqueda sobre importados (frase y exclusión) y apertura', async () => {
-    const folderTable = page.locator('table[aria-label="Contenido de la carpeta"]');
+    const folderTable = page.locator('[aria-label="Contenido de la carpeta"]');
+    // La tabla trae primero las subcarpetas y los documentos recién con "Ver más" (P-6 de la web):
+    // se pagina hasta encontrar la fila.
+    const row = async (name, exact = true) => {
+      const link = folderTable.getByRole('link', { name, exact }).first();
+      for (let i = 0; i < 10; i++) {
+        if (await link.isVisible().catch(() => false)) return link;
+        const more = page.getByRole('button', { name: 'Ver más' });
+        if (await more.count()) await more.first().click();
+        await page.waitForTimeout(1200);
+      }
+      await link.waitFor({ timeout: 5000 });
+      return link;
+    };
     const openPath = async (names) => {
-      await page.goto(`${WEB}/docs`);
+      await go(page, `${WEB}/docs`);
       for (const n of names) {
-        await folderTable.getByRole('link', { name: n, exact: true }).first().click();
-        await page.waitForURL(/\/docs\?folder=/);
+        const before = page.url();
+        await (await row(n)).click();
+        await page.waitForURL((u) => u.href !== before && /\/docs\?folder=/.test(u.href));
         await folderTable.waitFor();
       }
     };
     await openPath(['clientes', 'exo', 'videoconferencia']);
-    await folderTable.getByRole('link', { name: D.arqTitle }).waitFor();
+    await row(D.arqTitle);
     await shot(page, 'web-docs-carpeta');
     await openPath(D.impFolders);
-    await folderTable.getByRole('link', { name: D.impFolderDoc, exact: true }).waitFor();
+    await row(D.impFolderDoc);
     const impCount = await folderTable.locator('tbody tr').count();
     await shot(page, 'web-docs-carpeta-importada');
-    const results = page.locator('table[aria-label="Resultados de la búsqueda"]');
+    const results = page.locator('[aria-label="Resultados de la búsqueda"]');
     const search = page.getByPlaceholder('Buscar en la documentación');
     const runSearch = async (q) => {
-      const resp = page
-        .waitForResponse((r) => r.url().includes('/docs/search?') && new URL(r.url()).searchParams.get('q') === q, { timeout: 20000 })
-        .catch(() => null);
       await search.fill(q);
-      await resp;
-      await page.waitForTimeout(800);
-      await results.waitFor({ timeout: 15000 });
+      await results.waitFor({ timeout: 20000 });
+      // La búsqueda va por Server Action con debounce: se espera a que la lista se estabilice.
+      let prev = null;
+      for (let i = 0; i < 20; i++) {
+        await page.waitForTimeout(700);
+        const cur = (await results.locator('a').allInnerTexts()).join('|');
+        if (cur && cur === prev) break;
+        prev = cur;
+      }
       return results.locator('a').allInnerTexts();
     };
     const phrase = await runSearch(D.searchPhrase);
@@ -516,9 +583,9 @@ async function webSuite(browser) {
     return `carpeta importada ${D.impFolders.join('/')}: ${impCount} filas; frase: ${phrase.length} resultados; exclusión: ${excl.length} (sin ${D.searchExcluded}); abre "${D.searchPhraseHit}"`;
   });
 
-  await step('W4b', 'web: nota importada (imagen por /docs/attachments 302 y enlace interno a otra nota)', async () => {
+  await step('W4b', 'web: nota importada (imagen por /docs/attachments 302 y enlace interno a otra nota)', async (bug) => {
     const imgResp = page.waitForResponse((r) => r.url().includes(`/docs/attachments/${D.impImageAtt}`), { timeout: 20000 });
-    await page.goto(`${WEB}/docs/${D.impImage}`);
+    await go(page, `${WEB}/docs/${D.impImage}`);
     await page.getByRole('heading', { name: D.impImageTitle }).first().waitFor({ timeout: 20000 });
     const r = await imgResp;
     assert(r.status() === 302, `imagen importada → ${r.status()}`);
@@ -526,19 +593,21 @@ async function webSuite(browser) {
     const nat = await page.locator(`img[src*="${D.impImageAtt}"]`).first().evaluate((i) => i.naturalWidth).catch(() => 0);
     assert(nat > 0, 'la imagen importada no cargó');
     const text = await page.locator('main').innerText();
-    assert(!/^---$/m.test(text) && !text.includes('shortid:'), 'el visor muestra el frontmatter');
+    if (/^---$/m.test(text) || /shortid:|^title:/m.test(text)) bug('JIKU-WEB-1', `nota ${D.impImage}`);
     await shot(page, 'web-visor-importado');
-    await page.goto(`${WEB}/docs/${D.impLinkSrc}`);
+    await go(page, `${WEB}/docs/${D.impLinkSrc}`);
     const link = page.locator('main').getByRole('link', { name: D.impLinkText, exact: true }).first();
     await link.waitFor({ timeout: 20000 });
     const href = await link.getAttribute('href');
-    await link.click();
-    await page.waitForURL(new RegExp(`/docs/${D.impLinkDst}`), { timeout: 20000 });
-    await page.getByRole('heading', { name: D.impLinkDstTitle }).first().waitFor({ timeout: 20000 });
-    return `imagen 302 → ${r.headers().location?.split('?')[0]} (${nat}px); enlace "${D.impLinkText}" (${href}) abre "${D.impLinkDstTitle}"`;
+    // Los enlaces del contenido se abren en otra pestaña (target=_blank del visor).
+    const [tab] = await Promise.all([ctx.waitForEvent('page', { timeout: 20000 }), link.click()]);
+    await tab.waitForURL(new RegExp(`/docs/${D.impLinkDst}`), { timeout: 20000 });
+    await tab.getByRole('heading', { name: D.impLinkDstTitle }).first().waitFor({ timeout: 30000 });
+    await tab.close();
+    return `imagen 302 → ${r.headers().location?.split('?')[0]} (${nat}px); enlace "${D.impLinkText}" (${href?.replace(/^https?:\/\/[^/]+/, '')}) abre "${D.impLinkDstTitle}" en otra pestaña`;
   });
 
-  // Documento de prueba con XSS, imagen y enlace interno (creado por CLI admin).
+  // Documento de prueba con XSS, imagen y enlace interno (creado por el CLI del servicio).
   let xssId = null;
   await step('W4', 'web: visor seguro (script, javascript:, onerror), imagen 302 y enlace interno', async () => {
     const md = [
@@ -551,7 +620,9 @@ async function webSuite(browser) {
       '',
       `![diagrama](/docs/attachments/${D.arqAttachment})`,
       '',
-      `Ver [arquitectura](/docs/${D.arq}).`,
+      // Los enlaces del visor solo pueden ser http(s), mailto o adjuntos (documento.md, CA-28):
+      // uno relativo a otro documento queda sin href; uno absoluto a la web sí navega.
+      `Ver [arquitectura](${WEB}/docs/${D.arq}) y [relativo](/docs/${D.arq}).`,
       '',
     ].join('\n');
     const f = path.join(OUT, 'xss.md');
@@ -559,7 +630,7 @@ async function webSuite(browser) {
     const name = `xss-e2e-${Date.now()}.md`;
     const created = cliJSON('docs', 'new', f, '--folder', '/clientes/exo/videoconferencia/', '--name', name);
     xssId = created.id;
-    await page.goto(`${WEB}/docs/${xssId}`);
+    await go(page, `${WEB}/docs/${xssId}`);
     await page.getByRole('heading', { name: 'Prueba XSS e2e' }).first().waitFor({ timeout: 20000 });
     await page.waitForTimeout(2000);
     const jsLink = page.getByRole('link', { name: 'enlace js' });
@@ -573,14 +644,17 @@ async function webSuite(browser) {
     const nat = await page.locator(`img[src*="${D.arqAttachment}"]`).evaluate((i) => i.naturalWidth).catch(() => 0);
     assert(nat > 0, 'la imagen no cargó');
     await shot(page, 'web-visor-xss');
-    await page.getByRole('link', { name: 'arquitectura' }).click();
-    await page.waitForURL(new RegExp(`/docs/${D.arq}`));
-    await page.getByRole('heading', { name: D.arqTitle }).first().waitFor();
-    return `sin ejecución; imagen 302 → ${r.headers().location?.split('?')[0]} (${imgReq || 'request no capturada'}); enlace interno ok`;
+    const relHref = await page.locator('main a', { hasText: 'relativo' }).first().getAttribute('href').catch(() => null);
+    assert(!relHref, `el enlace relativo quedó con href ${relHref}`);
+    const [tab] = await Promise.all([ctx.waitForEvent('page', { timeout: 20000 }), page.getByRole('link', { name: 'arquitectura' }).click()]);
+    await tab.waitForURL(new RegExp(`/docs/${D.arq}`));
+    await tab.getByRole('heading', { name: D.arqTitle }).first().waitFor({ timeout: 30000 });
+    await tab.close();
+    return `sin ejecución; imagen 302 → ${r.headers().location?.split('?')[0]} (${imgReq || 'request no capturada'}); enlace absoluto abre el documento en otra pestaña; relativo sin href`;
   });
 
   await step('W5', 'web: responsive del visor (390 / 1440)', async () => {
-    await page.goto(`${WEB}/docs/${D.arq}`);
+    await go(page, `${WEB}/docs/${D.arq}`);
     await page.getByRole('heading', { name: D.arqTitle }).first().waitFor();
     await shot(page, 'web-visor-1440');
     await page.setViewportSize({ width: 390, height: 844 });
@@ -594,40 +668,51 @@ async function webSuite(browser) {
   });
 
   let newId = null;
-  await step('W6', 'web: crear documento nuevo desde la UI', async () => {
-    await page.goto(`${WEB}/docs?folder=${D.clientFolder}`);
+  await step('W6', 'web: crear documento nuevo desde la UI', async (bug) => {
+    await go(page, `${WEB}/docs?folder=${D.clientFolder}`);
     await page.getByRole('button', { name: 'Nuevo documento' }).click();
     const title = `E2E navegador ${Date.now()}`;
     await page.getByLabel('Título').fill(title);
     await page.getByRole('button', { name: 'Crear y editar' }).click();
     await page.waitForURL(/\/docs\/[0-9A-Z]{26}/, { timeout: 20000 });
     newId = page.url().match(/\/docs\/([0-9A-Z]{26})/)[1];
-    await page.getByText('Lo estás editando').waitFor({ timeout: 20000 });
-    return `id ${newId}`;
+    const got = cliJSON('docs', 'query', 'documents.get', '--id', newId, '--include', 'content');
+    assert(got.content === `# ${title}\n`, `contenido creado: ${JSON.stringify(got.content)}`);
+    const editing = page.getByText('Lo estás editando');
+    const ok = await editing.waitFor({ timeout: 20000 }).then(() => true, () => false);
+    if (!ok) {
+      // P-10: tras crear se entra directo en edición. Si no pasó, se recarga ?editar=1 (con carga
+      // completa sí funciona) para que W7 pruebe la edición igual.
+      await shot(page, 'web-crear-sin-edicion');
+      bug('JIKU-WEB-2', `${page.url().replace(WEB, '')}, lock ${lockOf(newId) ? 'tomado' : 'no pedido'}`);
+      await go(page, `${WEB}/docs/${newId}?editar=1`);
+      await editing.waitFor({ timeout: 20000 });
+    }
+    return `id ${newId}, "${title}" en ${D.clientFolder}; editor abierto`;
   });
 
   await step('W7', 'web: editar con lock (toma, guardado con versión base, liberación)', async () => {
     assert(newId, 'sin documento de W6');
-    const lockReq = net.filter((l) => l.includes(`/docs/documents/${newId}/lock`));
-    assert(lockReq.length > 0, 'no se pidió el lock');
+    const held = lockOf(newId);
+    assert(held?.sessionId, 'el documento no quedó con lock al abrir el editor');
     const ta = page.getByLabel('Contenido (markdown)');
     await ta.fill((await ta.inputValue()) + '\nPrimera edición desde el navegador.\n');
-    const putResp = page.waitForResponse((r) => r.request().method() === 'PUT' && r.url().includes(`/docs/documents/${newId}`));
+    const n0 = actions.length;
     await page.getByRole('button', { name: 'Guardar' }).click();
-    const r = await putResp;
-    const body = JSON.parse(r.request().postData() || '{}');
-    assert(r.status() === 200, `PUT ${r.status()}`);
-    assert(body.baseVersion === 1 && body.sessionId, `PUT sin baseVersion/sessionId: ${Object.keys(body)}`);
+    await page.getByText('Lo estás editando').waitFor({ state: 'detached', timeout: 20000 });
     await page.waitForTimeout(1500);
-    const unlock = net.filter((l) => l.includes(`/docs/documents/${newId}/unlock`));
+    const save = actions.slice(n0).find((a) => a.body.includes(newId) && a.body.includes('baseVersion'));
+    assert(save, 'no se vio el guardado (Server Action con baseVersion)');
+    assert(/"baseVersion":1\b/.test(save.body) && save.body.includes(held.sessionId), 'el guardado no lleva baseVersion=1 y el sessionId del lock');
     const got = cliJSON('docs', 'query', 'documents.get', '--id', newId, '--include', 'lock', '--include', 'content');
     assert(!got.lock, `el lock sigue tomado: ${JSON.stringify(got.lock)}`);
-    return `lock ${lockReq[0].split(' ')[0]}, PUT baseVersion=1, unlock ${unlock.length ? unlock[0].split(' ')[0] : 'no visto'}; versión ${got.version}`;
+    assert(got.version === 2 && got.content.includes('Primera edición desde el navegador.'), `versión ${got.version}`);
+    return `lock ${held.sessionId.slice(0, 8)}… (${held.via || 'web'}), guardado con baseVersion=1 y esa sesión → versión ${got.version}; lock liberado`;
   });
 
   await step('W8', 'web: renovación del lock y liberación al salir de la página', async () => {
     assert(newId, 'sin documento de W6');
-    await page.goto(`${WEB}/docs/${newId}`);
+    await go(page, `${WEB}/docs/${newId}`);
     await page.getByRole('button', { name: 'Editar' }).click();
     await page.getByText('Lo estás editando').waitFor();
     const before = cliJSON('docs', 'query', 'documents.get', '--id', newId, '--include', 'lock', '--include', 'content').lock;
@@ -635,7 +720,7 @@ async function webSuite(browser) {
     await page.waitForTimeout(65000); // RENEW_INTERVAL_MS = 60 s
     const after = cliJSON('docs', 'query', 'documents.get', '--id', newId, '--include', 'lock', '--include', 'content').lock;
     assert(after && after.expiresAt > before.expiresAt, `no renovó: ${before.expiresAt} → ${after?.expiresAt}`);
-    await page.goto(`${WEB}/docs`); // pagehide/desmontaje → unlock con keepalive
+    await go(page, `${WEB}/docs`); // pagehide/desmontaje → unlock con keepalive
     await page.waitForTimeout(2000);
     const gone = cliJSON('docs', 'query', 'documents.get', '--id', newId, '--include', 'lock', '--include', 'content').lock;
     assert(!gone, `el lock sigue tomado al salir: ${JSON.stringify(gone)}`);
@@ -645,65 +730,66 @@ async function webSuite(browser) {
   await step('W9', 'web: conflicto mientras el humano edita (version_conflict y document_locked)', async () => {
     assert(newId, 'sin documento de W6');
     const out = [];
-    // a) document_locked: el admin toma el lock y guarda; el humano intenta editar.
-    await page.goto(`${WEB}/docs/${newId}`);
+    // a) document_locked: el servicio intenta guardar; el humano intenta editar.
+    await go(page, `${WEB}/docs/${newId}`);
     await page.getByRole('button', { name: 'Editar' }).click();
     await page.getByText('Lo estás editando').waitFor();
     const cur = cliJSON('docs', 'query', 'documents.get', '--id', newId, '--include', 'lock', '--include', 'content');
     const f = path.join(OUT, 'conflict.md');
-    fs.writeFileSync(f, (cur.content || '') + '\nCambio del admin por CLI.\n');
-    // Con el lock del humano, el put del admin sin lock tiene que fallar con document_locked.
+    fs.writeFileSync(f, (cur.content || '') + '\nCambio del servicio por CLI.\n');
+    // Con el lock del humano, el put del servicio sin lock tiene que fallar con document_locked.
     let lockedErr = '';
     try {
       cli('docs', 'put', newId, f, '--base-version', String(cur.version));
     } catch (e) {
       lockedErr = String(e.stderr || e.message);
     }
-    out.push(`put del admin con lock ajeno: ${/document_locked/.test(lockedErr) ? 'document_locked' : lockedErr.slice(0, 80) || 'GUARDÓ'}`);
-    // b) version_conflict: el humano suelta el lock (Cancelar), el admin guarda y el humano guarda sobre la base vieja.
+    out.push(`put del servicio con lock ajeno: ${/document_locked/.test(lockedErr) ? 'document_locked' : lockedErr.slice(0, 80) || 'GUARDÓ'}`);
+    // b) version_conflict: el humano suelta el lock (Cancelar), el servicio guarda y el humano guarda sobre la base vieja.
     await page.getByRole('button', { name: 'Cancelar' }).click();
     await page.getByRole('button', { name: 'Editar' }).click();
     await page.getByText('Lo estás editando').waitFor();
     const ta = page.getByLabel('Contenido (markdown)');
     await ta.fill((await ta.inputValue()) + '\nTexto del humano.\n');
-    // El admin fuerza: libera el lock del humano (admin) y guarda.
-    try {
-      cli('docs', 'unlock', newId, '--force', '--session', 'e2e-admin');
-    } catch (e) {
-      out.push(`unlock --force: ${String(e.stderr || e.message).slice(0, 80)}`);
-    }
+    // El servicio fuerza (manage): libera el lock del humano y guarda.
+    await page.waitForTimeout(1000);
+    const humanLock = lockOf(newId);
+    assert(humanLock?.sessionId, 'el humano no tiene el lock tras Editar');
+    cli('docs', 'unlock', newId, '--force', '--session', humanLock.sessionId);
     cli('docs', 'put', newId, f, '--base-version', String(cur.version));
-    const putResp = page.waitForResponse((r) => r.request().method() === 'PUT' && r.url().includes(`/docs/documents/${newId}`));
+    const n0 = actions.length;
     await page.getByRole('button', { name: 'Guardar' }).click();
-    const r = await putResp;
-    const code = (await r.json().catch(() => ({}))).code;
-    await page.waitForTimeout(1500);
+    const notice = page.getByText(/guardó la versión|está editando|Se perdió la reserva/).first();
+    await notice.waitFor({ timeout: 20000 }).catch(() => {});
+    await page.waitForTimeout(1000);
+    const save = actions.slice(n0).find((a) => a.body.includes(newId) && a.body.includes('baseVersion'));
+    const rsc = save ? await (await save.req.response())?.text().catch(() => '') : '';
+    const code = /version_conflict|document_locked/.exec(rsc || '')?.[0];
     await shot(page, 'web-editor-conflicto');
-    const notice = await page.locator('[role="alert"]').allInnerTexts();
-    out.push(`PUT del humano → ${r.status()} ${code}; aviso: ${notice.join(' / ').slice(0, 160)}`);
+    const noticeText = (await notice.count()) ? await notice.innerText() : '';
+    out.push(`guardado del humano → ${code || 'sin código'}; aviso: ${noticeText.slice(0, 160)}`);
     assert(['version_conflict', 'document_locked'].includes(code), out.join('; '));
-    assert(notice.some((t) => /guardó la versión|está editando|reserva/.test(t)), out.join('; '));
+    assert(noticeText, out.join('; '));
     await page.getByRole('button', { name: /Guardar/ }).click();
     await page.waitForTimeout(2000);
-    await page.goto(`${WEB}/docs`);
+    await go(page, `${WEB}/docs`);
     return out.join('; ');
   });
 
   await step('W10', 'web: subir adjunto desde el editor e insertarlo', async () => {
     assert(newId, 'sin documento de W6');
-    await page.goto(`${WEB}/docs/${newId}`);
+    await go(page, `${WEB}/docs/${newId}`);
     await page.getByRole('button', { name: 'Editar' }).click();
     await page.getByText('Lo estás editando').waitFor();
     const png = Buffer.from(
       'iVBORw0KGgoAAAANSUhEUgAAAAgAAAAICAIAAABLbSncAAAAEklEQVR4nGP4z8CAFWEXHbQSACj/P8Fu7N9hAAAAAElFTkSuQmCC',
       'base64'
     );
-    const confirm = page.waitForResponse((r) => /\/docs\/attachments\/[0-9A-Z]{26}\/confirm/.test(r.url()), { timeout: 30000 });
     await page.locator('input[type=file]').setInputFiles({ name: 'e2e.png', mimeType: 'image/png', buffer: png });
-    const c = await confirm;
-    assert(c.ok(), `confirm ${c.status()}`);
     const ta = page.getByLabel('Contenido (markdown)');
-    await page.waitForFunction(() => /\/docs\/attachments\//.test(document.querySelector('textarea')?.value || ''));
+    // Subida: Server Action (attachments.new) → PUT a la URL prefirmada → confirm; al terminar,
+    // el editor inserta el markdown de la imagen.
+    await page.waitForFunction(() => /\/docs\/attachments\//.test(document.querySelector('textarea')?.value || ''), null, { timeout: 30000 });
     const md = await ta.inputValue();
     await page.getByRole('button', { name: 'Guardar' }).click();
     await page.waitForTimeout(2500);
@@ -718,19 +804,23 @@ async function webSuite(browser) {
     // El rol user tiene write en /clientes/: para Compartir hace falta manage. Se le da una regla
     // por usuario en la carpeta de prueba y se quita al terminar.
     const sess = await (await ctx.request.get(WEB + '/api/auth/session')).json();
-    const uid = process.env.E2E_WEB_USER_ID || sess?.user?.id || sess?.user?.sub;
+    const uid = process.env.E2E_WEB_USER_ID || sess?.user?.zitadelId || sess?.user?.sub || sess?.user?.id;
     if (!uid) throw skip(`la sesión no expone el id del interno (definir E2E_WEB_USER_ID): ${Object.keys(sess?.user || {})}`);
     const rules = (list) => cli('docs', 'cmd', `folders.${D.clientFolder}.acl.replace`, JSON.stringify({ rules: list }));
-    rules([{ principalType: 'user', principal: uid, permission: 'manage' }]);
+    // Se guardan las reglas que tenía la carpeta para devolverlas tal cual al terminar.
+    const prev = (cliJSON('docs', 'query', 'folders.get', '--id', D.clientFolder, '--include', 'acl').acl || []).map(
+      ({ principalType, principal, permission }) => ({ principalType, principal, permission })
+    );
+    rules([...prev.filter((r) => !(r.principalType === 'user' && r.principal === uid)), { principalType: 'user', principal: uid, permission: 'manage' }]);
     const anon = await browser.newContext();
     try {
-      await page.goto(`${WEB}/docs/${D.arq}`);
+      await go(page, `${WEB}/docs/${D.arq}`);
       await page.getByRole('heading', { name: D.arqTitle }).first().waitFor();
       const btn = page.getByRole('button', { name: 'Compartir' });
       await btn.waitFor({ timeout: 15000 });
       await btn.click();
       await page.getByRole('button', { name: 'Crear link' }).click();
-      const link = page.getByLabel('Link');
+      const link = page.getByRole('textbox', { name: 'Link', exact: true });
       await link.waitFor({ timeout: 15000 });
       const url = await link.inputValue();
       assert(/\/p\/docs\/jds_/.test(url), `link: ${url.slice(0, 40)}`);
@@ -740,12 +830,12 @@ async function webSuite(browser) {
       const hdr = r.headers();
       await shot(pub, 'web-link-publico');
       assert(r.status() === 200, `página pública: ${r.status()}`);
-      await page.getByRole('button', { name: 'Cerrar' }).first().click();
+      await page.getByRole('dialog').getByRole('button', { name: 'Cerrar', exact: true }).first().click();
       await btn.click();
-      const rows = page.locator('table[aria-label="Links de este documento"] tbody tr');
+      const rows = page.locator('[aria-label="Links de este documento"] tbody tr');
       await rows.first().waitFor();
       const n = await rows.count();
-      assert((await page.getByLabel('Link').count()) === 0, 'el link se vuelve a mostrar');
+      assert((await page.getByRole('textbox', { name: 'Link', exact: true }).count()) === 0, 'el link se vuelve a mostrar');
       await shot(page, 'web-compartir-lista');
       await page.getByRole('button', { name: 'Revocar' }).first().click();
       await page.getByRole('dialog').getByRole('button', { name: 'Revocar' }).last().click();
@@ -754,7 +844,7 @@ async function webSuite(browser) {
       assert(r2.status() === 404, `tras revocar: ${r2.status()}`);
       await page.keyboard.press('Escape');
       // /infra/: read para el rol user y externalBlocked → sin "Compartir".
-      await page.goto(`${WEB}/docs/${D.infra}`);
+      await go(page, `${WEB}/docs/${D.infra}`);
       await page.getByRole('heading', { name: D.infraTitle }).first().waitFor();
       const infraShare = await page.getByRole('button', { name: 'Compartir' }).count();
       await shot(page, 'web-infra-sin-compartir');
@@ -762,7 +852,7 @@ async function webSuite(browser) {
       return `link → 200 (CSP ${hdr['content-security-policy'] ? 'sí' : 'no'}, noindex ${hdr['x-robots-tag'] || 'no'}); ${n} link(s) listados; revocado → 404; /infra/ sin Compartir`;
     } finally {
       await anon.close();
-      rules([]);
+      rules(prev);
     }
   });
 
@@ -772,19 +862,19 @@ async function webSuite(browser) {
       try {
         // La web pide /modules con el Bearer de la sesión: se espera el aviso en la UI (poll de 60 s).
         const t0 = Date.now();
-        await page.goto(`${WEB}/docs`);
+        await go(page, `${WEB}/docs`);
         await page.getByText(/no está disponible/).first().waitFor({ timeout: 150000 });
         const ms = Date.now() - t0;
         const disabled = await page.getByPlaceholder('Buscar en la documentación').isDisabled();
         await shot(page, 'web-modulo-caido-docs');
-        await page.goto(`${WEB}/projects/${D.project}`);
+        await go(page, `${WEB}/projects/${D.project}`);
         await page.getByText(/no está disponible/).first().waitFor({ timeout: 30000 });
         await shot(page, 'web-modulo-caido-ficha');
         assert(disabled, 'la búsqueda no se deshabilitó');
         return `aviso visible${ms ? ` (unavailable a los ${Math.round(ms / 1000)} s)` : ''}; búsqueda deshabilitada`;
       } finally {
         docker('start', DOCS_CONTAINER);
-        await page.goto(`${WEB}/docs`);
+        await go(page, `${WEB}/docs`);
         await page.getByRole('link', { name: 'clientes' }).first().waitFor({ timeout: 150000 });
       }
     });
@@ -811,4 +901,6 @@ const table = ['| id | escenario | estado | detalle |', '| --- | --- | --- | ---
 fs.writeFileSync(path.join(OUT, 'resultados.md'), table + '\n');
 log('\n' + table + `\n\nCapturas y resultados en ${OUT}`);
 // 1: alguna falla. 2: nada falló pero quedaron escenarios sin probar (no es "verde").
-process.exitCode = results.some((r) => r.status === 'falla') ? 1 : results.some((r) => r.status === 'no probado') ? 2 : 0;
+// "bug jiku" (bugs conocidos de Jiku, ver KNOWN) no cuenta salvo con E2E_STRICT=1.
+const failed = results.some((r) => r.status === 'falla' || (STRICT && r.status === 'bug jiku'));
+process.exitCode = failed ? 1 : results.some((r) => r.status === 'no probado') ? 2 : 0;

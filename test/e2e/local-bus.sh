@@ -2,10 +2,13 @@
 #
 # local-bus.sh — recorrido end-to-end de jiku-docs POR EL BUS, con el stack local levantado.
 #
-# Habla con el módulo como lo hacen personas y agentes: el CLI `jiku` de jiku-go, con las tres
-# identidades de prueba (admin, user, external-user). No usa la api HTTP salvo la ruta pública
-# /p/docs/* de los links compartidos. Todo lo que crea vive bajo una carpeta nueva por corrida
-# (`/e2e-<timestamp>/`), así que se puede repetir sin limpiar.
+# Habla con el módulo como lo hacen personas y agentes: el CLI `jiku` de jiku-go, con tres
+# identidades: `docs` (el machine user del servicio jiku-docs, clase `service`: lee y escribe todo;
+# hace el bootstrap y lo que necesita `manage`), `user` (una persona con rol user) y `external`
+# (una persona con rol external-user). Las personas se autentican con el device flow (`jiku login`)
+# en un JIKU_CONFIG_DIR propio, una vez; ver test/e2e/README.md. No usa la api HTTP salvo la ruta
+# pública /p/docs/* de los links compartidos. Todo lo que crea vive bajo una carpeta nueva por
+# corrida (`/e2e-<timestamp>/`), así que se puede repetir sin limpiar.
 #
 # Requisitos: el stack de Jiku (`deploy/local.sh up`) y jiku-docs (`docker compose -f
 # docker-compose.local.yml up -d`) levantados, `bin/jiku` de jiku-go compilado, python3, curl.
@@ -23,20 +26,26 @@
 #   JIKU_SERVERS       NATS                                  (default: nats://localhost:4222)
 #   JIKU_INSTANCE      instancia                             (default: dev)
 #   JIKU_CREDS         creds del sentinel   (default: $JIKU_REPO/deploy/nats/creds/sentinel-client.creds)
-#   E2E_KEY_DIR        carpeta con las keys de los machine users (default: .local de este repo)
-#   E2E_KEY_ADMIN / E2E_KEY_USER / E2E_KEY_EXTERNAL   nombres de archivo dentro de E2E_KEY_DIR
-#                      (default: testing_admin / testing_user / testing_external_user .service_user.json)
+#   E2E_DOCS_KEY       key del machine user del servicio (rol docs; default: .local/jiku_docs.service_user.json)
+#   E2E_USER_CONFIG_DIR / E2E_EXTERNAL_CONFIG_DIR
+#                      JIKU_CONFIG_DIR de cada persona, con el token del device flow ya obtenido
+#                      (`jiku login`; default: .local/cli/human-user y .local/cli/human-external)
+#   E2E_USER_KEY / E2E_EXTERNAL_KEY
+#                      alternativa: key file de un machine user con ese rol (pisa el config dir)
+#   JIKU_CLIENT_ID     app nativa del device flow, para refrescar el token de las personas
+#                      (default: zitadel.client_id de ~/.config/jiku/config.<instancia>.yaml)
 #   E2E_USER_ID        user-id del rol user, para la regla de ACL por usuario
 #   E2E_EXTERNAL_ID    user-id del external-user, para darle project-permissions
-#                      (defaults: los de docs/decisiones-integracion.md, D-8)
+#                      (defaults: el `subject` de `jiku whoami` de cada identidad)
 #   E2E_PUBLIC_URL     base de los links compartidos         (default: http://127.0.0.1:3100)
 #   E2E_JIKU_DB        contenedor Postgres de jiku           (default: jiku-local-database)
 #   E2E_DOCS_DB        contenedor Postgres de jiku-docs      (default: jiku-docs-local-database)
 #   E2E_DOCS_CONTAINER contenedor del servicio               (default: jiku-docs-local)
 #   E2E_DISRUPTIVE     1 = probar módulo caído y deregister (default: 0)
 #   E2E_KEEP           1 = no borrar el directorio temporal al terminar
-#   E2E_CONFIG_DIR     carpeta con los config dirs del CLI por identidad (cfg-admin, cfg-user,
-#                      cfg-external), para reusar tokens ya obtenidos (default: el temporal)
+#   E2E_KEEP_VISIBLE   1 = no quitar al final las reglas que dan acceso a la carpeta de la corrida
+#   E2E_CLEAN_GRANT    1 = al terminar quita el project-permissions del externo si no lo tenía
+#                      antes (default: 1; si ya lo tenía, siempre se le devuelve)
 #
 # Sale con 0 si todo pasó, 1 si algo falló. El resumen final lista cada falla.
 
@@ -48,12 +57,11 @@ JIKU_REPO=${JIKU_REPO:-$ROOT/../../jiku}
 JIKU_GO_REPO=${JIKU_GO_REPO:-$ROOT/../../jiku-go}
 JIKU_BIN=${JIKU_BIN:-$JIKU_GO_REPO/bin/jiku}
 JIKU_ENV_FILE=${JIKU_ENV_FILE:-$JIKU_REPO/deploy/.env}
-E2E_KEY_DIR=${E2E_KEY_DIR:-$ROOT/.local}
-E2E_KEY_ADMIN=${E2E_KEY_ADMIN:-testing_admin.service_user.json}
-E2E_KEY_USER=${E2E_KEY_USER:-testing_user.service_user.json}
-E2E_KEY_EXTERNAL=${E2E_KEY_EXTERNAL:-testing_external_user.service_user.json}
-E2E_USER_ID=${E2E_USER_ID:-396554027241832450}
-E2E_EXTERNAL_ID=${E2E_EXTERNAL_ID:-396554218317545474}
+E2E_DOCS_KEY=${E2E_DOCS_KEY:-$ROOT/.local/jiku_docs.service_user.json}
+E2E_USER_CONFIG_DIR=${E2E_USER_CONFIG_DIR:-$ROOT/.local/cli/human-user}
+E2E_EXTERNAL_CONFIG_DIR=${E2E_EXTERNAL_CONFIG_DIR:-$ROOT/.local/cli/human-external}
+E2E_USER_KEY=${E2E_USER_KEY:-}
+E2E_EXTERNAL_KEY=${E2E_EXTERNAL_KEY:-}
 E2E_PUBLIC_URL=${E2E_PUBLIC_URL:-http://127.0.0.1:3100}
 E2E_JIKU_DB=${E2E_JIKU_DB:-jiku-local-database}
 E2E_DOCS_DB=${E2E_DOCS_DB:-jiku-docs-local-database}
@@ -71,16 +79,33 @@ export JIKU_INSTANCE=${JIKU_INSTANCE:-dev}
 export JIKU_CREDS=${JIKU_CREDS:-$JIKU_REPO/deploy/nats/creds/sentinel-client.creds}
 unset JIKU_VIA
 
-for f in "$JIKU_BIN" "$JIKU_CREDS" "$E2E_KEY_DIR/$E2E_KEY_ADMIN" "$E2E_KEY_DIR/$E2E_KEY_USER" "$E2E_KEY_DIR/$E2E_KEY_EXTERNAL"; do
-  [[ -e "$f" ]] || { echo "no existe: $f" >&2; exit 2; }
+if [[ -z "${JIKU_CLIENT_ID:-}" && -f "$HOME/.config/jiku/config.$JIKU_INSTANCE.yaml" ]]; then
+  JIKU_CLIENT_ID=$(sed -n 's/^[[:space:]]*client_id:[[:space:]]*"\{0,1\}\([^"#]*\)"\{0,1\}.*/\1/p' "$HOME/.config/jiku/config.$JIKU_INSTANCE.yaml" | head -1)
+fi
+export JIKU_CLIENT_ID=${JIKU_CLIENT_ID:-}
+unset JIKU_KEY_FILE JIKU_CONFIG_DIR
+
+need=("$JIKU_BIN" "$JIKU_CREDS" "$E2E_DOCS_KEY")
+for who in USER EXTERNAL; do
+  k=E2E_${who}_KEY; d=E2E_${who}_CONFIG_DIR
+  if [[ -n "${!k}" ]]; then need+=("${!k}")
+  else
+    need+=("${!d}/tokens-$JIKU_INSTANCE.json")
+    [[ -n "$JIKU_CLIENT_ID" ]] || { echo "falta JIKU_CLIENT_ID (app nativa del device flow)" >&2; exit 2; }
+  fi
+done
+for f in "${need[@]}"; do
+  [[ -e "$f" ]] || { echo "no existe: $f (las personas: JIKU_CONFIG_DIR=<dir> jiku login; ver test/e2e/README.md)" >&2; exit 2; }
 done
 for bin in python3 curl docker; do command -v "$bin" >/dev/null || { echo "falta $bin" >&2; exit 2; }; done
 
 TMP=$(mktemp -d "${TMPDIR:-/tmp}/jiku-docs-e2e.XXXXXX")
-CFG=${E2E_CONFIG_DIR:-$TMP}
 SYNC_PID=""
+GRANT_PRE=""; GRANT_REMOVED=0
 cleanup() {
   [[ -n "$SYNC_PID" ]] && kill "$SYNC_PID" 2>/dev/null
+  # Si el externo tenía project-permissions antes de la corrida y se le quitó, devolvérselo.
+  [[ "$GRANT_REMOVED" == 1 ]] && jikudb "INSERT INTO user_project_permissions(user_id, project_id) VALUES ('$E2E_EXTERNAL_ID', $PROJECT_ID) ON CONFLICT DO NOTHING" >/dev/null 2>&1
   if [[ "${E2E_KEEP:-0}" == 1 ]]; then echo "directorio temporal: $TMP"; else rm -rf "$TMP"; fi
 }
 trap cleanup EXIT
@@ -93,15 +118,25 @@ bad()  { FAILS+=("$1"); printf '  \033[31mFALLA\033[0m %s\n' "$1"; [[ -n "${2:-}
 skip() { SKIPS+=("$1"); printf '  \033[33mskip\033[0m  %s\n' "$1"; }
 section() { printf '\n\033[1m== %s\033[0m\n' "$1"; }
 
-# as <admin|user|external> <args de jiku...>: corre el CLI con esa identidad. stdout y stderr
+# idenv <docs|user|external>: argumentos de `env` que ponen el CLI en esa identidad. `docs` usa la
+# key del servicio; las personas, su JIKU_CONFIG_DIR con el token del device flow (o una key).
+idenv() {
+  case "$1" in
+    docs) ID_ENV=(JIKU_KEY_FILE="$E2E_DOCS_KEY" JIKU_CONFIG_DIR="$TMP/cfg-docs") ;;
+    user|external)
+      local k=E2E_${1^^}_KEY d=E2E_${1^^}_CONFIG_DIR
+      if [[ -n "${!k}" ]]; then ID_ENV=(JIKU_KEY_FILE="${!k}" JIKU_CONFIG_DIR="$TMP/cfg-$1")
+      else ID_ENV=(-u JIKU_KEY_FILE JIKU_CONFIG_DIR="${!d}"); fi ;;
+    *) echo "identidad desconocida: $1" >&2; return 2 ;;
+  esac
+}
+
+# as <docs|user|external> <args de jiku...>: corre el CLI con esa identidad. stdout y stderr
 # quedan en $OUT y $ERR; el código de salida en $RC.
 as() {
-  local who=$1 key; shift
-  case "$who" in
-    admin) key=$E2E_KEY_ADMIN ;; user) key=$E2E_KEY_USER ;; external) key=$E2E_KEY_EXTERNAL ;;
-    *) echo "identidad desconocida: $who" >&2; return 2 ;;
-  esac
-  OUT=$(JIKU_KEY_FILE="$E2E_KEY_DIR/$key" JIKU_CONFIG_DIR="$CFG/cfg-$who" "$JIKU_BIN" "$@" 2>"$TMP/stderr")
+  local who=$1; shift
+  idenv "$who" || return 2
+  OUT=$(env "${ID_ENV[@]}" "$JIKU_BIN" "$@" 2>"$TMP/stderr")
   RC=$?
   ERR=$(cat "$TMP/stderr")
 }
@@ -131,18 +166,28 @@ ms() { python3 -c 'import time; print(int(time.time()*1000))'; }
 # ---- 0. registro --------------------------------------------------------------------------------
 
 section "0. registro y estado"
-as admin docs status
+# La primera request de una persona puede perder la carrera con su propio evento de autenticación
+# (core crea o actualiza su fila de `users` con él): doctor hasta que autorice.
+for who in docs user external; do
+  doc_ok() { as "$1" doctor; [[ $RC == 0 ]]; }
+  if until_ok 20 doc_ok "$who"; then ok "jiku doctor como $who"; else bad "jiku doctor como $who" "$(grep -E '✗|FAIL' <<<"$OUT$ERR" | head -2)"; fi
+done
+subject() { as "$1" whoami; awk '$1=="subject" && NF==2 {print $2}' <<<"$OUT"; }
+E2E_USER_ID=${E2E_USER_ID:-$(subject user)}
+E2E_EXTERNAL_ID=${E2E_EXTERNAL_ID:-$(subject external)}
+[[ -n "$E2E_USER_ID" && -n "$E2E_EXTERNAL_ID" ]] || { echo "no se pudo leer el subject de user/external (jiku whoami)" >&2; exit 2; }
+as docs docs status
 expect "docs status: available" 0 "available"
-as admin doctor
+as docs doctor
 expect "jiku doctor: línea del módulo" 0 "docs       available"
 
 # ---- datos reales de Jiku ------------------------------------------------------------------------
 
-section "datos de Jiku (por el bus, como admin)"
+section "datos de Jiku (por el bus, como el servicio)"
 # Un proyecto CON cliente y una tarea de un requisito de ese proyecto.
-as admin query projects.list --all -o json
+as docs query projects.list --all -o json
 PROJECTS=$OUT
-as admin query tasks.list --all -o json
+as docs query tasks.list --all -o json
 read -r TASK_ID REQ_ID PROJECT_ID CLIENT_ID < <(python3 -c '
 import json,sys
 ps={p["id"]:p for p in json.loads(sys.argv[1]) if p.get("clientId")}
@@ -151,21 +196,29 @@ for t in json.load(sys.stdin):
         print(t["id"], t["requirementId"], t["projectId"], ps[t["projectId"]]["clientId"]); break' "$PROJECTS" <<<"$OUT" 2>/dev/null)
 if [[ -z "${TASK_ID:-}" ]]; then echo "no hay una tarea de un requisito de un proyecto con cliente en la base de Jiku" >&2; exit 2; fi
 PROJECT_NAME=$(python3 -c 'import json,sys; print(next(p["name"] for p in json.loads(sys.argv[1]) if p["id"]==int(sys.argv[2])))' "$PROJECTS" "$PROJECT_ID")
-as admin query clients.list --filter "id=$CLIENT_ID" -o json
+as docs query clients.list --filter "id=$CLIENT_ID" -o json
 CLIENT_NAME=$(json 'd[0]["name"]' <<<"$OUT" 2>/dev/null)
 ok "cliente $CLIENT_ID ($CLIENT_NAME), proyecto $PROJECT_ID ($PROJECT_NAME), requisito $REQ_ID, tarea $TASK_ID"
 slug() { python3 -c 'import re,sys,unicodedata as u; s=u.normalize("NFKD",sys.argv[1]).encode("ascii","ignore").decode().lower(); print(re.sub(r"[^a-z0-9]+","-",s).strip("-") or "x")' "$1"; }
 CSLUG=$(slug "$CLIENT_NAME")
+GRANT_PRE=$(jikudb "SELECT count(*) FROM user_project_permissions WHERE user_id = '$E2E_EXTERNAL_ID' AND project_id = $PROJECT_ID" 2>/dev/null)
+if [[ "${GRANT_PRE:-0}" -ge 1 ]]; then
+  # Se quita ahora para que la caché de permisos de jiku-docs (60 s) ya esté vencida en la sección 3.
+  jikudb "DELETE FROM user_project_permissions WHERE user_id = '$E2E_EXTERNAL_ID' AND project_id = $PROJECT_ID" >/dev/null && GRANT_REMOVED=1
+  ok "el externo ya tenía project-permissions sobre $PROJECT_ID: se le quitan durante la corrida"
+fi
 PSLUG=$(slug "$PROJECT_NAME")
 
 # ---- 1. bootstrap --------------------------------------------------------------------------------
 
 section "1. bootstrap: árbol, ACL, herencia"
 RUN=e2e-$(date +%Y%m%d%H%M%S)
+# documents.changes se lee desde aquí: la base puede tener miles de cambios previos (importaciones).
+START_SEQ=$(docsdb "SELECT coalesce(max(seq),0) FROM changelog" 2>/dev/null || echo 0)
 R=00000000000000000000000000
 mkfolder() { # mkfolder <var> <parentId> <name> [json extra]
   local id; id=$(ulid)
-  as admin docs cmd folders.new "{\"id\":\"$id\",\"parentId\":\"$2\",\"name\":\"$3\"${4:+,$4}}"
+  as docs docs cmd folders.new "{\"id\":\"$id\",\"parentId\":\"$2\",\"name\":\"$3\"${4:+,$4}}"
   if [[ $RC == 0 ]]; then printf -v "$1" '%s' "$id"; else bad "folders.new $3" "$ERR"; fi
 }
 mkfolder BASE "$R" "$RUN"
@@ -178,16 +231,16 @@ mkfolder PRJ "$CLI" "$PSLUG"
 mkfolder PRIV "$PRJ" privado '"inheritAcl":false'
 P="/$RUN"; PP="$P/clientes/$CSLUG/$PSLUG"
 [[ ${#FAILS[@]} == 0 ]] && ok "árbol $P/{interno,infra/servidores,clientes/.../privado}"
-as admin docs cmd "folders.$BASE.acl.replace" '{"rules":[{"principalType":"role","principal":"admin","permission":"manage"}]}'
+as docs docs cmd "folders.$BASE.acl.replace" '{"rules":[{"principalType":"role","principal":"admin","permission":"manage"}]}'
 expect "ACL de la base: admin manage" 0
-as admin docs cmd "folders.$CLIENTES.acl.replace" '{"rules":[{"principalType":"role","principal":"user","permission":"write"}]}'
+as docs docs cmd "folders.$CLIENTES.acl.replace" '{"rules":[{"principalType":"role","principal":"user","permission":"write"}]}'
 expect "ACL /clientes/: user write" 0
-as admin docs cmd "folders.$INFRA.acl.replace" '{"rules":[{"principalType":"role","principal":"user","permission":"read"}]}'
+as docs docs cmd "folders.$INFRA.acl.replace" '{"rules":[{"principalType":"role","principal":"user","permission":"read"}]}'
 expect "ACL /infra/: user read" 0
-as admin docs cmd "folders.$INTERNO.acl.replace" "{\"rules\":[{\"principalType\":\"user\",\"principal\":\"$E2E_USER_ID\",\"permission\":\"read\"}]}"
+as docs docs cmd "folders.$INTERNO.acl.replace" "{\"rules\":[{\"principalType\":\"user\",\"principal\":\"$E2E_USER_ID\",\"permission\":\"read\"}]}"
 expect "ACL /interno/: read por usuario" 0
-as admin docs cmd "folders.$PRIV.acl.replace" '{"rules":[{"principalType":"role","principal":"admin","permission":"manage"}]}'
-expect "ACL privado (inheritAcl=false): solo admin" 0
+as docs docs cmd "folders.$PRIV.acl.replace" '{"rules":[{"principalType":"role","principal":"admin","permission":"manage"}]}'
+expect "ACL privado (inheritAcl=false): solo rol admin (nadie de la corrida; el servicio lo ve igual)" 0
 
 as user docs query folders.list --filter "pathPrefix=$P/" --include effectivePermission -o json
 perm() { json "{f['path']:f.get('effectivePermission') for f in d}.get('$1','-')" <<<"$OUT"; }
@@ -195,7 +248,7 @@ perm() { json "{f['path']:f.get('effectivePermission') for f in d}.get('$1','-')
 [[ $(perm "$P/infra/servidores/") == read ]] && ok "herencia: user read en /infra/servidores/" || bad "herencia read"
 [[ $(perm "$P/interno/") == read ]] && ok "regla por usuario: read en /interno/" || bad "regla por usuario"
 [[ $(perm "$PP/privado/") == - ]] && ok "inheritAcl=false: privado invisible para user" || bad "inheritAcl=false" "$(perm "$PP/privado/")"
-as admin docs query folders.get --id "$SRV" -o json
+as docs docs query folders.get --id "$SRV" -o json
 [[ $(json 'd["sharingBlocked"]' <<<"$OUT") == True ]] && ok "sharingBlocked heredado (no se desactiva en una subcarpeta)" || bad "sharingBlocked heredado"
 as user docs ls /
 expect "user: ls / muestra las carpetas legibles de arriba" 0 "$P/"
@@ -295,10 +348,10 @@ jiku:
 
 Servidores de pruebas, puerto 2222.
 EOF
-as admin docs new staging.md --folder "$P/infra/servidores/"; STG=$(json 'd["id"]' <<<"$OUT")
-expect "admin crea un public en /infra/ (externalBlocked)" 0
+as docs docs new staging.md --folder "$P/infra/servidores/"; STG=$(json 'd["id"]' <<<"$OUT")
+expect "docs (servicio) crea un public en /infra/ (externalBlocked)" 0
 printf '# Privado\n\nrenegociación del contrato\n' > priv.md
-as admin docs new priv.md --folder "$PP/privado/"; PRIVDOC=$(json 'd["id"]' <<<"$OUT")
+as docs docs new priv.md --folder "$PP/privado/"; PRIVDOC=$(json 'd["id"]' <<<"$OUT")
 as user docs new nota.md --folder "$P/infra/"
 expect "user escribe en /infra/ → permission_denied" 1 "permission_denied"
 as user docs put "$STG" staging.md --base-version 1
@@ -310,10 +363,13 @@ expect "user escribe privado → document_not_found" 1 "document_not_found"
 sed 's/^title: \(.*\)/title: \1\nvisibility: public/' v2.md > pub.md
 as user docs put "$DOC" pub.md --base-version 2
 expect "user (write) marca public → permission_denied" 1 "permission_denied"
-as admin docs put "$DOC" pub.md --base-version 2
-expect "admin (manage) marca public" 0 "version 3"
-as external docs get "$DOC"
-expect "external sin project-permissions no lo ve" 1 "document_not_found"
+as docs docs put "$DOC" pub.md --base-version 2
+expect "docs (servicio, manage) marca public" 0 "version 3"
+# El externo de la corrida es una persona real que puede tener ya project-permissions sobre el
+# proyecto (se le quitó al principio y se le devuelve al terminar). jiku-docs cachea los
+# permisos por proyecto 60 s, así que se espera a que el cambio se vea.
+ext_blind() { as external docs get "$DOC"; [[ $RC == 1 ]] && grep -q document_not_found <<<"$ERR"; }
+if until_ok 90 ext_blind; then ok "external sin project-permissions no lo ve"; else bad "external sin project-permissions no lo ve" "rc=$RC $(head -1 <<<"$ERR")"; fi
 if jikudb "INSERT INTO user_project_permissions(user_id, project_id) VALUES ('$E2E_EXTERNAL_ID', $PROJECT_ID) ON CONFLICT DO NOTHING" >/dev/null; then
   ext_sees() { as external docs get "$DOC"; [[ $RC == 0 ]]; }
   if until_ok 90 ext_sees; then ok "external con project-permissions ve el public (caché de 60 s)"; else bad "external no ve el public"; fi
@@ -338,7 +394,7 @@ as user docs lock "$DOC" --ttl 60
 expect "lock de la sesión A" 0
 SESS=$(json 'd["sessionId"]' <<<"$OUT")
 cp pub.md l.md; echo "con lock" >> l.md
-as admin docs put "$DOC" l.md --base-version 3
+as docs docs put "$DOC" l.md --base-version 3
 expect "put de otra sesión → document_locked con holder" 1 "$E2E_USER_ID is editing it"
 as user docs lock "$DOC" --session "$SESS" --ttl 120
 expect "renovación con la misma sesión" 0 "$SESS"
@@ -346,7 +402,7 @@ as user docs put "$DOC" l.md --base-version 3 --session "$SESS"
 expect "put con la sesión que tiene el lock" 0 "version 4"
 as user docs unlock "$DOC" --session "$SESS" --force
 expect "force sin manage → permission_denied" 1 "permission_denied"
-as admin docs unlock "$DOC" --session "$SESS" --force
+as docs docs unlock "$DOC" --session "$SESS" --force
 expect "force con manage" 0
 as user docs lock "$DOC" --ttl 10
 expect "ttl < 30 → invalid_fields" 1 "ttlSeconds"
@@ -372,7 +428,7 @@ as user docs search aduana --filter topic=reuniones --filter "pathPrefix=$P/" -o
 [[ $(json '[h["title"] for h in d]' <<<"$OUT") == "['Reunión semanal']" ]] && ok "filtro topic" || bad "filtro topic"
 as user docs search servidor --filter "projectId=$PROJECT_ID" --filter "pathPrefix=$P/" -o json
 [[ $(json 'sorted(h["title"] for h in d)' <<<"$OUT") == "['Reunión semanal', 'Servidor de staging e2e']" ]] && ok "filtro projectId en search" || bad "projectId search" "$OUT"
-as admin docs search renegociación --filter "pathPrefix=$P/" -o json; A=$(json 'len(d)' <<<"$OUT")
+as docs docs search renegociación --filter "pathPrefix=$P/" -o json; A=$(json 'len(d)' <<<"$OUT")
 as user docs search renegociación --filter "pathPrefix=$P/" -o json; U=$(json 'len(d)' <<<"$OUT")
 [[ "$A/$U" == 1/0 ]] && ok "search no devuelve lo que no se ve" || bad "search permisos" "$A/$U"
 as user docs query documents.list --filter "projectId=$PROJECT_ID" --filter "pathPrefix=$P/" --fields title -o json
@@ -406,11 +462,11 @@ expect "adjuntar sin write → permission_denied" 1 "permission_denied"
 section "7. links compartidos"
 as user docs share "$DOC"
 expect "share sin manage → permission_denied" 1 "permission_denied"
-as admin docs get "$DOC" -o json; V=$(json 'd["version"]' <<<"$OUT")
+as docs docs get "$DOC" -o json; V=$(json 'd["version"]' <<<"$OUT")
 cp l.md s.md; printf '\n![diagrama](%s)\n\n<script>alert(1)</script>\n' "$ATTLINK" >> s.md
-as admin docs put "$DOC" s.md --base-version "$V" >/dev/null
-as admin docs share "$DOC" --expires 2d --note e2e
-expect "share como admin" 0
+as docs docs put "$DOC" s.md --base-version "$V" >/dev/null
+as docs docs share "$DOC" --expires 2d --note e2e
+expect "share como docs (servicio)" 0
 SHARE_URL=$(head -1 <<<"$OUT"); SHARE_ID=$(grep -o 'shared link [0-9A-Z]*' <<<"$ERR" | awk '{print $3}')
 [[ "$SHARE_URL" == "$E2E_PUBLIC_URL/p/docs/jds_"* ]] && ok "url {JIKU_PUBLIC_URL}/p/docs/jds_…" || bad "url del link" "${SHARE_URL%%jds_*}"
 H=$(curl -s -D - -o page.html "$SHARE_URL")
@@ -422,23 +478,23 @@ grep -q "script-src\|'unsafe-eval'" <<<"$(grep -i '^content-security-policy' <<<
 ! grep -q 'jiku:\|<script' page.html && ok "sin frontmatter ni <script> en el HTML" || bad "frontmatter o script en el HTML"
 IMG=$(grep -o '/p/docs/jds_[^"]*/attachments/[0-9A-Z]*' page.html | head -1)
 [[ -n "$IMG" ]] && [[ $(curl -s -o /dev/null -w '%{http_code}' "$E2E_PUBLIC_URL$IMG") == 302 ]] && ok "adjunto del link → 302 a URL prefirmada" || bad "adjunto por el link"
-as admin docs shares "$DOC" -o json
+as docs docs shares "$DOC" -o json
 grep -q 'jds_' <<<"$OUT" && bad "shares devuelve el token" || ok "shares lista sin token"
-as admin docs revoke "$SHARE_ID"
+as docs docs revoke "$SHARE_ID"
 expect "revoke" 0
 [[ $(curl -s -o /dev/null -w '%{http_code}' "$SHARE_URL") == 404 ]] && ok "link revocado → 404" || bad "revocado no da 404"
-as admin docs share "$STG"
+as docs docs share "$STG"
 expect "share en /infra/ → sharing_blocked" 1 "sharing_blocked"
-as admin docs share "$DOC" --expires 200d
+as docs docs share "$DOC" --expires 200d
 expect "vencimiento > 180 días → share_expiry_invalid" 1 "share_expiry_invalid"
 printf '# Accesos\n\npassword: Sup3rS3creta!\n' > sec.md
-JIKU_VIA=agent as admin docs new sec.md --folder "$PP/"
+JIKU_VIA=agent as docs docs new sec.md --folder "$PP/"
 expect "posible secreto → aviso, no bloquea" 0 "possible_secret_detected"
-as admin docs share "$PP/sec.md"
+as docs docs share "$PP/sec.md"
 expect "share de un doc con secreto exige --ack-secret-warning" 1 "secret_warning_not_acknowledged"
-as admin docs share "$PP/trans.md" --expires 1d; TURL=$(head -1 <<<"$OUT")
-as admin docs get "$PP/trans.md" -o json; TV=$(json 'd["version"]' <<<"$OUT")
-as admin docs rm "$PP/trans.md" --base-version "$TV" >/dev/null
+as docs docs share "$PP/trans.md" --expires 1d; TURL=$(head -1 <<<"$OUT")
+as docs docs get "$PP/trans.md" -o json; TV=$(json 'd["version"]' <<<"$OUT")
+as docs docs rm "$PP/trans.md" --base-version "$TV" >/dev/null
 [[ $(curl -s -o /dev/null -w '%{http_code}' "$TURL") == 404 ]] && ok "borrar el documento revoca sus links" || bad "link sobrevive al borrado"
 
 # ---- 8. eventos y sync ---------------------------------------------------------------------------
@@ -451,28 +507,28 @@ if UNPUB=$(docsdb "SELECT count(*) FROM changelog WHERE published_at IS NULL AND
 else
   skip "changelog (sin acceso a $E2E_DOCS_DB)"
 fi
-as user docs query documents.changes --payload '{"sinceSeq":0,"limit":500}' -o json
+as user docs query documents.changes --payload "{\"sinceSeq\":${START_SEQ:-0},\"limit\":500}" -o json
 grep -q "$DOC" <<<"$OUT" && ! grep -q "$PRIVDOC" <<<"$OUT" && ok "documents.changes filtrado por permisos" || bad "documents.changes"
 SYNC=$TMP/sync
 as user docs sync "$SYNC" --once --only "$P/"
 expect "sync --once" 0
 [[ -f "$SYNC$PP/arq.md" && ! -w "$SYNC$P/infra/servidores/staging.md" ]] && ok "sync baja los documentos; /infra/ queda de solo lectura" || bad "sync --once: archivos"
 grep -q 'deleted in Jiku' <<<"$ERR" && bad "sync aplicó un borrado ya restaurado" || ok "sync no reaplica borrados restaurados"
-JIKU_KEY_FILE="$E2E_KEY_DIR/$E2E_KEY_USER" JIKU_CONFIG_DIR="$CFG/cfg-user" "$JIKU_BIN" docs sync "$SYNC" --only "$P/" 2>"$TMP/sync.log" &
+idenv user; env "${ID_ENV[@]}" "$JIKU_BIN" docs sync "$SYNC" --only "$P/" 2>"$TMP/sync.log" &
 SYNC_PID=$!
 until_ok 20 grep -q 'online' "$TMP/sync.log" || bad "el daemon no quedó online"
-as admin docs get "$PP/reunion.md" -o json; RV=$(json 'd["version"]' <<<"$OUT")
-cp reunion.md r.md; echo "Cambio remoto de admin." >> r.md
-as admin docs put "$PP/reunion.md" r.md --base-version "$RV" >/dev/null; t0=$(ms)
-if until_ok 15 grep -q 'Cambio remoto de admin' "$SYNC$PP/reunion.md"; then ok "cambio remoto → archivo local en $(( $(ms) - t0 )) ms"; else bad "el cambio remoto no llegó"; fi
+as docs docs get "$PP/reunion.md" -o json; RV=$(json 'd["version"]' <<<"$OUT")
+cp reunion.md r.md; echo "Cambio remoto del servicio." >> r.md
+as docs docs put "$PP/reunion.md" r.md --base-version "$RV" >/dev/null; t0=$(ms)
+if until_ok 15 grep -q 'Cambio remoto del servicio' "$SYNC$PP/reunion.md"; then ok "cambio remoto → archivo local en $(( $(ms) - t0 )) ms"; else bad "el cambio remoto no llegó"; fi
 echo "Cambio local." >> "$SYNC$PP/aduana.md"; t0=$(ms)
 remote_has() { as user docs get "$PP/aduana.md"; grep -q 'Cambio local' <<<"$OUT"; }
 if until_ok 20 remote_has; then ok "cambio local → subido en $(( $(ms) - t0 )) ms"; else bad "el cambio local no subió"; fi
 kill "$SYNC_PID"; wait "$SYNC_PID" 2>/dev/null; SYNC_PID=""
 echo "Edición local offline." >> "$SYNC$PP/aduana.md"
-as admin docs get "$PP/aduana.md" -o json; AV=$(json 'd["version"]' <<<"$OUT"); json 'd["content"]' <<<"$OUT" > ad.md
+as docs docs get "$PP/aduana.md" -o json; AV=$(json 'd["version"]' <<<"$OUT"); json 'd["content"]' <<<"$OUT" > ad.md
 echo "Edición remota concurrente." >> ad.md
-as admin docs put "$PP/aduana.md" ad.md --base-version "$AV" >/dev/null
+as docs docs put "$PP/aduana.md" ad.md --base-version "$AV" >/dev/null
 as user docs sync "$SYNC" --once --only "$P/"
 ls "$SYNC$PP/" | grep -q 'aduana.remoto-v' && ok "conflicto → .remoto-vN.md" || bad "conflicto sin copia remota" "$ERR"
 
@@ -510,9 +566,29 @@ done
 n=$(docker logs --since 30m "$E2E_DOCS_CONTAINER" 2>&1 | grep -c '"level":"ERROR"')
 [[ "$n" == 0 ]] && ok "jiku-docs sin errores" || bad "jiku-docs: $n errores en el log"
 
+# ---- limpieza --------------------------------------------------------------------------------------
+
+# jiku-docs no borra carpetas: lo que crea la corrida queda. Para que no se mezcle con las carpetas
+# reales en la web de las personas (la raíz muestra las carpetas legibles de más arriba, y cada
+# corrida agregaría otro "clientes", "infra" e "interno"), se le quitan las reglas que daban acceso.
+section "limpieza"
+if [[ "${E2E_KEEP_VISIBLE:-0}" != 1 ]]; then
+  for f in "${CLIENTES:-}" "${INFRA:-}" "${INTERNO:-}"; do
+    [[ -n "$f" ]] && as docs docs cmd "folders.$f.acl.replace" '{"rules":[]}' && [[ $RC == 0 ]] || bad "quitar las reglas de $f" "$ERR"
+  done
+  as user docs query folders.list --filter "pathPrefix=$P/" -o json
+  [[ "$OUT" == "[]" ]] && ok "la corrida $P/ quedó invisible para user (E2E_KEEP_VISIBLE=1 la deja)" || bad "user sigue viendo $P/" "$OUT"
+else
+  skip "limpieza (E2E_KEEP_VISIBLE=1)"
+fi
+
 # ---- resumen -------------------------------------------------------------------------------------
 
-[[ "${E2E_CLEAN_GRANT:-1}" == 1 ]] && jikudb "DELETE FROM user_project_permissions WHERE user_id = '$E2E_EXTERNAL_ID' AND project_id = $PROJECT_ID" >/dev/null 2>&1
+if [[ "$GRANT_REMOVED" == 1 ]]; then
+  jikudb "INSERT INTO user_project_permissions(user_id, project_id) VALUES ('$E2E_EXTERNAL_ID', $PROJECT_ID) ON CONFLICT DO NOTHING" >/dev/null 2>&1 && GRANT_REMOVED=0
+elif [[ "${E2E_CLEAN_GRANT:-1}" == 1 ]]; then
+  jikudb "DELETE FROM user_project_permissions WHERE user_id = '$E2E_EXTERNAL_ID' AND project_id = $PROJECT_ID" >/dev/null 2>&1
+fi
 printf '\n\033[1m%d ok, %d fallas, %d salteados\033[0m  (todo quedó bajo %s/)\n' "$PASS" "${#FAILS[@]}" "${#SKIPS[@]}" "$P"
 for f in "${FAILS[@]}"; do echo "  FALLA: $f"; done
 [[ ${#FAILS[@]} == 0 ]]
