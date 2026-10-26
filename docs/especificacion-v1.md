@@ -106,7 +106,9 @@ Sigue el mismo patrón que `core`: no tiene HTTP propio, atiende request/reply e
 
 ## 3. Modelo de dominio
 
-Cada documento tiene una **ubicación** (la carpeta, que define quién lo ve) y **relaciones** (de qué trata, que nunca dan acceso). Esto permite documentos transversales sin duplicarlos.
+> **P-1 (contrato 1.3.0, `docs/p1/servicio.md`):** la carpeta ya no define quién ve un documento: lo define su `visibility` (`internal`, `public`, `restricted`) junto con la clase del caller (sección 4). La ubicación solo ordena los archivos para el CLI y el daemon de sync; si `documents.new` no la trae, el servidor la genera de las relaciones. Donde esta sección habla de carpetas que deciden acceso, manda P-1.
+
+Cada documento tiene una **ubicación** (la carpeta, que ordena los archivos) y **relaciones** (de qué trata, que nunca dan acceso). Esto permite documentos transversales sin duplicarlos.
 
 ### Entidades
 
@@ -136,7 +138,11 @@ El árbol se organiza por quién debe ver, no por tema. Un documento sobre el se
 
 ### Visibilidad
 
-Cada documento tiene `visibility`: `internal` (default) o `public`, con el mismo significado que `visibilityLevel` en Jiku. Solo los documentos `public` pueden llegar a clientes externos (sección 4). Marcar un documento como `public` exige permiso `manage` sobre su carpeta.
+Cada documento tiene `visibility`: `internal` (default), `public` o `restricted` (P-1).
+
+- `internal`: todas las personas internas (`admin`, `user`) lo leen y escriben.
+- `public`: además lo leen los externos con permiso sobre alguno de sus proyectos (sección 4). Lo puede poner cualquier persona interna.
+- `restricted`: solo `admin` y servicios. Para un `user` o un externo no existe por ninguna vía. Solo un `admin` (o un servicio) lo pone o lo quita, en `new`, `update`, `restore` y `relations.update`; un `user` recibe `permission_denied`. No admite links, y pasar un documento a `restricted` revoca los activos.
 
 ### Formato del documento
 
@@ -163,7 +169,7 @@ jiku:
 Reglas de parseo:
 
 - `title`: si falta, se toma el primer encabezado `#`; si tampoco hay, el nombre de archivo sin extensión.
-- `visibility`: `internal` o `public`. Otro valor es error `frontmatter_invalid`.
+- `visibility`: `internal`, `public` o `restricted`. Otro valor es error `frontmatter_invalid`.
 - `topics`: lista de strings; se normalizan a kebab-case sin acentos. Los temas se crean al usarse.
 - `jiku`: bloque estricto. Solo acepta `clients`, `projects`, `requirements` y `tasks`, con listas de ids numéricos. Cada id se valida contra `core`; uno inexistente o no visible para quien escribe es error `invalid_relation`.
 - Otras claves de primer nivel se conservan en el contenido y se ignoran.
@@ -182,13 +188,23 @@ La `api` resuelve esa ruta verificando permisos y redirige a una URL prefirmada 
 
 ## 4. Identidad y autorización
 
-`jiku-docs` no valida tokens: el `user-id` del subject es la identidad, y el auth-callout garantiza que nadie publique bajo un id ajeno. Sobre esa identidad, el servicio decide permisos con su propia ACL y con datos que consulta a `core`.
+`jiku-docs` no valida tokens: el `user-id` del subject es la identidad, y el auth-callout garantiza que nadie publique bajo un id ajeno. Sobre esa identidad, el servicio decide permisos con la clase del caller, la visibilidad del documento y datos que consulta a `core`.
+
+> **P-1 (contrato 1.3.0, `docs/p1/servicio.md`):** la ACL de carpetas quedó **sin efecto** (se conserva en la base y en el contrato como obsoleta), igual que `externalBlocked` y `sharingBlocked`:
+
+| Visibilidad | `admin` | `user` | `external-user` | servicio |
+| --- | --- | --- | --- | --- |
+| `internal` | lee y escribe | lee y escribe | nunca | todo |
+| `public` | lee y escribe | lee y escribe | lee, si está vinculado a un proyecto de sus `project-permissions` | todo |
+| `restricted` | lee y escribe | nunca | nunca | todo |
+
+`folders.*` (comandos) es solo para `admin` y servicios; las personas internas ven todas las carpetas y escriben documentos en cualquiera. `unlock` con `force` es solo para `admin`. Cualquier persona interna crea y revoca links de documentos `internal` y `public`. La migración de datos de P-1 (al arrancar, una sola vez) pasó a `restricted` todo documento que un `user` no podía leer con la ACL vigente y a `internal` los `public` bajo `externalBlocked`. Las subsecciones "ACL de carpetas" y "Clientes externos" describen el modelo anterior.
 
 ### Clases de caller
 
 | Clase | Cómo se reconoce | Identidad efectiva | Lectura | Escritura |
 | --- | --- | --- | --- | --- |
-| `person-internal` | `users.identity_type = person` y rol interno | El `user-id` del subject | Según ACL de carpetas | Según ACL de carpetas |
+| `person-internal` | `users.identity_type = person` y rol interno | El `user-id` del subject | `internal` y `public`; `restricted` solo `admin` (P-1) | Igual que la lectura |
 | `person-external` | `users.identity_type = person` y rol de cliente | El `user-id` del subject | Solo documentos `public` vinculados a proyectos visibles en `project-permissions` | Nunca |
 | `api` | El `user-id` es el de la `api` de Jiku | La persona declarada en `actor` (`actor.id`) | Según la clase que dan `actor.roles` | Según la clase que dan `actor.roles` |
 | `service` | `identity_type = service` con rol `internal-app` | El `user-id` del subject | Todo, sin recorte | Todo; queda atribuido al servicio |
@@ -253,15 +269,15 @@ Convive con el acceso de clientes con cuenta, pero con otro propósito. Para cli
 
 | Regla | Definición |
 | --- | --- |
-| Quién crea | Permiso `manage` sobre la carpeta del documento |
-| Quién revoca | `manage` sobre la carpeta, o quien creó el link |
-| Carpetas bloqueadas | `sharingBlocked = true` impide crear links en esa carpeta y sus descendientes (se hereda; no se puede desactivar en una subcarpeta de una bloqueada). Recomendado en `/infra/` e `/interno/` |
+| Quién crea | Cualquier persona interna que lee el documento (P-1); un documento `restricted` no admite links (`sharing_blocked`) |
+| Quién revoca | Cualquier persona interna que lee el documento (P-1) |
+| Carpetas bloqueadas | Obsoleto desde P-1: `sharingBlocked` no tiene efecto. Lo reemplaza `restricted` |
 | Token | 256 bits aleatorios en base64url con prefijo `jds_` (permite detectarlo con escáneres de secretos). Se devuelve una sola vez; se guarda solo su SHA-256 |
 | Modo | `latest` muestra siempre la versión actual; `pinned` muestra una versión fija |
 | Vencimiento | Obligatorio. Default 30 días, máximo 180 |
 | Adjuntos | Incluidos por defecto; desactivables por link. Solo se sirven adjuntos del documento compartido |
 | Qué se muestra | Solo el cuerpo renderizado a HTML sanitizado. El frontmatter se quita siempre (contiene ids de Jiku y temas internos). Los enlaces a otros documentos se muestran como texto |
-| Invalidación | Revocar, vencer, borrar el documento o bloquear la carpeta corta el link en el siguiente acceso. Borrar el documento revoca sus links: restaurarlo no los reactiva |
+| Invalidación | Revocar, vencer, borrar el documento o pasarlo a `restricted` corta el link en el siguiente acceso. Borrar el documento o restringirlo revoca sus links (`revokeReason`: `document_deleted` o `restricted`): restaurarlo o volverlo a `internal` no los reactiva |
 | Secretos | Si el detector de secretos marcó el documento, `shares.new` exige `acknowledgeSecretWarning: true` |
 | Auditoría | Cada link registra creador, fecha, contador de accesos y último acceso. Cada acceso se guarda con IP hasheada y agente de usuario truncado |
 
@@ -380,28 +396,29 @@ Misma gramática que `jiku-queries`: `filter` (con operadores `gte`, `lte` y un 
 
 ## 6. Comandos (`jiku-docs-commands`)
 
-18 comandos. Todos responden con `{ status, data }`; en altas y modificaciones `data` trae como mínimo `id` y, en documentos, `version`. El detalle de cada payload está en el contrato `jiku-docs-commands.yaml`; los esquemas rechazan claves desconocidas.
+19 comandos (P-1 suma `documents.{id}.relations.update`). Todos responden con `{ status, data }`; en altas y modificaciones `data` trae como mínimo `id` y, en documentos, `version`. El detalle de cada payload está en el contrato `jiku-docs-commands.yaml`; los esquemas rechazan claves desconocidas.
 
 ### Carpetas
 
 | Método | Payload | Respuesta | Permiso | Errores específicos |
 | --- | --- | --- | --- | --- |
-| `folders.new` | `id`, `parentId`, `name`, `inheritAcl?` (default `true`), `externalBlocked?`, sharingBlocked? | `{ id, path }` | `manage` en el padre | `folder_not_found`, `already_exists` |
-| `folders.{id}.edit` | `name?`, `parentId?` (mover), `inheritAcl?`, `externalBlocked?`, sharingBlocked? | `{ id, path }` | `manage` en la carpeta y, si se mueve, en el destino | `folder_not_found`, `already_exists`, `invalid_fields` (mover dentro de sí misma) |
-| `folders.{id}.delete` | vacío | `{ id }` | `manage` | `folder_not_empty` |
-| `folders.{id}.acl.replace` | `rules: [{ principalType, principal, permission }]` (máx. 100) | `{ id, rules }` | `manage` | `invalid_fields` |
+| `folders.new` | `id`, `parentId`, `name`, `inheritAcl?` (default `true`), `externalBlocked?`, sharingBlocked? (los tres obsoletos, sin efecto) | `{ id, path }` | `admin` o servicio | `folder_not_found`, `already_exists`, `permission_denied` |
+| `folders.{id}.edit` | `name?`, `parentId?` (mover), `inheritAcl?`, `externalBlocked?`, sharingBlocked? | `{ id, path }` | `admin` o servicio | `folder_not_found`, `already_exists`, `invalid_fields` (mover dentro de sí misma) |
+| `folders.{id}.delete` | vacío | `{ id }` | `admin` o servicio | `folder_not_empty` |
+| `folders.{id}.acl.replace` | `rules: [{ principalType, principal, permission }]` (máx. 100). Obsoleto: las reglas no tienen efecto | `{ id, rules }` | `admin` o servicio | `invalid_fields` |
 
 ### Documentos
 
 | Método | Payload | Respuesta | Permiso | Errores específicos |
 | --- | --- | --- | --- | --- |
-| `documents.new` | `id`, `folderId`, `fileName`, `content` o `contentUploadId`, `checksum`, `via?`, `message?` | `{ id, version: 1, path }` | `write` en la carpeta | `already_exists`, `file_name_invalid`, `frontmatter_invalid`, `invalid_relation`, `content_too_large`, `checksum_mismatch`, `upload_not_found` |
+| `documents.new` | `id`, `folderId?`, `fileName?`, `content` o `contentUploadId`, `checksum`, `via?`, `message?` | `{ id, version: 1, path, folderId, fileName }` | Persona interna o servicio; `restricted` solo `admin` | `folder_not_found`, `permission_denied`, `already_exists`, `file_name_invalid`, `frontmatter_invalid`, `invalid_relation`, `content_too_large`, `checksum_mismatch`, `upload_not_found` |
 | `documents.{id}.update` | `baseVersion`, `content` o `contentUploadId`, `checksum`, `sessionId?`, `via?`, `message?` | `{ id, version }` | `write` | `version_conflict`, `document_locked`, `frontmatter_invalid`, `invalid_relation`, `content_too_large`, `checksum_mismatch` |
 | `documents.{id}.move` | `baseVersion`, `folderId?`, `fileName?` | `{ id, version, path }` | `write` en origen y destino | `version_conflict`, `document_locked`, `already_exists`, `file_name_invalid` |
 | `documents.{id}.delete` | `baseVersion` | `{ id }` | `write` | `version_conflict`, `document_locked` |
 | `documents.{id}.restore` | `fromVersion`, `baseVersion` | `{ id, version }` | `write` | `version_conflict`, `document_not_found` (versión inexistente) |
 | `documents.{id}.lock` | `sessionId`, `via` (`human` / `agent`), `ttlSeconds?` (30 a 300, default 120) | `{ id, sessionId, expiresAt }` | `write` | `document_locked` |
-| `documents.{id}.unlock` | `sessionId`, `force?` | `{ id }` | `write`; `force` exige `manage` | `lock_not_held` |
+| `documents.{id}.unlock` | `sessionId`, `force?` | `{ id }` | `write`; `force` solo `admin` o servicio | `lock_not_held` |
+| `documents.{id}.relations.update` | `baseVersion`, `add?`, `remove?` (`{ clients, projects, requirements, tasks }`), `sessionId?` | `{ id, version, relations }` | `write` | `version_conflict`, `document_locked`, `invalid_relation`, `invalid_fields` |
 | `documents.request-content-upload` | `checksum`, `size` | `{ contentUploadId, uploadUrl, expiresIn }` | Cualquier persona interna o servicio | `content_too_large` |
 
 Notas:
@@ -410,6 +427,9 @@ Notas:
 - **`delete`** es lógico: el documento deja de listarse, se conservan sus versiones y se puede restaurar con `documents.{id}.restore` por 30 días; después se elimina definitivamente junto con sus versiones.
 - **`restore`** crea una versión nueva con el contenido de `fromVersion`; nunca reescribe historia. Sobre un documento borrado, lo reactiva.
 - **Lock:** si un documento tiene lock, las escrituras de otras sesiones fallan con `document_locked`. Sin lock, cualquier persona con `write` puede escribir, siempre con `baseVersion`. El lock se renueva repitiendo `lock` con el mismo `sessionId` antes de `expiresAt`.
+- **Ubicación generada (P-1):** sin `folderId`, el servidor crea (si faltan) y usa `/clientes/<cliente>/<proyecto>/` (el cliente sale del proyecto según core o del primero de `jiku.clients`; sin cliente, `sin-cliente`), `/clientes/<cliente>/general/` o `/general/`, con slugs kebab-case sin acentos de los nombres de core y el primer proyecto o cliente tal como figura en el frontmatter. Sin `fileName`, el título en kebab-case `.md`, único en la carpeta (`-2`, `-3`…). Cambiar relaciones después no mueve el documento.
+- **`relations.update` (P-1):** reescribe solo el bloque `jiku:` del frontmatter ((actuales ∪ `add`) ∖ `remove`; agregar un proyecto agrega su cliente si falta) y crea una versión `update` con un mensaje automático ("Proyecto asignado: EXO - Videoconferencia"). Sin cambios responde `success` con la versión actual. No lleva `via`: el origen sale de la clase del caller.
+- **Nombres (P-1):** cada escritura guarda el nombre del autor (`actor.name` o `username` con la api, el `name` de `users.list` por el bus, el nombre del servicio para un servicio), que las consultas devuelven como `createdByName`, `updatedByName`, `authorName` y `lock.holderName`.
 - **Contenido por URL:** el cliente pide `request-content-upload`, hace `PUT` del contenido a `uploadUrl` y después manda `contentUploadId` en `new` o `update`. El servicio verifica el SHA-256 al consumirlo. Un `contentUploadId` se usa una sola vez.
 
 ### Adjuntos
@@ -427,20 +447,20 @@ Notas:
 
 | Método | Payload | Respuesta | Permiso | Errores específicos |
 | --- | --- | --- | --- | --- |
-| `shares.new` | `id`, `documentId`, `mode` (`latest` / `pinned`), `version?` (obligatorio con `pinned`), `expiresAt`, `includeAttachments?` (default `true`), `note?`, `acknowledgeSecretWarning?` | `{ id, token, url, expiresAt }` | `manage` en la carpeta | `document_not_found`, `permission_denied`, `sharing_blocked`, `share_expiry_invalid`, `secret_warning_not_acknowledged`, `already_exists` |
-| `shares.{id}.revoke` | vacío | `{ id, revokedAt }` | `manage` en la carpeta o creador del link | `share_not_found`, `permission_denied` |
+| `shares.new` | `id`, `documentId`, `mode` (`latest` / `pinned`), `version?` (obligatorio con `pinned`), `expiresAt`, `includeAttachments?` (default `true`), `note?`, `acknowledgeSecretWarning?` | `{ id, token, url, expiresAt }` | Persona interna que lee el documento (no `restricted`) | `document_not_found`, `permission_denied`, `sharing_blocked`, `share_expiry_invalid`, `secret_warning_not_acknowledged`, `already_exists` |
+| `shares.{id}.revoke` | vacío | `{ id, revokedAt }` | Persona interna que lee el documento | `share_not_found`, `permission_denied` |
 
 `token` y `url` aparecen solo en la respuesta de `shares.new`; no se pueden volver a consultar. Si se pierde el link, se revoca y se crea otro. Reintentar `shares.new` con el mismo `id` tras un timeout devuelve el mismo link solo dentro de los 5 minutos (el servicio guarda el token cifrado ese tiempo para cubrir el caso); después responde `already_exists` sin token.
 
 ## 7. Consultas (`jiku-docs-queries`)
 
-13 consultas, con la misma gramática que `jiku-queries`. Todas filtran por permisos antes de devolver o paginar.
+14 consultas (P-1 suma `documents.suggest-relations`), con la misma gramática que `jiku-queries`. Todas filtran por permisos antes de devolver o paginar; un `restricted` no existe para un `user` ni para un externo en ninguna (ni en conteos, fragmentos, feed o temas).
 
 | Método | Para qué | Parámetros principales |
 | --- | --- | --- |
 | `meta.describe` | Describe recursos, campos, filtros, órdenes y enums | ninguno |
 | `folders.list` | Navegar el árbol | `filter`: `parentId`, `pathPrefix`, `id[]`; `include`: `effectivePermission` |
-| `folders.get` | Detalle de una carpeta | `id`; `include`: `acl` (solo con `manage`), `effectivePermission` |
+| `folders.get` | Detalle de una carpeta | `id`; `include`: `acl` (obsoleto; solo `admin` y servicios), `effectivePermission` (`write` para `user`, `manage` para `admin`) |
 | `documents.list` | Catálogo filtrable | ver filtros abajo |
 | `documents.get` | Documento con su contenido | `id`, `version?`; `include`: `content`, `relations`, `topics`, `lock`, `attachments`. Trae `prunedVersionsCount` (no a externos); una `version` compactada responde `version_pruned` |
 | `documents.versions.list` | Historial (con huecos en la numeración por la compactación) | `documentId`, `author`, `via`, `createdAt`, `kind`, `protected`; orden por `version`. Cada versión trae `kind` (`create`, `update`, `restore`) y `protected` |
@@ -448,6 +468,7 @@ Notas:
 | `documents.changes` | Feed de cambios para reconciliar | `sinceSeq`, `limit`, `filter.pathPrefix?` |
 | `topics.list` | Temas en uso, con cantidad de documentos | `filter.prefix?` |
 | `attachments.list` | Adjuntos de un documento | `filter.documentId` |
+| `documents.suggest-relations` | Candidatos para "Asignar sugerido" (P-1) | `id`. Devuelve hasta 5 `{ projectId, clientId, score, reason }` por nombres, partes del nombre o código de proyectos y nombres de clientes de core en el título (pesa más) y el contenido; excluye los proyectos ya vinculados; un candidato solo de cliente trae `projectId: null`. Un externo recibe `permission_denied` |
 
 ### Filtros de `documents.list`
 
@@ -458,13 +479,14 @@ Notas:
 | `pathPrefix` | string | Esa carpeta y sus descendientes (`/clientes/acme/`) |
 | `clientId`, `projectId`, `requirementId`, `taskId` | entero o lista | Por relación con Jiku. `projectId` incluye documentos vinculados a requisitos o tareas de ese proyecto |
 | `topic` | string o lista | Coincidencia exacta del slug |
-| `visibility` | `internal` / `public` |  |
+| `visibility` | `internal` / `public` / `restricted` | `restricted` pedido por quien no lo lee: lista vacía |
+| `hasProject`, `hasClient`, `hasTopic` | boolean | P-1. `false`: "Sin proyecto" (ni directo ni por requisito o tarea), "Sin cliente" (sin `jiku.clients`), "Sin tema" |
 | `createdBy`, `updatedBy` | user-id o lista | Autor de la primera o la última versión |
 | `createdAt`, `updatedAt` | rango (`gte`, `lte`) | ISO 8601 UTC |
 | `fileName` | string | Prefijo, sin distinguir mayúsculas |
 | `deleted` | boolean | Default `false` |
 
-Orden permitido: `updatedAt`, `createdAt`, `title`, `path`. Campos base: `id`, `title`, `path`, `folderId`, `version`, `visibility`, `updatedAt`, `updatedBy`. `documents.list` nunca devuelve contenido; para eso está `documents.get`.
+Orden permitido: `updatedAt`, `createdAt`, `title`, `path`. Campos base: `id`, `title`, `path`, `folderId`, `version`, `visibility`, `updatedAt`, `updatedBy`, `updatedByName`, `clients`, `projects` (P-1; `createdByName` se pide en `fields`). Con `filter.projectId` cada ítem trae `projectMatch` (`direct` si el proyecto está en `jiku.projects`, `indirect` si llega por un requisito o una tarea); lo mismo en `documents.search`, cuyos ítems también traen `clients`, `projects`, `createdByName`, `updatedByName` y `visibility`. A un externo, `clients` va vacío y `projects` solo con los suyos. `documents.list` nunca devuelve contenido; para eso está `documents.get`.
 
 ### `documents.get`
 
@@ -596,6 +618,8 @@ Los eventos `share.*` solo van al stream; no generan notificaciones por persona.
 El sobre nunca lleva el contenido del documento: quien lo necesite lo pide con `documents.get`. `snapshot` es el estado de los metadatos después del cambio.
 
 ### Notificaciones por persona
+
+> **P-1:** se calculan con el modelo de visibilidad: un documento `restricted` notifica solo a los admins. Cuando un documento pasa a `restricted`, cada `user` recibe `access.changed` (sin detalle); cuando deja de ser `public`, lo mismo para los externos con permiso sobre alguno de sus proyectos. El daemon de sync reconcilia con esa señal.
 
 Subject: `{instance}.{user-id}.docs-notify.v1.{entidad}.{acción}`. Son mensajes NATS simples (sin JetStream): si la persona no está conectada, se pierden, y el feed `documents.changes` cubre el hueco.
 
@@ -787,6 +811,8 @@ Base PostgreSQL propia (`jiku_docs`), separada de la de Jiku. El servicio usa un
 
 ### Tablas
 
+> **P-1 (migración `0005`):** `documents.visibility` admite `restricted`; columnas de nombres guardados al escribir (`documents.created_by_name`, `documents.updated_by_name`, `document_versions.author_name`, `document_locks.holder_name`); `shares.revoke_reason` admite `restricted`. La migración de datos (visibilidad y nombres) corre en Go al arrancar y se registra en `service_state` (`migration:p1-visibility`, `migration:p1-names`).
+
 ```sql
 CREATE TABLE folders (
   id               text PRIMARY KEY,             -- ULID
@@ -814,7 +840,7 @@ CREATE TABLE documents (
   folder_id       text NOT NULL REFERENCES folders(id),
   file_name       text NOT NULL,
   title           text NOT NULL,
-  visibility      text NOT NULL DEFAULT 'internal' CHECK (visibility IN ('internal','public')),
+  visibility      text NOT NULL DEFAULT 'internal' CHECK (visibility IN ('internal','public','restricted')),  -- P-1
   current_version integer NOT NULL,
   checksum        text NOT NULL,                 -- 'sha256:<hex>' de la versión actual
   size_bytes      integer NOT NULL,
@@ -918,7 +944,7 @@ CREATE TABLE shares (
   expires_at          timestamptz NOT NULL,
   revoked_at          timestamptz,
   revoked_by          text,
-  revoke_reason       text CHECK (revoke_reason IN ('manual','document_deleted')),
+  revoke_reason       text CHECK (revoke_reason IN ('manual','document_deleted','restricted')),
   access_count        bigint NOT NULL DEFAULT 0,
   last_access_at      timestamptz,
   CHECK (mode = 'latest' OR version IS NOT NULL)

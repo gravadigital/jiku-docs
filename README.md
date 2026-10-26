@@ -1,7 +1,7 @@
 # jiku-docs
 
-Módulo de documentación de Jiku: guarda la documentación de Grava en markdown, con carpetas y
-permisos heredables, versiones, vínculos con clientes, proyectos, requisitos y tareas de Jiku,
+Módulo de documentación de Jiku: guarda la documentación de Grava en markdown, con permisos por
+visibilidad (`internal`, `public` para clientes externos, `restricted` solo para admins), versiones, vínculos con clientes, proyectos, requisitos y tareas de Jiku,
 búsqueda por texto completo, locks de edición, notificaciones en tiempo real, links públicos de solo
 lectura y adjuntos. Reemplaza a HedgeDoc.
 
@@ -14,6 +14,13 @@ del subject (garantizada por el auth-callout) y publica eventos en JetStream. Lo
 - Decisiones de integración (mandan sobre la especificación): [`docs/decisiones-integracion.md`](docs/decisiones-integracion.md)
 - Contratos AsyncAPI 3.0 (fuente de verdad de forma): [`docs/apis/`](docs/apis/)
 - Cambios: [`CHANGELOG.md`](CHANGELOG.md)
+- P-1, documentación sin carpetas (manda sobre la especificación): [`docs/p1/servicio.md`](docs/p1/servicio.md)
+
+**Permisos (P-1, contrato 1.3.0).** Deciden la clase del caller y la visibilidad del documento, no las
+carpetas: `admin` y `user` leen y escriben todo lo `internal` y `public`; un externo lee lo `public`
+vinculado a sus proyectos; `restricted` es solo para `admin` y servicios, y para los demás no existe por
+ninguna vía. Las carpetas siguen existiendo para ordenar los archivos (CLI y sync); `folders.*` es solo
+para admins y servicios, y las reglas ACL, `externalBlocked` y `sharingBlocked` quedaron sin efecto.
 
 ## Arquitectura
 
@@ -23,8 +30,8 @@ del subject (garantizada por el auth-callout) y publica eventos en JetStream. Lo
                   NATS + auth-callout ── {instance}.{userId}.jiku-docs-{commands|queries}.v1.{método}
                              │
                              ▼
-   jiku-docs ── micro jiku-docs-commands (18) / jiku-docs-queries (13), queue group propio
-     │  ├─ ACL de carpetas, clases de caller, validación estricta, versionado, locks
+   jiku-docs ── micro jiku-docs-commands (19) / jiku-docs-queries (14), queue group propio
+     │  ├─ clases de caller y visibilidad, validación estricta, versionado, locks
      │  ├─ users / project-permissions / entidades / files.*  ──▶ core (jiku-queries, jiku-commands)
      │  ├─ PostgreSQL 16 propio (metadatos, changelog, índice es_unaccent)
      │  └─ bucket S3 propio (una versión por objeto, subidas grandes, papelera/)
@@ -41,11 +48,11 @@ del subject (garantizada por el auth-callout) y publica eventos en JetStream. Lo
 | `cmd/jiku-docs` | Binario y subcomandos (`serve`, `migrate`, `reindex`, `module deregister`, `storage init`, `storage restore-from-trash`, `history compact`, `import hedgedoc`, `healthcheck`) |
 | `internal/app` | Cableado del proceso: stream, servicios micro, outbox, indexador, janitor, registro |
 | `internal/bus` | Registro de los dos servicios NATS micro (patrón del `BusHost` de core) |
-| `internal/service` | Lógica: 18 comandos, 13 consultas, ACL, clases de caller, eventos, purgas, revisión de relaciones |
+| `internal/service` | Lógica: 19 comandos, 14 consultas, permisos por visibilidad, ubicación generada, relaciones y sugerencias, eventos, purgas, revisión de relaciones, migración P-1 |
 | `internal/query` | Gramática de lectura de core: filtros, `or`, orden, keyset, `fields`, `include`, `count`, `meta.describe` |
 | `internal/validate` | Decodificación deny-by-default (`invalid_fields` con `{field, value, allowed}`) |
 | `internal/protocol` | Sobre de respuesta, catálogo de errores, gramática de subjects, inbox, ULID |
-| `internal/caller`, `internal/acl` | Clases de caller y permisos efectivos heredables |
+| `internal/caller`, `internal/acl` | Clases de caller; la ACL de carpetas (obsoleta) solo se evalúa en la migración P-1 |
 | `internal/coreapi` | Cliente de core (sobre `jiku-go`) con la caché de la especificación (60 s / 5 min) |
 | `internal/markdown`, `internal/secrets` | Frontmatter, títulos, temas, fragmentos, HTML sanitizado, detector de secretos |
 | `internal/store`, `internal/blob` | PostgreSQL (migraciones embebidas) y bucket S3 |
@@ -133,7 +140,7 @@ En producción el bucket es un Space de DigitalOcean propio (`DOCS_S3_ENDPOINT=h
 
 | Subcomando | Qué hace |
 | --- | --- |
-| `jiku-docs serve` (default) | Migra, crea/actualiza el stream, registra los servicios micro, arranca outbox, indexador y janitor y escribe la clave `docs` de `JIKU_MODULES` |
+| `jiku-docs serve` (default) | Migra (incluida la migración de datos de P-1, una sola vez y antes de atender), crea/actualiza el stream, registra los servicios micro, arranca outbox, indexador y janitor y escribe la clave `docs` de `JIKU_MODULES` |
 | `jiku-docs migrate` | Aplica migraciones (también lo hace `serve`; seguras con varias réplicas) |
 | `jiku-docs reindex` | Regenera el índice de búsqueda completo (en proceso; no inyecta eventos en el stream) |
 | `jiku-docs module deregister` | Borra la clave `docs` (desinstalar). Un apagado normal **no** la borra |
@@ -263,8 +270,8 @@ go run ./cmd/jiku-docs import hedgedoc --mapping .local/hedgedoc-mapping.csv
 
 - **Planilla**: CSV con columnas `note` (id, shortid o alias), `folder` (`/infra/servidores/`) y opcionales
   `fileName` y `skip`; las demás columnas se ignoran (sirven para revisar). Una fila sin `folder`, `fileName`
-  ni `skip` no cuenta como mapeada. Las notas sin carpeta van a `/importado/`, que se crea sin herencia y con
-  una única regla `manage` para el rol `admin`.
+  ni `skip` no cuenta como mapeada. Las notas sin carpeta van a `/importado/` con `visibility: restricted`
+  (P-1: solo las leen los admins); las mapeadas quedan `internal`, como cualquier documento.
 - **Relaciones y temas**: columnas opcionales `projects`, `clients`, `requirements` y `tasks` (ids de Jiku
   separados por `;` o `,`) y `topics` (separados por `;`). Con algún valor, la versión 1 sale con el bloque
   `jiku:` y los `topics` en el frontmatter, fusionados con lo que ya tenga (sin duplicar; temas
@@ -307,7 +314,7 @@ core, y validan **cada** pedido, respuesta, evento y notificación contra `docs/
 verifican además que las fichas de recursos (las que alimentan `meta.describe`) coinciden con el YAML.
 
 `test/e2e/local-bus.sh` recorre el módulo de punta a punta por el bus real, con el stack local levantado y
-el CLI `jiku` de jiku-go como admin, user y external-user (árbol y ACL, documentos, permisos, locks,
+el CLI `jiku` de jiku-go como servicio, user y external-user (visibilidad y `restricted`, documentos, ubicación generada, relaciones, permisos, locks,
 búsqueda, adjuntos, links, feed, sync y logs; `E2E_DISRUPTIVE=1` suma módulo caído y deregister). Las
 variables y sus defaults están en su encabezado.
 

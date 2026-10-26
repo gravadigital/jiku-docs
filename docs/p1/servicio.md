@@ -118,3 +118,115 @@ Al aplicar la migración:
 Contratos `jiku-docs-*.yaml` a la versión **1.3.0**, con todo lo anterior: visibilidad, comando y consulta nuevos, filtros,
 campos, deprecaciones de ACL y errores. `meta.describe` refleja los filtros y campos nuevos. Se actualizan la
 especificación v1 (secciones 3, 4, 6, 7 y 11) y el CHANGELOG.
+
+## Notas de implementación
+
+Decisiones tomadas al implementar (2026-10-26) en casos que este documento no cubría. Criterio: nunca exponer un
+`restricted`; ante la duda, lo más cerrado.
+
+**Permisos**
+
+- **Rol `admin`:** es `person-internal` con `admin` en sus roles (`users.roles` por el bus, `actor.roles` con la api).
+  Una persona con `external-user` y `admin` sigue siendo externa (gana la clase más restrictiva, como en core).
+- **Carpetas, consultas:** `folders.list` y `folders.get` siguen abiertas a las personas internas, que ven **todas** las
+  carpetas (`effectivePermission`: `write` para `user`, `manage` para `admin` y servicios). El daemon de sync de una
+  persona las necesita para saber dónde puede crear archivos. Los externos siguen sin ver carpetas. Solo los comandos
+  `folders.*` quedan para `admin` y servicios. `include: [acl]` es solo para `admin` y servicios.
+- **Escritura en carpetas:** una persona interna escribe documentos en cualquier carpeta (`documents.new` con `folderId`,
+  `documents.{id}.move`). Ya no hay `permission_denied` por carpeta.
+- **Links:** `shares.list` lo ve cualquier persona interna que lea el documento; un externo recibe `permission_denied`
+  (nunca administra links). `shares.{id}.revoke` lo hace cualquier persona interna que lea el documento; sobre un link de
+  un documento que no lee responde `share_not_found`. `shares.resolve` y `shares.attachment` responden `share_not_found`
+  si el documento es `restricted`, aunque el link siga activo (defensa en profundidad: pasar a `restricted` ya los revoca).
+- **`documents.new` con un `id` existente:** solo devuelve el documento (reintento idempotente) si quien reintenta lo
+  puede leer; si no, `already_exists` sin datos.
+- **`restricted` como filtro:** quien no lo lee recibe lista vacía (nunca `invalid_fields`).
+- **Relaciones para externos:** en `clients` y `projects` de cada ítem, y en `include: [relations]`, un externo recibe
+  solo los proyectos de sus `project-permissions` y ninguna lista de clientes, requisitos ni tareas (son ids internos,
+  como en D-11). Antes de 1.3.0 `include: [relations]` devolvía todo a un externo.
+
+**Ubicación generada**
+
+- Un proyecto sin cliente en core y sin `jiku.clients` va a `/clientes/sin-cliente/<proyecto>/`.
+- "El primero de la lista" es el primero **tal como está escrito** en el frontmatter (las relaciones se guardan
+  ordenadas, pero el servicio recuerda el primero de `jiku.projects` y de `jiku.clients`).
+- Un nombre que no está en core (catálogo cacheado 5 min) usa `proyecto-<id>` o `cliente-<id>`; un slug vacío, lo mismo.
+- Las carpetas generadas se crean heredando (como el servicio en nombre de quien escribe: `createdBy` es esa persona) y
+  emiten `folder.created`. Creaciones concurrentes de la misma carpeta se resuelven por el índice único de rutas.
+- Sin `fileName` y sin título (ni `title`, ni `#`), el nombre es `documento.md` y el título, `documento`.
+- La respuesta de `documents.new` trae además `folderId` y `fileName`.
+
+**`relations.update`**
+
+- Payload `{ baseVersion, add?, remove?, sessionId? }`. **Sin `via`**: el origen sale de la clase del caller (`human`
+  para una persona, `service` para un servicio). `sessionId` permite asignar mientras se edita con el lock propio.
+- `add` y `remove` vacíos (o ausentes) son `invalid_fields`; un id en los dos también. Máximo 100 ids por tipo.
+- El cliente de un proyecto agregado se agrega salvo que esté en `remove.clients`. Quitar un proyecto no quita su
+  cliente.
+- La versión es `kind: update` con `message` automático (por lo tanto protegida de la compactación): "Cliente asignado:
+  Acmé S.A.; Proyecto asignado: EXO - Videoconferencia". Con un nombre desconocido usa `#<id>`.
+- Reescribe solo las líneas del bloque `jiku:`; los comentarios dentro de ese bloque se pierden. Un frontmatter escrito
+  como un solo mapa en estilo flujo (`{title: x}`) se reescribe entero.
+
+**`suggest-relations`**
+
+- Respuesta `{ items: [{ projectId, clientId, score, reason }] }`, hasta 5, `score` entre 0 y 1 (2 decimales).
+- **`projectId` es `null` en un candidato solo de cliente** (nunca `0`): aparece cuando el texto nombra a un cliente
+  y ningún proyecto de ese cliente coincidió. `clientId` es `null` si el proyecto no tiene cliente.
+- Términos de un proyecto: el nombre, sus partes separadas por ` - `, `:`, `/`, `|`, y el código. Se ignoran términos de
+  menos de 3 letras, solo numéricos o genéricos (`proyecto`, `general`, `interno`, `cliente`, `sistema`, `app`, `web`,
+  `soporte`, `mantenimiento`, `desarrollo`). Título: 0,7; cada mención en el contenido: 0,06 (hasta 5); mención del
+  cliente del proyecto: +0,1 en el título o +0,05 en el contenido. Coincidencia por palabra completa, sin acentos ni
+  mayúsculas.
+- Requiere leer el documento (no incluye borrados). Un externo recibe `permission_denied` (aprendería nombres de
+  proyectos que no ve).
+
+**Filtros y nombres**
+
+- `hasClient` mira solo `jiku.clients` (no deduce el cliente de un proyecto). `hasProject: true` es el complemento
+  exacto de "Sin proyecto" (directo, por requisito o por tarea).
+- `projectMatch` se agrega con `projectId` en el filtro de primer nivel o dentro de `or`.
+- Los ítems de `documents.search` traen además `createdBy`, `createdByName`, `updatedByName` y `visibility`.
+- `document_locked` trae en `errorDetails` `holder`, `holderName`, `via` y `expiresAt`.
+- El nombre de un servicio es el de su fila en `users` de core; el de la api sin `actor`, `api`; el de jiku-docs
+  mismo, `jiku-docs`. Los nombres se guardan al escribir y no se actualizan si la persona cambia de nombre.
+- Labels de `meta.describe` para `visibility`: Interno, Visible para el cliente, Restringido.
+
+**Notificaciones**
+
+- Cuando un documento pasa a `restricted`, cada `user` recibe `access.changed` sin detalle; cuando deja de ser `public`
+  (a `internal` o `restricted`), lo mismo para cada externo con permiso sobre alguno de los proyectos del documento.
+  Los admins no la reciben (siguen leyéndolo y reciben el `document.updated`).
+
+**Migración de datos**
+
+- Corre en `serve`, después de las migraciones SQL y **antes** de registrar los servicios micro: el servicio nunca
+  atiende con el modelo nuevo sobre datos sin migrar. Si falla, el proceso no arranca.
+- Se aplica **una sola vez** (marca `migration:p1-visibility` en `service_state`): un cambio posterior de un admin no se
+  deshace al reiniciar. Es idempotente ante un corte: primero fija la columna `visibility` y revoca los links de todos
+  los documentos en una transacción y guarda el plan; después escribe las versiones una por una y saltea las que ya
+  dicen la visibilidad nueva.
+- "Puede leer una persona con rol `user`" se evalúa con un principal que solo tiene el rol `user`: una regla para un
+  `user-id` puntual no cuenta, y ese documento pasa a `restricted` (esa persona pierde el acceso; es el lado seguro).
+  Un documento en una carpeta borrada también pasa a `restricted`. Se migran también los documentos borrados.
+- La versión de la migración la escribe el servicio jiku-docs (`via: service`, protegida), con `message`
+  "Migración P-1: visibilidad restricted (…)" o "… internal (…)", y actualiza `updatedAt`/`updatedBy` del documento. El
+  `document.updated` lleva `changes.visibility` desde lo que decía el frontmatter.
+- No respeta locks (es una corrección del servicio); quien tenía el lock recibe `version_conflict` en el siguiente guardado.
+- Un frontmatter que no se puede editar deja el documento con la columna ya cambiada (lo seguro) y un aviso en el log.
+- Los nombres de autor existentes se completan en segundo plano desde `users.list` de core (marca
+  `migration:p1-names`), reintentando cada minuto si core no responde. Un id que core no conoce queda con nombre `null`.
+
+**Importador de HedgeDoc**
+
+- Las notas sin mapeo (las de `/importado/`) se importan con `visibility: restricted`; las mapeadas a otra carpeta,
+  `internal`. La carpeta ya no decide nada.
+
+**Para la web y la api (pendientes)**
+
+- Resolver con core los nombres de `clients` y `projects` de cada ítem.
+- "Editado por" y el lock: usar `updatedByName` y `lock.holderName` (pueden ser `null` en filas viejas de ids que core no
+  conoce).
+- Ante `access.changed` no hay detalle: recargar la lista.
+- El selector de visibilidad del alta: Interno (default) · Visible para el cliente · Restringido (este último solo para
+  admin; la api puede ocultarlo a un `user`, el servicio igual responde `permission_denied`).
