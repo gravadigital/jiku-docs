@@ -95,9 +95,26 @@ func uniqueSorted(ids []int64) []int64 {
 type Frontmatter struct {
 	Present    bool
 	Title      string // "" when absent
-	Visibility string // "internal" (default) or "public"
+	Visibility string // "internal" (default), "public" or "restricted"
 	Topics     []string
 	Relations  Relations
+	// FirstProject and FirstClient are the first ids of `jiku.projects` and `jiku.clients` as
+	// written (Relations is sorted): the generated location uses them. 0 when absent.
+	FirstProject int64
+	FirstClient  int64
+}
+
+// Visibilities of a document (P-1): internal (default), public (also externals of a related
+// project) and restricted (only admins and services).
+const (
+	VisibilityInternal   = "internal"
+	VisibilityPublic     = "public"
+	VisibilityRestricted = "restricted"
+)
+
+// ValidVisibility reports a known visibility value.
+func ValidVisibility(v string) bool {
+	return v == VisibilityInternal || v == VisibilityPublic || v == VisibilityRestricted
 }
 
 // FrontmatterError is a `frontmatter_invalid` with its details.
@@ -200,8 +217,8 @@ func Parse(content string) (Frontmatter, string, *FrontmatterError) {
 			}
 			fm.Title = strings.TrimSpace(val.Value)
 		case "visibility":
-			if val.Kind != yaml.ScalarNode || (val.Value != "internal" && val.Value != "public") {
-				return fm, "", &FrontmatterError{Line: line, Field: "visibility", Reason: "tiene que ser internal o public"}
+			if val.Kind != yaml.ScalarNode || !ValidVisibility(val.Value) {
+				return fm, "", &FrontmatterError{Line: line, Field: "visibility", Reason: "tiene que ser internal, public o restricted"}
 			}
 			fm.Visibility = val.Value
 		case "topics":
@@ -217,6 +234,12 @@ func Parse(content string) (Frontmatter, string, *FrontmatterError) {
 				return fm, "", err
 			}
 			fm.Relations = rel
+			if len(rel.Projects) > 0 {
+				fm.FirstProject = rel.Projects[0]
+			}
+			if len(rel.Clients) > 0 {
+				fm.FirstClient = rel.Clients[0]
+			}
 		}
 	}
 	fm.Relations = fm.Relations.Normalize()
@@ -289,7 +312,9 @@ func parseJiku(val *yaml.Node) (Relations, *FrontmatterError) {
 }
 
 // NormalizeTopic turns a free label into a kebab-case slug without accents: "Buenas Prácticas" -> "buenas-practicas".
-func NormalizeTopic(s string) string {
+func NormalizeTopic(s string) string { return slug(s, 64) }
+
+func slug(s string, max int) string {
 	t := norm.NFD.String(strings.ToLower(strings.TrimSpace(s)))
 	var b strings.Builder
 	dash := false
@@ -308,8 +333,8 @@ func NormalizeTopic(s string) string {
 		}
 	}
 	out := strings.Trim(b.String(), "-")
-	if len([]rune(out)) > 64 {
-		out = strings.Trim(string([]rune(out)[:64]), "-")
+	if len([]rune(out)) > max {
+		out = strings.Trim(string([]rune(out)[:max]), "-")
 	}
 	return out
 }
