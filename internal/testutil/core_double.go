@@ -27,6 +27,10 @@ type CoreDouble struct {
 	Projects     map[int64]bool
 	Requirements map[int64]int64 // id -> project
 	Tasks        map[int64]int64 // id -> project
+	// ProjectInfo and ClientNames are the names (and code and client) projects.list and
+	// clients.list return when asked for those fields.
+	ProjectInfo map[int64]coreapi.Project
+	ClientNames map[int64]string
 	// Down makes the double stop answering (core unavailable).
 	Down bool
 	// MaxFileSize and AllowedMimes are core's upload policy (system_settings).
@@ -50,6 +54,7 @@ func NewCoreDouble(b *blob.S3) *CoreDouble {
 	return &CoreDouble{
 		Users: map[string]coreapi.User{}, ProjectPerms: map[string][]int64{}, Clients: map[int64]bool{},
 		Projects: map[int64]bool{}, Requirements: map[int64]int64{}, Tasks: map[int64]int64{},
+		ProjectInfo: map[int64]coreapi.Project{}, ClientNames: map[int64]string{},
 		MaxFileSize: 10 << 20, AllowedMimes: []string{"image/png", "image/jpeg", "application/pdf", "text/plain"},
 		Files: map[int64]coreFile{}, Blob: b,
 	}
@@ -66,6 +71,22 @@ func (d *CoreDouble) SetDown(down bool) {
 func (d *CoreDouble) SetUser(u coreapi.User) {
 	d.mu.Lock()
 	d.Users[u.ID] = u
+	d.mu.Unlock()
+}
+
+// SetProject adds or replaces a project with its name and client while the double is serving.
+func (d *CoreDouble) SetProject(p coreapi.Project) {
+	d.mu.Lock()
+	d.Projects[p.ID] = true
+	d.ProjectInfo[p.ID] = p
+	d.mu.Unlock()
+}
+
+// SetClient adds or replaces a client while the double is serving.
+func (d *CoreDouble) SetClient(id int64, name string) {
+	d.mu.Lock()
+	d.Clients[id] = true
+	d.ClientNames[id] = name
 	d.mu.Unlock()
 }
 
@@ -271,11 +292,34 @@ func (d *CoreDouble) query(method string, p map[string]json.RawMessage) reply {
 		case "tasks.list":
 			world = d.Tasks
 		}
+		if ids == nil && filter["id"] == nil {
+			for id := range world {
+				ids = append(ids, id)
+			}
+			sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
+		}
 		for _, id := range ids {
 			if pid, ok := world[id]; ok {
 				it := map[string]any{"id": id}
 				if method == "requirements.list" || method == "tasks.list" {
 					it["projectId"] = pid
+				}
+				switch method {
+				case "projects.list":
+					info := d.ProjectInfo[id]
+					if contains(fields, "name") {
+						it["name"] = info.Name
+					}
+					if contains(fields, "code") {
+						it["code"] = info.Code
+					}
+					if contains(fields, "clientId") {
+						it["clientId"] = info.ClientID
+					}
+				case "clients.list":
+					if contains(fields, "name") {
+						it["name"] = d.ClientNames[id]
+					}
 				}
 				items = append(items, it)
 			}
@@ -318,6 +362,9 @@ func strList(raw json.RawMessage) []string {
 }
 
 func intList(raw json.RawMessage) []int64 {
+	if raw == nil {
+		return nil
+	}
 	var one int64
 	if json.Unmarshal(raw, &one) == nil {
 		return []int64{one}

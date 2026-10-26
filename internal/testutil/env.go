@@ -224,8 +224,12 @@ func (e *Env) seedWorld() {
 	add(Connector, "Conector", "service", "internal-app")
 	add(Observer, "Observer", "person", "bus-observer")
 	e.Core.ProjectPerms[External] = []int64{12}
+	four := int64(4)
 	e.Core.Clients[4] = true
+	e.Core.ClientNames[4] = "Acmé S.A."
 	e.Core.Projects[12], e.Core.Projects[31] = true, true
+	e.Core.ProjectInfo[12] = coreapi.Project{ID: 12, Code: "VC", Name: "EXO - Videoconferencia", ClientID: &four}
+	e.Core.ProjectInfo[31] = coreapi.Project{ID: 31, Code: "PZT", Name: "Portal Zeta"}
 	e.Core.Requirements[812] = 12
 	e.Core.Tasks[900] = 31
 }

@@ -63,6 +63,7 @@ type Cached struct {
 	all      ttlMap[[]User]
 	projects ttlMap[[]int64]
 	entities ttlMap[Entity]
+	catalog  ttlMap[any]
 }
 
 // NewCached wraps api.
@@ -140,6 +141,34 @@ func (c *Cached) Entities(ctx context.Context, entityType string, ids []int64) (
 		c.entities.put(entityType+":"+strconv.FormatInt(id, 10), e, EntityTTL, now)
 	}
 	return out, nil
+}
+
+// Projects caches the list of projects for EntityTTL.
+func (c *Cached) Projects(ctx context.Context) ([]Project, error) {
+	now := c.Now()
+	if v, ok := c.catalog.get("projects", now); ok {
+		return v.([]Project), nil
+	}
+	p, err := c.API.Projects(ctx)
+	if err != nil {
+		return nil, err
+	}
+	c.catalog.put("projects", p, EntityTTL, now)
+	return p, nil
+}
+
+// Clients caches the list of clients for EntityTTL.
+func (c *Cached) Clients(ctx context.Context) ([]JikuClient, error) {
+	now := c.Now()
+	if v, ok := c.catalog.get("clients", now); ok {
+		return v.([]JikuClient), nil
+	}
+	cl, err := c.API.Clients(ctx)
+	if err != nil {
+		return nil, err
+	}
+	c.catalog.put("clients", cl, EntityTTL, now)
+	return cl, nil
 }
 
 // EntitiesFresh bypasses the cache (the daily relation review must see deletions).

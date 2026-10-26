@@ -69,6 +69,20 @@ type Entity struct {
 	ProjectID int64
 }
 
+// Project is a project of core with what jiku-docs needs to place and suggest documents.
+type Project struct {
+	ID       int64  `json:"id"`
+	Code     string `json:"code"`
+	Name     string `json:"name"`
+	ClientID *int64 `json:"clientId"`
+}
+
+// JikuClient is a client of core (the customer, not this API client).
+type JikuClient struct {
+	ID   int64  `json:"id"`
+	Name string `json:"name"`
+}
+
 // FileTicket is the reply of `files.request-upload`.
 type FileTicket struct {
 	ID        int64  `json:"id"`
@@ -91,6 +105,10 @@ type API interface {
 	Users(ctx context.Context) ([]User, error)
 	ProjectPermissions(ctx context.Context, userID string) ([]int64, error)
 	Entities(ctx context.Context, entityType string, ids []int64) (map[int64]Entity, error)
+	// Projects and Clients list every project and client (names for the generated location and
+	// the relation suggestions).
+	Projects(ctx context.Context) ([]Project, error)
+	Clients(ctx context.Context) ([]JikuClient, error)
 	RequestUpload(ctx context.Context, fileName, mimeType string, size int64, checksumHex string) (*FileTicket, error)
 	RequestDownload(ctx context.Context, fileID int64, disposition string) (*DownloadTicket, error)
 }
@@ -278,6 +296,16 @@ func (c *Client) Entities(ctx context.Context, entityType string, ids []int64) (
 		}
 	}
 	return out, nil
+}
+
+// Projects lists every project with its code, name and client.
+func (c *Client) Projects(ctx context.Context) ([]Project, error) {
+	return listAll[Project](ctx, c, "projects.list", listPayload{Fields: []string{"id", "code", "name", "clientId"}, Page: page{Limit: 200}})
+}
+
+// Clients lists every client with its name.
+func (c *Client) Clients(ctx context.Context) ([]JikuClient, error) {
+	return listAll[JikuClient](ctx, c, "clients.list", listPayload{Fields: []string{"id", "name"}, Page: page{Limit: 200}})
 }
 
 // RequestUpload asks core for an upload ticket. jiku-docs acts as itself (no actor): the file is
