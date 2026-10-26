@@ -1,7 +1,10 @@
 # e2e en navegador: web y opus-web
 
 Recorre con Playwright (Chromium) la integración de jiku-docs en la web interna y en opus-web,
-con usuarios humanos reales del Zitadel hosteado, contra el stack local levantado.
+con usuarios humanos reales del Zitadel hosteado, contra el stack local levantado. Cubre el modelo
+de P-1 (documentación sin carpetas, contrato 1.3.0): buscador con filtros como tokens, alta sin
+carpeta, edición por campos, historial, compartir, "Sin proyecto", cards de proyecto, requisito y
+tarea, y que un `restricted` no existe para un `user` ni para un externo.
 
 ## Correr
 
@@ -11,12 +14,13 @@ npm install                       # playwright; usa el Chromium de ~/.cache/ms-p
 npx playwright install chromium   # solo si no está
 E2E_CLI_DOCS="/ruta/a/as.sh docs" node run.mjs --down       # todo, con módulo caído
 node run.mjs --only opus --down                              # solo opus-web, con módulo caído
-node run.mjs --only web --steps W1,W11                        # depurar escenarios sueltos
+node run.mjs --only web --steps W1,W3,W4                      # depurar escenarios sueltos
 ```
 
 - `--only opus|public|web`: una suite. `--down`: incluye el escenario de módulo caído (hace
   `docker stop`/`docker start` de `jiku-docs-local`; siempre lo vuelve a levantar). `--headed`.
-  `--steps`: solo esos ids (los que dependen de otro escenario fallan; W1/O1 hacen el login).
+  `--steps`: solo esos ids (los que dependen de otro escenario fallan; W1/O1 hacen el login; W4,
+  W5, W6, W11, W12 y W13 usan el documento que crea W3). `--keep`: no borra los datos de la corrida.
 - Credenciales: `.local/test-users.env` del repo (o `$TEST_USERS_ENV`) con `WEB_USER_LOGIN`,
   `WEB_USER_PASSWORD` (rol `user`) y `WEB_EXTERNAL_LOGIN`, `WEB_EXTERNAL_PASSWORD`
   (`external-user`). El script nunca las imprime y las tapa en las capturas.
@@ -54,19 +58,26 @@ node run.mjs --only web --steps W1,W11                        # depurar escenari
 - Si Zitadel pide cambiar la contraseña inicial de un usuario, la suite no la cambia: marca su
   parte como "no probado". Entrar una vez a mano, cambiarla y actualizar el `.env`.
 - O10 quita y devuelve el `project-permissions` del externo sobre el proyecto (SQL en
-  `jiku-local-database`, o `$E2E_JIKU_DB_CONTAINER`). W11 le da al interno una regla `manage`
-  por usuario en `/clientes/exo/videoconferencia/` (vía `E2E_CLI_DOCS`) y al terminar devuelve
-  las reglas que tenía la carpeta. Los ids (de Zitadel) salen de `user.zitadelId` de la sesión, o
-  de `E2E_EXTERNAL_USER_ID` / `E2E_WEB_USER_ID`.
+  `jiku-local-database`, o `$E2E_JIKU_DB_CONTAINER`). El id (de Zitadel) sale de
+  `user.zitadelId` de la sesión, o de `E2E_EXTERNAL_USER_ID`.
+- Datos de la corrida: al empezar, el servicio (`E2E_CLI_DOCS`) crea sin carpeta un documento
+  `restricted` vinculado al proyecto, a los requisitos 54 y 15 y a la tarea (con tema, palabra y
+  adjunto propios) y dos `internal` sin proyecto (uno nombra el proyecto en el título, para
+  "Asignar sugerido"). Todo lo que crea la suite, también desde la UI, lleva el prefijo `e2e-p1 `
+  y una marca única por corrida, y se borra al terminar (`docs rm`, recuperable) salvo con `--keep`.
+- Los bugs de Jiku conocidos van en `KNOWN` (`JIKU-WEB-1` a `JIKU-WEB-5`); el escenario que los
+  encuentra queda "bug jiku" con el detalle y sigue probando el resto.
+- A 390 px la web tiene scroll horizontal por el layout general (fuera del alcance de P-1): W15 lo
+  informa como observación, sin fallar.
 
 ## Datos que espera
 
-Los que deja `test/e2e/local-bus.sh` con el stack local: proyecto 43 (requisitos 54 internal y 15
-public, tarea 2716), carpetas `/clientes/exo/videoconferencia/`, `/infra/` (`externalBlocked`) e
-`/interno/`, y los documentos y adjuntos cuyos ids están en `D` al principio de `run.mjs`
-(sobrescribibles por variables `E2E_*`), y notas importadas de HedgeDoc (W3, W4b): la carpeta
-`/clientes/wecerty/wecerty/tecnico/`, la nota con imagen `Opus / Arquitectura del sistema` y el
-enlace `Versión 1` de `Wecerty.md`. Además:
+Los que deja `test/e2e/local-bus.sh` con el stack local: proyecto 43 `EXO - Videoconferencia`
+(cliente 1 `EXO`; requisitos 54 internal y 15 public, tarea 2716), los documentos y adjuntos cuyos
+ids están en `D` al principio de `run.mjs` (sobrescribibles por variables `E2E_*`; tras la
+migración de P-1 `Servidor de staging` quedó `internal`), más de 20 documentos "Sin proyecto" (para
+el paginado) y notas importadas de HedgeDoc (W15): la nota con imagen `Opus / Arquitectura del
+sistema` y el enlace `Versión 1` de `Wecerty.md`. Además:
 
 - El externo tiene que tener `project-permissions` sobre el proyecto 43
   (`user_project_permissions` en la base de Jiku).
