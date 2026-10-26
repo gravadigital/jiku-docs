@@ -14,10 +14,14 @@ Los dos usan las mismas tres identidades, y ninguna es un machine user de prueba
 | `user`     | una persona con rol `user` (`WEB_USER_*`)           | device flow, token en su `JIKU_CONFIG_DIR` |
 | `external` | una persona con rol `external-user` (`WEB_EXTERNAL_*`) | device flow, token en su `JIKU_CONFIG_DIR` |
 
-`docs` hace el bootstrap y todo lo que pide `manage` (carpetas, ACL, marcar `public`, `unlock
---force`, crear y revocar links). No hay una persona `admin`: lo que antes probaba un admin
-humano lo prueba el servicio, que queda como autor con `via: service`. Las reglas de ACL por rol
-`admin` se siguen creando (ejercitan la ACL), pero nadie de la corrida las usa.
+Modelo de P-1 (contrato 1.3.0): los permisos los decide la visibilidad, no las carpetas. `docs`
+hace el bootstrap y lo que es solo de admin (`folders.*`, `unlock --force`, crear `restricted`,
+links de prueba). No hay una persona `admin`: lo prueba el servicio, que lee y escribe `restricted`
+como un admin y queda como autor con `via: service`. `local-bus.sh` verifica que un `restricted`
+no existe para `human-user` ni `human-external` por ninguna vía que alcanza el CLI (get con y sin
+versión, history, list y el filtro `visibility`, search, topics, adjuntos, links, suggest, changes,
+sync), que un link anterior a la restricción da 404, y la ubicación generada, `relate`, `suggest`,
+`hasProject`/`hasClient`/`hasTopic` y `projectMatch`.
 
 ## Preparar las personas (device flow, una vez)
 
@@ -62,9 +66,10 @@ las personas de `.local/cli/human-user` y `.local/cli/human-external`
 (`E2E_DOCS_KEY`, `E2E_USER_CONFIG_DIR`, `E2E_EXTERNAL_CONFIG_DIR`; el resto de las variables está
 en la cabecera del script). Los user-id salen de `jiku whoami`.
 
-- Todo lo que crea vive bajo `/e2e-<timestamp>/`. jiku-docs no borra carpetas: al terminar se le
-  quitan las reglas que daban acceso, así las personas no ven en la web otra copia de `clientes`,
-  `infra` e `interno` por corrida (`E2E_KEEP_VISIBLE=1` las deja).
+- Todo lo que crea vive bajo `/e2e-<timestamp>/`, salvo un documento con ubicación generada (bajo
+  `/clientes/<cliente>/<proyecto>/`). Como las carpetas ya no ocultan nada, al terminar el servicio
+  borra (lógicamente) los documentos de la corrida (`E2E_KEEP_VISIBLE=1` los deja). jiku-docs no
+  borra carpetas.
 - El externo es una persona real que puede tener ya `project-permissions` sobre el proyecto que
   elige el script: si lo tiene, se le quita durante la corrida y se le devuelve al terminar
   (también si el script se corta).

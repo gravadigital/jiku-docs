@@ -3,9 +3,11 @@
 # local-bus.sh — recorrido end-to-end de jiku-docs POR EL BUS, con el stack local levantado.
 #
 # Habla con el módulo como lo hacen personas y agentes: el CLI `jiku` de jiku-go, con tres
-# identidades: `docs` (el machine user del servicio jiku-docs, clase `service`: lee y escribe todo;
-# hace el bootstrap y lo que necesita `manage`), `user` (una persona con rol user) y `external`
-# (una persona con rol external-user). Las personas se autentican con el device flow (`jiku login`)
+# identidades: `docs` (el machine user del servicio jiku-docs, clase `service`: lee y escribe todo,
+# también lo restricted; hace el bootstrap y lo que es solo de admin), `user` (una persona con rol
+# user) y `external` (una persona con rol external-user). Verifica el modelo de P-1 (contrato
+# 1.3.0): permisos por visibilidad, restricted invisible para user y external por cada vía,
+# ubicación generada, relate, suggest y los filtros nuevos. Las personas se autentican con el device flow (`jiku login`)
 # en un JIKU_CONFIG_DIR propio, una vez; ver test/e2e/README.md. No usa la api HTTP salvo la ruta
 # pública /p/docs/* de los links compartidos. Todo lo que crea vive bajo una carpeta nueva por
 # corrida (`/e2e-<timestamp>/`), así que se puede repetir sin limpiar.
@@ -43,7 +45,7 @@
 #   E2E_DOCS_CONTAINER contenedor del servicio               (default: jiku-docs-local)
 #   E2E_DISRUPTIVE     1 = probar módulo caído y deregister (default: 0)
 #   E2E_KEEP           1 = no borrar el directorio temporal al terminar
-#   E2E_KEEP_VISIBLE   1 = no quitar al final las reglas que dan acceso a la carpeta de la corrida
+#   E2E_KEEP_VISIBLE   1 = no borrar al final los documentos de la corrida
 #   E2E_CLEAN_GRANT    1 = al terminar quita el project-permissions del externo si no lo tenía
 #                      antes (default: 1; si ya lo tenía, siempre se le devuelve)
 #
@@ -213,7 +215,7 @@ PSLUG=$(slug "$PROJECT_NAME")
 
 # ---- 1. bootstrap --------------------------------------------------------------------------------
 
-section "1. bootstrap: árbol, ACL, herencia"
+section "1. bootstrap: carpetas (solo organizan, P-1)"
 RUN=e2e-$(date +%Y%m%d%H%M%S)
 # documents.changes se lee desde aquí: la base puede tener miles de cambios previos (importaciones).
 START_SEQ=$(docsdb "SELECT coalesce(max(seq),0) FROM changelog" 2>/dev/null || echo 0)
@@ -226,34 +228,25 @@ mkfolder() { # mkfolder <var> <parentId> <name> [json extra]
 mkfolder BASE "$R" "$RUN"
 mkfolder INTERNO "$BASE" interno
 mkfolder INFRA "$BASE" infra '"sharingBlocked":true,"externalBlocked":true'
-mkfolder SRV "$INFRA" servidores '"sharingBlocked":false'
+mkfolder SRV "$INFRA" servidores
 mkfolder CLIENTES "$BASE" clientes
 mkfolder CLI "$CLIENTES" "$CSLUG"
 mkfolder PRJ "$CLI" "$PSLUG"
 mkfolder PRIV "$PRJ" privado '"inheritAcl":false'
 P="/$RUN"; PP="$P/clientes/$CSLUG/$PSLUG"
-[[ ${#FAILS[@]} == 0 ]] && ok "árbol $P/{interno,infra/servidores,clientes/.../privado}"
-as docs docs cmd "folders.$BASE.acl.replace" '{"rules":[{"principalType":"role","principal":"admin","permission":"manage"}]}'
-expect "ACL de la base: admin manage" 0
-as docs docs cmd "folders.$CLIENTES.acl.replace" '{"rules":[{"principalType":"role","principal":"user","permission":"write"}]}'
-expect "ACL /clientes/: user write" 0
-as docs docs cmd "folders.$INFRA.acl.replace" '{"rules":[{"principalType":"role","principal":"user","permission":"read"}]}'
-expect "ACL /infra/: user read" 0
-as docs docs cmd "folders.$INTERNO.acl.replace" "{\"rules\":[{\"principalType\":\"user\",\"principal\":\"$E2E_USER_ID\",\"permission\":\"read\"}]}"
-expect "ACL /interno/: read por usuario" 0
+[[ ${#FAILS[@]} == 0 ]] && ok "docs (servicio) crea el árbol $P/{interno,infra/servidores,clientes/.../privado}"
 as docs docs cmd "folders.$PRIV.acl.replace" '{"rules":[{"principalType":"role","principal":"admin","permission":"manage"}]}'
-expect "ACL privado (inheritAcl=false): solo rol admin (nadie de la corrida; el servicio lo ve igual)" 0
-
+expect "acl.replace (obsoleto) lo acepta el servicio" 0
+as user docs cmd folders.new "{\"id\":\"$(ulid)\",\"parentId\":\"$BASE\",\"name\":\"x\"}"
+expect "user: folders.new → permission_denied (solo admin y servicios)" 1 "permission_denied"
+as user docs cmd "folders.$PRIV.acl.replace" '{"rules":[]}'
+expect "user: acl.replace → permission_denied" 1 "permission_denied"
 as user docs query folders.list --filter "pathPrefix=$P/" --include effectivePermission -o json
 perm() { json "{f['path']:f.get('effectivePermission') for f in d}.get('$1','-')" <<<"$OUT"; }
-[[ $(perm "$PP/") == write ]] && ok "herencia: user write en el proyecto" || bad "herencia write" "$(perm "$PP/")"
-[[ $(perm "$P/infra/servidores/") == read ]] && ok "herencia: user read en /infra/servidores/" || bad "herencia read"
-[[ $(perm "$P/interno/") == read ]] && ok "regla por usuario: read en /interno/" || bad "regla por usuario"
-[[ $(perm "$PP/privado/") == - ]] && ok "inheritAcl=false: privado invisible para user" || bad "inheritAcl=false" "$(perm "$PP/privado/")"
-as docs docs query folders.get --id "$SRV" -o json
-[[ $(json 'd["sharingBlocked"]' <<<"$OUT") == True ]] && ok "sharingBlocked heredado (no se desactiva en una subcarpeta)" || bad "sharingBlocked heredado"
-as user docs ls /
-expect "user: ls / muestra las carpetas legibles de arriba" 0 "$P/"
+[[ $(perm "$PP/privado/") == write && $(perm "$P/infra/servidores/") == write ]] \
+  && ok "user ve todas las carpetas con write, también la sin herencia con regla solo admin" || bad "carpetas de user" "$(perm "$PP/privado/") $(perm "$P/infra/servidores/")"
+as user docs query folders.get --id "$PRIV" --include acl -o json
+expect "user: folders.get include acl → permission_denied" 1 "permission_denied"
 as external docs query folders.list -o json
 [[ "$OUT" == "[]" ]] && ok "external no ve carpetas" || bad "external ve carpetas" "$OUT"
 
@@ -293,6 +286,8 @@ as user docs get "$PP/arq.md" -o json
 as user docs query documents.get --id "$DOC" --include relations --include topics -o json
 [[ $(json 'sorted(d["topics"])' <<<"$OUT") == "['arquitectura', 'integracion']" ]] && ok "topics normalizados" || bad "topics" "$OUT"
 [[ $(json 'd["relations"]["tasks"]' <<<"$OUT") == "[$TASK_ID]" ]] && ok "relaciones guardadas" || bad "relaciones" "$OUT"
+[[ -n $(json 'd.get("createdByName") or ""' <<<"$OUT") && $(json 'd["clients"]' <<<"$OUT") == "[$CLIENT_ID]" ]] \
+  && ok "createdByName y clients/projects en documents.get" || bad "nombres o clients" "$OUT"
 cp arq.md v2.md; echo "Segunda versión." >> v2.md
 as user docs put "$DOC" v2.md --base-version 1 --message "v2"
 expect "put con --base-version" 0 "version 2"
@@ -302,13 +297,14 @@ expect "put con base vieja → version_conflict" 1 "version_conflict"
 as user docs put "$DOC" v2.md --base-version 1
 expect "put idempotente (mismo contenido, base vieja) → misma versión" 0 "version 2"
 as user docs history "$DOC" -o json
-[[ $(json 'len(d)' <<<"$OUT") == 2 ]] && ok "history: 2 versiones" || bad "history" "$OUT"
+[[ $(json 'len(d)' <<<"$OUT") == 2 && -n $(json 'd[0].get("authorName") or ""' <<<"$OUT") ]] && ok "history: 2 versiones con authorName" || bad "history" "$OUT"
 printf '# Nota\n' > nota.md
 as user docs new nota.md --folder "$PP/"; NOTA=$(json 'd["id"]' <<<"$OUT")
 as user docs mv "$NOTA" "$PP/nota-renombrada.md" --base-version 1
 expect "mv (renombrar)" 0 "nota-renombrada.md"
 as user docs mv "$NOTA" "$P/infra/" --base-version 1
-expect "mv a /infra/ (solo read) → permission_denied" 1 "permission_denied"
+expect "mv a /infra/ (las carpetas ya no limitan a una persona interna)" 0 "$P/infra/"
+as user docs mv "$NOTA" "$PP/" --base-version 1 >/dev/null
 as user docs rm "$NOTA" --base-version 1
 expect "rm" 0
 as user docs rm "$NOTA" --base-version 1
@@ -333,10 +329,16 @@ as user docs get "$PP/grande.md"
 { echo "# Enorme"; head -c 6000000 /dev/zero | tr '\0' a; } > enorme.md
 as user docs new enorme.md --folder "$PP/"
 expect "contenido > 5 MiB → content_too_large" 1 "content_too_large"
+# Ubicación generada: sin --folder el módulo la saca de las relaciones (va al árbol real; se borra al final).
+printf -- "---\njiku:\n  projects: [$PROJECT_ID]\n---\n\n# Ubicación generada $RUN\n" > gen.md
+as user docs new gen.md
+GEN=$(json 'd["id"]' <<<"$OUT" 2>/dev/null); GENPATH=$(json 'd["path"]' <<<"$OUT" 2>/dev/null)
+[[ $RC == 0 && "$GENPATH" == /clientes/*/$PSLUG/ubicacion-generada-${RUN}.md ]] \
+  && ok "new sin carpeta: $GENPATH" || bad "ubicación generada" "rc=$RC $GENPATH $ERR"
 
 # ---- 3. permisos ------------------------------------------------------------------------------
 
-section "3. permisos"
+section "3. permisos por visibilidad"
 cat > staging.md <<EOF
 ---
 title: Servidor de staging e2e
@@ -351,22 +353,49 @@ jiku:
 Servidores de pruebas, puerto 2222.
 EOF
 as docs docs new staging.md --folder "$P/infra/servidores/"; STG=$(json 'd["id"]' <<<"$OUT")
-expect "docs (servicio) crea un public en /infra/ (externalBlocked)" 0
-printf '# Privado\n\nrenegociación del contrato\n' > priv.md
+expect "docs (servicio) crea un public en /infra/ (externalBlocked ya no tiene efecto)" 0
+printf -- "---\nvisibility: restricted\ntopics: [e2e-restringido-$RUN]\njiku:\n  projects: [$PROJECT_ID]\n---\n\n# Privado $RUN\n\nrenegociación del contrato\n" > priv.md
 as docs docs new priv.md --folder "$PP/privado/"; PRIVDOC=$(json 'd["id"]' <<<"$OUT")
-as user docs new nota.md --folder "$P/infra/"
-expect "user escribe en /infra/ → permission_denied" 1 "permission_denied"
-as user docs put "$STG" staging.md --base-version 1
-expect "user put en /infra/ → permission_denied" 1 "permission_denied"
-as user docs get "$PRIVDOC"
-expect "user lee privado → document_not_found" 1 "document_not_found"
-as user docs put "$PRIVDOC" priv.md --base-version 1
-expect "user escribe privado → document_not_found" 1 "document_not_found"
+expect "docs (servicio) crea un restricted" 0
+as user docs new nota.md --folder "$P/infra/" --name nota-infra.md
+expect "user escribe en /infra/ (cualquier carpeta)" 0 "version 1"
+INFRANOTA=$(json 'd["id"]' <<<"$OUT" 2>/dev/null)
+printf -- '---\nvisibility: restricted\n---\n# R\n' > res.md
+as user docs new res.md --folder "$PP/"
+expect "user crea un restricted → permission_denied" 1 "permission_denied"
 sed 's/^title: \(.*\)/title: \1\nvisibility: public/' v2.md > pub.md
 as user docs put "$DOC" pub.md --base-version 2
-expect "user (write) marca public → permission_denied" 1 "permission_denied"
-as docs docs put "$DOC" pub.md --base-version 2
-expect "docs (servicio, manage) marca public" 0 "version 3"
+expect "user marca public (ya no exige manage)" 0 "version 3"
+sed 's/^visibility: public/visibility: restricted/' pub.md > resdoc.md
+as user docs put "$DOC" resdoc.md --base-version 3
+expect "user marca restricted → permission_denied" 1 "permission_denied"
+# restricted invisible para human-user y human-external, por cada vía que el CLI alcanza.
+for who in user external; do
+  as "$who" docs get "$PRIVDOC"
+  expect "$who: get de un restricted → document_not_found" 1 "document_not_found"
+  as "$who" docs get "$PRIVDOC" --version 1
+  expect "$who: get --version de un restricted → document_not_found" 1 "document_not_found"
+  as "$who" docs history "$PRIVDOC"
+  expect "$who: history de un restricted → document_not_found" 1 "document_not_found"
+  as "$who" docs query documents.list --filter "pathPrefix=$P/" --filter visibility=restricted -o json
+  [[ "$OUT" == "[]" ]] && ok "$who: filtro visibility=restricted → lista vacía" || bad "$who: filtro restricted" "$OUT"
+  as "$who" docs query documents.list --filter "pathPrefix=$P/" -o json
+  ! grep -q "$PRIVDOC" <<<"$OUT" && ok "$who: documents.list no lo trae" || bad "$who: documents.list trae el restricted"
+  as "$who" docs search renegociación -o json
+  ! grep -q "$PRIVDOC\|renegociaci" <<<"$OUT" && ok "$who: search sin el restricted ni sus fragmentos" || bad "$who: search trae el restricted" "$OUT"
+  as "$who" docs query topics.list --filter "prefix=e2e-restringido-$RUN" -o json
+  [[ "$OUT" == "[]" ]] && ok "$who: topics.list no cuenta su tema" || bad "$who: topics.list" "$OUT"
+  as "$who" docs query attachments.list --filter "documentId=$PRIVDOC" -o json
+  expect "$who: attachments.list → document_not_found" 1 "document_not_found"
+  as "$who" docs shares "$PRIVDOC" -o json
+  expect "$who: shares → document_not_found" 1 "document_not_found"
+  as "$who" docs suggest "$PRIVDOC"
+  expect "$who: suggest → document_not_found" 1 "document_not_found"
+done
+as docs docs search renegociación --filter "pathPrefix=$P/" -o json
+[[ $(json 'len(d)' <<<"$OUT") == 1 ]] && ok "docs (servicio) sí lo ve" || bad "servicio no ve el restricted" "$OUT"
+as user docs put "$PRIVDOC" priv.md --base-version 1
+expect "user escribe un restricted → document_not_found" 1 "document_not_found"
 # El externo de la corrida es una persona real que puede tener ya project-permissions sobre el
 # proyecto (se le quitó al principio y se le devuelve al terminar). jiku-docs cachea los
 # permisos por proyecto 60 s, así que se espera a que el cambio se vea.
@@ -378,9 +407,12 @@ if jikudb "INSERT INTO user_project_permissions(user_id, project_id) VALUES ('$E
   as external docs get "$DOC" --version 1
   expect "external no lee versiones anteriores (de cuando era internal)" 1 "document_not_found"
   as external docs get "$STG"
-  expect "external no ve un public en /infra/ (externalBlocked)" 1 "document_not_found"
+  expect "external ve un public en /infra/ (externalBlocked sin efecto)" 0
+  as external docs get "$PRIVDOC"
+  expect "external con project-permissions tampoco ve el restricted del proyecto" 1 "document_not_found"
   as external docs query documents.list --filter "pathPrefix=$P/" -o json
-  [[ $(json 'len(d)' <<<"$OUT") == 1 ]] && ok "external: documents.list solo el public vinculado" || bad "external list" "$OUT"
+  [[ $(json 'sorted(x["id"] for x in d)' <<<"$OUT") == "$(python3 -c "print(sorted(['$DOC','$STG']))")" ]] && ok "external: documents.list solo los public vinculados" || bad "external list" "$OUT"
+  [[ $(json '[x.get("clients") for x in d]' <<<"$OUT") == "[[], []]" ]] && ok "external: sin ids de clientes" || bad "external clients" "$OUT"
   as external docs search integración --filter "pathPrefix=$P/" -o json
   [[ $(json '[h["documentId"] for h in d]' <<<"$OUT") == "['$DOC']" ]] && ok "external: search respeta permisos" || bad "external search" "$OUT"
   as external docs put "$DOC" pub.md --base-version 3
@@ -397,15 +429,17 @@ expect "lock de la sesión A" 0
 SESS=$(json 'd["sessionId"]' <<<"$OUT")
 cp pub.md l.md; echo "con lock" >> l.md
 as docs docs put "$DOC" l.md --base-version 3
-expect "put de otra sesión → document_locked con holder" 1 "$E2E_USER_ID is editing it"
+expect "put de otra sesión → document_locked con holder" 1 "is editing it"
+as user docs query documents.get --id "$DOC" --include lock -o json
+[[ -n $(json 'd["lock"].get("holderName") or ""' <<<"$OUT") ]] && ok "lock.holderName" || bad "lock sin holderName" "$OUT"
 as user docs lock "$DOC" --session "$SESS" --ttl 120
 expect "renovación con la misma sesión" 0 "$SESS"
 as user docs put "$DOC" l.md --base-version 3 --session "$SESS"
 expect "put con la sesión que tiene el lock" 0 "version 4"
 as user docs unlock "$DOC" --session "$SESS" --force
-expect "force sin manage → permission_denied" 1 "permission_denied"
+expect "force de un user → permission_denied (solo admin o servicio)" 1 "permission_denied"
 as docs docs unlock "$DOC" --session "$SESS" --force
-expect "force con manage" 0
+expect "force del servicio" 0
 as user docs lock "$DOC" --ttl 10
 expect "ttl < 30 → invalid_fields" 1 "ttlSeconds"
 as user docs lock "$DOC" --ttl 30
@@ -416,11 +450,12 @@ if until_ok 75 expired; then ok "vencimiento → document.unlocked (reason expir
 
 # ---- 5. búsqueda ---------------------------------------------------------------------------------
 
-section "5. búsqueda y documents.list"
+section "5. búsqueda, filtros y relaciones"
 printf -- "---\ntitle: Integración con aduana\ntopics: [aduana]\njiku:\n  requirements: [$REQ_ID]\n---\n\n# Aduana\n\nLa integración con aduana usa el webservice. Prueba de carga pendiente.\n" > aduana.md
 printf -- "---\ntitle: Reunión semanal\ntopics: [reuniones]\njiku:\n  tasks: [$TASK_ID]\n---\n\n# Reunión\n\nSe habló de la aduana y de los servidores.\n" > reunion.md
 printf -- "---\ntitle: Transversal\n---\n\n# Transversal\n\nServidor compartido sin relación.\n" > trans.md
 for f in aduana reunion trans; do as user docs new $f.md --folder "$PP/" >/dev/null; done
+as user docs rm "$INFRANOTA" --base-version 1 >/dev/null
 hits() { as user docs search "$@" --filter "pathPrefix=$P/" -o json; json 'sorted(h["title"] for h in d)' <<<"$OUT"; }
 [[ $(hits '"integración con aduana"') == "['Arquitectura e2e', 'Integración con aduana']" ]] && ok "frase entre comillas" || bad "frase" "$(hits '"integración con aduana"')"
 [[ $(hits 'aduana -prueba') == "['Reunión semanal']" ]] && ok "-palabra excluye (con stemming: pruebas)" || bad "-palabra" "$(hits 'aduana -prueba')"
@@ -430,12 +465,33 @@ as user docs search aduana --filter topic=reuniones --filter "pathPrefix=$P/" -o
 [[ $(json '[h["title"] for h in d]' <<<"$OUT") == "['Reunión semanal']" ]] && ok "filtro topic" || bad "filtro topic"
 as user docs search servidor --filter "projectId=$PROJECT_ID" --filter "pathPrefix=$P/" -o json
 [[ $(json 'sorted(h["title"] for h in d)' <<<"$OUT") == "['Reunión semanal', 'Servidor de staging e2e']" ]] && ok "filtro projectId en search" || bad "projectId search" "$OUT"
+[[ $(json 'sorted((h["title"], h["projectMatch"]) for h in d)' <<<"$OUT") == "[('Reunión semanal', 'indirect'), ('Servidor de staging e2e', 'direct')]" ]] \
+  && ok "projectMatch en search" || bad "projectMatch search" "$OUT"
 as docs docs search renegociación --filter "pathPrefix=$P/" -o json; A=$(json 'len(d)' <<<"$OUT")
 as user docs search renegociación --filter "pathPrefix=$P/" -o json; U=$(json 'len(d)' <<<"$OUT")
 [[ "$A/$U" == 1/0 ]] && ok "search no devuelve lo que no se ve" || bad "search permisos" "$A/$U"
 as user docs query documents.list --filter "projectId=$PROJECT_ID" --filter "pathPrefix=$P/" --fields title -o json
-[[ $(json 'sorted(x["title"] for x in d)' <<<"$OUT") == "['Arquitectura e2e', 'Integración con aduana', 'Reunión semanal', 'Servidor de staging e2e']" ]] \
-  && ok "documents.list projectId: directos, por requisito, por tarea y transversal de /infra/" || bad "documents.list projectId" "$OUT"
+[[ $(json 'sorted((x["title"], x["projectMatch"]) for x in d)' <<<"$OUT") == "[('Arquitectura e2e', 'direct'), ('Integración con aduana', 'indirect'), ('Reunión semanal', 'indirect'), ('Servidor de staging e2e', 'direct')]" ]] \
+  && ok "documents.list projectId con projectMatch: directos, por requisito, por tarea" || bad "documents.list projectId" "$OUT"
+as user docs query documents.list --filter "pathPrefix=$P/" --filter hasProject=false --fields title -o json
+[[ $(json 'sorted(x["title"] for x in d)' <<<"$OUT") == "['Grande', 'Nota', 'Transversal']" ]] && ok "hasProject=false (Sin proyecto)" || bad "hasProject" "$OUT"
+as user docs query documents.list --filter "pathPrefix=$P/" --filter hasTopic=false --fields title -o json
+[[ $(json 'sorted(x["title"] for x in d)' <<<"$OUT") == "['Grande', 'Nota', 'Transversal']" ]] && ok "hasTopic=false (Sin tema)" || bad "hasTopic" "$OUT"
+as user docs query documents.list --filter "pathPrefix=$P/" --filter hasClient=true --fields title -o json
+[[ $(json 'sorted(x["title"] for x in d)' <<<"$OUT") == "['Arquitectura e2e']" ]] && ok "hasClient=true" || bad "hasClient" "$OUT"
+as user docs get "$PP/trans.md" -o json; TRV=$(json 'd["version"]' <<<"$OUT")
+as user docs relate "$PP/trans.md" --add-project "$PROJECT_ID" --base-version "$TRV" -o json
+expect "relate --add-project (Asignar proyecto)" 0
+[[ $(json 'd["relations"]["clients"]' <<<"$OUT") == "[$CLIENT_ID]" ]] && ok "agregar un proyecto agrega su cliente" || bad "relate cliente" "$OUT"
+as user docs history "$PP/trans.md" -o json
+grep -q "Proyecto asignado" <<<"$OUT" && ok "versión con mensaje automático" || bad "mensaje de relate" "$OUT"
+as user docs get "$PP/trans.md"
+grep -q "Servidor compartido sin relación" <<<"$OUT" && grep -q "projects: \[$PROJECT_ID\]" <<<"$OUT" && ok "relate reescribe solo el bloque jiku:" || bad "relate contenido" "$OUT"
+printf -- "# Minuta $PROJECT_NAME\n\nSe revisó el avance de $PROJECT_NAME.\n" > sug.md
+as user docs new sug.md --folder "$PP/"; SUG=$(json 'd["id"]' <<<"$OUT")
+as user docs suggest "$SUG" -o json
+[[ $RC == 0 ]] && python3 -c "import json,sys; d=json.loads(sys.argv[1]); sys.exit(0 if any(c.get('projectId')==int(sys.argv[2]) for c in d) else 1)" "$OUT" "$PROJECT_ID" \
+  && ok "suggest propone el proyecto nombrado en el título" || bad "suggest" "$OUT"
 
 # ---- 6. adjuntos ---------------------------------------------------------------------------------
 
@@ -456,14 +512,18 @@ curl -sf -o dl.png "$URL" && cmp -s dl.png diagrama.png && ok "request-download 
 printf '#!/bin/sh\n' > x.sh
 as user docs attach "$DOC" x.sh
 expect "tipo no permitido → attachment_type_not_allowed" 1 "attachment_type_not_allowed"
-as user docs attach "$STG" diagrama.png
-expect "adjuntar sin write → permission_denied" 1 "permission_denied"
+as user docs attach "$PRIVDOC" diagrama.png
+expect "adjuntar a un restricted → document_not_found" 1 "document_not_found"
 
 # ---- 7. links compartidos -----------------------------------------------------------------------
 
 section "7. links compartidos"
-as user docs share "$DOC"
-expect "share sin manage → permission_denied" 1 "permission_denied"
+as user docs share "$DOC" --expires 1d
+expect "user crea un link (cualquier persona interna)" 0
+USHARE_URL=$(head -1 <<<"$OUT"); USHARE=$(grep -o 'shared link [0-9A-Z]*' <<<"$ERR" | awk '{print $3}')
+as user docs revoke "$USHARE"
+expect "user revoca el link" 0
+[[ $(curl -s -o /dev/null -w '%{http_code}' "$USHARE_URL") == 404 ]] && ok "link revocado por user → 404" || bad "revocado no da 404"
 as docs docs get "$DOC" -o json; V=$(json 'd["version"]' <<<"$OUT")
 cp l.md s.md; printf '\n![diagrama](%s)\n\n<script>alert(1)</script>\n' "$ATTLINK" >> s.md
 as docs docs put "$DOC" s.md --base-version "$V" >/dev/null
@@ -485,8 +545,22 @@ grep -q 'jds_' <<<"$OUT" && bad "shares devuelve el token" || ok "shares lista s
 as docs docs revoke "$SHARE_ID"
 expect "revoke" 0
 [[ $(curl -s -o /dev/null -w '%{http_code}' "$SHARE_URL") == 404 ]] && ok "link revocado → 404" || bad "revocado no da 404"
-as docs docs share "$STG"
-expect "share en /infra/ → sharing_blocked" 1 "sharing_blocked"
+as docs docs share "$PRIVDOC"
+expect "share de un restricted → sharing_blocked" 1 "sharing_blocked"
+as docs docs share "$STG" --expires 1d
+expect "share en /infra/ (sharingBlocked ya no tiene efecto)" 0
+# Un link anterior a la restricción: pasar el documento a restricted lo revoca y la ruta pública da 404.
+printf -- "---\ntitle: Se restringe e2e\njiku:\n  projects: [$PROJECT_ID]\n---\n\n# Se restringe\n\ncontenido $RUN\n" > lr.md
+as docs docs new lr.md --folder "$PP/"; LR=$(json 'd["id"]' <<<"$OUT")
+as docs docs share "$LR" --expires 1d; LRURL=$(head -1 <<<"$OUT")
+[[ $(curl -s -o /dev/null -w '%{http_code}' "$LRURL") == 200 ]] && ok "link de un internal → 200" || bad "link de un internal"
+sed 's/^title: \(.*\)/title: \1\nvisibility: restricted/' lr.md > lr2.md
+as docs docs put "$LR" lr2.md --base-version 1
+expect "el servicio lo pasa a restricted" 0 "version 2"
+[[ $(curl -s -o /dev/null -w '%{http_code}' "$LRURL") == 404 ]] && ok "link anterior a la restricción → 404" || bad "el link sobrevive a la restricción"
+[[ $(docsdb "SELECT revoke_reason FROM shares WHERE document_id = '$LR'") == restricted ]] && ok "revokeReason restricted" || bad "revokeReason"
+as user docs get "$LR"
+expect "user ya no lo ve" 1 "document_not_found"
 as docs docs share "$DOC" --expires 200d
 expect "vencimiento > 180 días → share_expiry_invalid" 1 "share_expiry_invalid"
 printf '# Accesos\n\npassword: Sup3rS3creta!\n' > sec.md
@@ -510,11 +584,14 @@ else
   skip "changelog (sin acceso a $E2E_DOCS_DB)"
 fi
 as user docs query documents.changes --payload "{\"sinceSeq\":${START_SEQ:-0},\"limit\":500}" -o json
-grep -q "$DOC" <<<"$OUT" && ! grep -q "$PRIVDOC" <<<"$OUT" && ok "documents.changes filtrado por permisos" || bad "documents.changes"
+grep -q "$DOC" <<<"$OUT" && ! grep -q "$PRIVDOC" <<<"$OUT" && ! grep -q "$LR" <<<"$OUT" && ok "documents.changes sin los restricted (tampoco su historia anterior)" || bad "documents.changes"
+as external docs query documents.changes --payload "{\"sinceSeq\":${START_SEQ:-0},\"limit\":500}" -o json
+! grep -q "$PRIVDOC\|$LR" <<<"$OUT" && ok "external: documents.changes sin los restricted" || bad "external: documents.changes"
 SYNC=$TMP/sync
 as user docs sync "$SYNC" --once --only "$P/"
 expect "sync --once" 0
-[[ -f "$SYNC$PP/arq.md" && ! -w "$SYNC$P/infra/servidores/staging.md" ]] && ok "sync baja los documentos; /infra/ queda de solo lectura" || bad "sync --once: archivos"
+[[ -f "$SYNC$PP/arq.md" && -w "$SYNC$P/infra/servidores/staging.md" ]] && ok "sync baja los documentos; ya no hay carpetas de solo lectura" || bad "sync --once: archivos"
+[[ ! -e "$SYNC$PP/privado" || -z "$(ls -A "$SYNC$PP/privado" 2>/dev/null)" ]] && ! grep -rqs "renegociaci" "$SYNC" && ok "sync de user: ningún restricted en disco" || bad "sync bajó un restricted"
 grep -q 'deleted in Jiku' <<<"$ERR" && bad "sync aplicó un borrado ya restaurado" || ok "sync no reaplica borrados restaurados"
 idenv user; env "${ID_ENV[@]}" "$JIKU_BIN" docs sync "$SYNC" --only "$P/" 2>"$TMP/sync.log" &
 SYNC_PID=$!
@@ -640,16 +717,19 @@ n=$(docker logs --since 30m "$E2E_DOCS_CONTAINER" 2>&1 | grep -c '"level":"ERROR
 
 # ---- limpieza --------------------------------------------------------------------------------------
 
-# jiku-docs no borra carpetas: lo que crea la corrida queda. Para que no se mezcle con las carpetas
-# reales en la web de las personas (la raíz muestra las carpetas legibles de más arriba, y cada
-# corrida agregaría otro "clientes", "infra" e "interno"), se le quitan las reglas que daban acceso.
+# P-1: las carpetas ya no ocultan nada, así que la corrida borra (lógicamente) sus documentos para que no
+# aparezcan en la web de las personas: el servicio los lista y los borra. jiku-docs no borra carpetas.
 section "limpieza"
 if [[ "${E2E_KEEP_VISIBLE:-0}" != 1 ]]; then
-  for f in "${CLIENTES:-}" "${INFRA:-}" "${INTERNO:-}"; do
-    [[ -n "$f" ]] && as docs docs cmd "folders.$f.acl.replace" '{"rules":[]}' && [[ $RC == 0 ]] || bad "quitar las reglas de $f" "$ERR"
+  as docs docs query documents.list --filter "pathPrefix=$P/" --fields version -o json
+  CLEAN=$(json '" ".join(x["id"]+":"+str(x["version"]) for x in d)' <<<"$OUT")
+  [[ -n "${GEN:-}" ]] && { as docs docs get "$GEN" -o json; CLEAN="$CLEAN $GEN:$(json 'd["version"]' <<<"$OUT")"; }
+  for it in $CLEAN; do
+    as docs docs unlock "${it%%:*}" --session "$(ulid)" --force >/dev/null 2>&1
+    as docs docs rm "${it%%:*}" --base-version "${it##*:}" >/dev/null || bad "rm ${it%%:*}" "$ERR"
   done
-  as user docs query folders.list --filter "pathPrefix=$P/" -o json
-  [[ "$OUT" == "[]" ]] && ok "la corrida $P/ quedó invisible para user (E2E_KEEP_VISIBLE=1 la deja)" || bad "user sigue viendo $P/" "$OUT"
+  as user docs query documents.list --filter "pathPrefix=$P/" -o json
+  [[ "$OUT" == "[]" ]] && ok "los documentos de la corrida $P/ quedaron borrados (E2E_KEEP_VISIBLE=1 los deja)" || bad "user sigue viendo documentos de $P/" "$OUT"
 else
   skip "limpieza (E2E_KEEP_VISIBLE=1)"
 fi
