@@ -57,33 +57,40 @@ La casilla "Solo visibles para el cliente" queda aparte del buscador. Hay vistas
 8. **Edición** con vista previa y aviso de bloqueo.
 9. **Compartir.**
 
+**Decisiones del dueño (2026-10-26):**
+
+1. **Alcance visual:** solo el contenido de las pantallas de Documentación. El sidebar y la barra superior quedan como hoy (sin barra superior ni búsqueda global ⌘K).
+2. **Documentos de un proyecto:** son los vinculados por relaciones (frontmatter `jiku:`). La ubicación no importa.
+3. **Permisos sin carpetas:**
+   - **Personas internas** (`user`, `admin`): leen y escriben todos los documentos `internal` y `public`. Ninguna carpeta ni ACL limita a una persona interna; por ejemplo, cualquiera puede editar un documento de infra.
+   - **Externos:** como hoy. Solo ven los documentos `public` vinculados a proyectos de sus `project-permissions`.
+   - **Visibilidad nueva `restricted`:** solo `admin`, y los servicios como hoy. Se elige en el mismo selector de visibilidad del alta (Interno · Visible para el cliente · Restringido), con Interno por defecto.
+   - **Garantía exigida:** un `user` o un externo **nunca** accede a un documento `restricted` por ninguna vía: `list`, `get`, `search`, `changes`, `versions`, adjuntos, notificaciones, links compartidos, sync, ni sugerencias del buscador. Tiene que estar cubierto por tests en cada una.
+4. **"Asignar proyecto":** se mantiene la pantalla 05 "Sin proyecto".
+   - "Asignar proyecto" solo agrega la relación, sin mover nada.
+   - "Asignar sugerido" deduce el proyecto del título y del contenido, no de la carpeta.
+5. **Temas libres**, con sugerencia de los existentes. No hay lista controlada ni "Proponer tema nuevo".
+6. **Vistas guardadas:** se eliminan. Ni la fila "Vistas:" ni el botón "Vistas".
+7. **Plantillas:** no hay. Se quita el campo "Plantilla" del alta.
+8. **Ubicación:** no se muestra en ningún lado. Se quitan "Ruta de almacenamiento", la ruta generada del alta y la columna de ruta de la pantalla 05. Las pantallas 08 (edición) y 09 (compartir) las adapto yo a Cliente / Proyecto, con el estilo del resto.
+9. **Sync:** el disco local sigue organizado según la ruta que genera el servidor. Está bien.
+
 **Impacto previsto (a precisar en el diseño del REQ):**
 - **web (jiku):** las 9 pantallas, el buscador con filtros como tokens, las vistas guardadas, "Ver todos" en el detalle de proyecto y los estilos de `jiku.css` aplicados a la sección.
 - **jiku-docs (servicio):**
-  - **Ruta generada:** a partir de cliente y proyecto, decidida en el servidor y no en la UI.
-  - **Lista controlada de temas:** consulta, alta y propuesta de tema nuevo. Hoy los temas se crean al usarse.
-  - **Filtros nuevos:** "sin proyecto", "sin cliente", "sin tema" y "por persona" (`updatedBy`/`createdBy` ya existen).
-  - **"Asignar proyecto":** actualiza el frontmatter `jiku:` y, si corresponde, mueve el documento a la ruta generada.
-  - **Sugerencia por ruta:** el proyecto que sugiere la carpeta actual.
-  - **Vistas guardadas:** dónde se guardan.
+  - **Modelo de permisos:** clases y visibilidad (decisión 3) en lugar de ACL de carpetas para personas; visibilidad `restricted`.
+  - **Ruta generada en el servidor:** `documents.new` sin carpeta, la ruta sale de cliente y proyecto, y nunca se expone en la UI.
+  - **Filtros nuevos:** "sin proyecto", "sin cliente" y "sin tema".
+  - **"Asignar proyecto":** un comando que actualiza solo las relaciones del frontmatter, con versión base.
+  - **Sugerencia de proyecto** por título y contenido.
+  - **Sugerencias de temas existentes:** `topics.list` ya existe.
   - **Nombres en "Editado por":** resolverlos. Hoy la web muestra "Otra persona".
+  - **Contratos, especificación y migración:** de la ACL actual y de los documentos importados.
+- **jiku-go:** `restricted` en el CLI. `new` sin `--folder`. Revisar `ls` y `mv` como herramientas de ruta interna.
 - **api (jiku):** rutas nuevas para lo anterior y para las sugerencias del buscador. Proyectos, clientes y personas salen de core; los temas, de jiku-docs.
 
-**A definir antes de ejecutar:** ver la sección "Preguntas abiertas de P-1" más abajo.
+**Estado:** definido. Se ejecuta cuando el dueño lo indique: jiku-docs y jiku-go en paralelo, y después el REQ de la web en jiku.
 
 ### Preguntas abiertas de P-1
 
-1. **Shell nuevo:** las pantallas usan el shell "v2", con barra superior, búsqueda global ⌘K, "Cargar horas", el sidebar agrupado (Trabajo, Tiempo, Conocimiento, Organización) y el pie con las horas del día. ¿Entra en este pedido (y cambia toda la web) o solo el contenido de las pantallas de Documentación dentro del shell actual?
-2. **Documentos del proyecto:** ¿cuentan los vinculados a mano (relaciones), los de su ruta, o ambos? Ya está anotado en "A definir" del README.
-3. **Permisos sin carpetas:** hoy quién ve qué se decide por la carpeta (ACL). Ejemplos: `/infra/` y `/interno/` cerradas, `/importado/` solo admin. Con la ruta generada, ¿dónde va un documento?
-   - con cliente y proyecto: `/clientes/<cliente>/<proyecto>/`;
-   - con cliente sin proyecto: ¿`/clientes/<cliente>/general/`?
-   - sin cliente: ¿`/interno/`?
-
-   ¿Cómo se marca un documento de infra o de accesos, que hoy vive en una carpeta restringida? ¿Hace falta un "ámbito" o algo equivalente en el diálogo de alta?
-4. **"Asignar proyecto":** ¿mueve el documento a la ruta del proyecto (y cambia quién lo ve) o solo agrega la relación y deja la ruta?
-5. **Lista de temas:** ¿quién la administra y quién aprueba un "tema nuevo"? ¿Se aceptan en el frontmatter temas que no están en la lista (por ejemplo, desde el CLI o un agente)?
-6. **Vistas guardadas:** ¿son personales, compartidas, o hay algunas fijas del sistema y otras personales?
-7. **Plantillas:** ¿qué plantillas hay y dónde se definen?
-8. **Edición y compartir (08 y 09):** ¿los adapto yo a Cliente / Proyecto siguiendo el estilo de las otras pantallas, o mandás una versión?
-9. **CLI y daemon de sync:** el daemon espeja carpetas. Si la web deja de mostrarlas, el disco sigue organizado por la ruta generada. ¿Está bien?
+Resueltas el 2026-10-26; ver "Decisiones del dueño" en P-1.
