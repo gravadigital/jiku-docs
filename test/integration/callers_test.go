@@ -88,16 +88,18 @@ func TestAPIActorRolesWinOverStaleUsersRow(t *testing.T) {
 	if n := e.Core.CallCount("users.list") - before; n != 0 {
 		t.Fatalf("the api with actor consulted users.list %d times", n)
 	}
-	// Role rules of the ACL use actor.roles too: a folder readable only by `admin`.
-	adm := e.Folder("", "solo-admin", map[string]any{"inheritAcl": false})
-	e.ACL(adm, tu.Rule("role", "admin", "manage"))
-	e.Doc(tu.Admin, adm, "a.md", "a")
-	if n := len(e.Q(tu.APIUser, "documents.list", map[string]any{"filter": map[string]any{"folderId": adm}, "actor": a}).Items()); n != 0 {
-		t.Fatalf("user sees %d docs of an admin-only folder", n)
+	// The admin role comes from actor.roles too: only it reads a restricted document.
+	r := e.Doc(tu.Admin, f, "a.md", "---\nvisibility: restricted\n---\na")
+	if n := len(e.Q(tu.APIUser, "documents.list", map[string]any{"filter": map[string]any{"id": r}, "actor": a}).Items()); n != 0 {
+		t.Fatalf("user sees %d restricted docs", n)
 	}
-	admin := map[string]any{"id": fresh, "roles": []string{"admin"}}
-	if n := len(e.Q(tu.APIUser, "documents.list", map[string]any{"filter": map[string]any{"folderId": adm}, "actor": admin}).Items()); n != 1 {
+	admin := map[string]any{"id": fresh, "roles": []string{"admin"}, "name": "Recién llegada"}
+	if n := len(e.Q(tu.APIUser, "documents.list", map[string]any{"filter": map[string]any{"id": r}, "actor": admin}).Items()); n != 1 {
 		t.Fatalf("admin by actor.roles sees %d docs", n)
+	}
+	// The api writes with the actor's name: createdByName / updatedByName.
+	if d := e.OK(e.Q(tu.APIUser, "documents.get", map[string]any{"id": id, "actor": admin})); d["createdByName"] != "Recién llegada" || d["updatedByName"] != "Recién llegada" {
+		t.Fatalf("names %v", d)
 	}
 }
 
@@ -124,10 +126,8 @@ func TestCoreUnavailable(t *testing.T) {
 func TestNotifications(t *testing.T) {
 	e := tu.NewEnv(t)
 	pub := e.Folder("", "general", nil)
-	e.ACL(pub, tu.Rule("role", "user", "write"), tu.Rule("role", "admin", "manage"))
-	priv := e.Folder("", "privado", map[string]any{"inheritAcl": false})
 	open := e.Doc(tu.User, pub, "abierto.md", "---\nvisibility: internal\njiku:\n  projects: [12]\n---\nuno")
-	closed := e.Doc(tu.Admin, priv, "cerrado.md", "dos")
+	closed := e.Doc(tu.Admin, pub, "cerrado.md", "---\nvisibility: restricted\njiku:\n  projects: [12]\n---\ndos")
 	public := e.Doc(tu.Admin, pub, "publico.md", "---\nvisibility: public\njiku:\n  projects: [12]\n---\ntres")
 	e.Eventually("fan-out", func() bool {
 		n := 0
@@ -155,11 +155,38 @@ func TestNotifications(t *testing.T) {
 	}
 	for _, u := range got[closed] {
 		if u != tu.Admin {
-			t.Fatal("only who can read gets notified")
+			t.Fatal("a restricted document notifies only admins")
 		}
 	}
 	if !strings.Contains(strings.Join(got[public], ","), tu.External) || strings.Contains(strings.Join(got[open], ","), tu.External) {
 		t.Fatalf("external fan-out %v", got)
+	}
+	// P-1: losing access sends access.changed, without detail. public -> internal: the external
+	// of the project; internal -> restricted: the users (not the admin).
+	accessFor := func(user string) int {
+		n := 0
+		for _, x := range e.Notes() {
+			if x.UserID == user && x.Type == "access.changed" {
+				n++
+				if len(x.Body) != 5 || x.Body["entity"] != nil {
+					t.Fatalf("access.changed with detail: %v", x.Body)
+				}
+			}
+		}
+		return n
+	}
+	internal := "---\nvisibility: internal\njiku:\n  projects: [12]\n---\ntres"
+	e.OK(e.Cmd(tu.Admin, "documents."+public+".update", map[string]any{"baseVersion": 1, "content": internal, "checksum": tu.Sum(internal)}))
+	e.Eventually("access.changed to the external", func() bool { return accessFor(tu.External) == 1 })
+	if accessFor(tu.User) != 0 {
+		t.Fatal("public -> internal does not concern internal persons")
+	}
+	restricted := "---\nvisibility: restricted\njiku:\n  projects: [12]\n---\ntres"
+	e.OK(e.Cmd(tu.Admin, "documents."+public+".update", map[string]any{"baseVersion": 2, "content": restricted, "checksum": tu.Sum(restricted)}))
+	e.Eventually("access.changed to the users", func() bool { return accessFor(tu.User) == 1 && accessFor(tu.User2) == 1 })
+	time.Sleep(200 * time.Millisecond)
+	if accessFor(tu.Admin) != 0 || accessFor(tu.External) != 1 {
+		t.Fatalf("admin %d, external %d", accessFor(tu.Admin), accessFor(tu.External))
 	}
 }
 

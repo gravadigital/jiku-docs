@@ -1,6 +1,6 @@
 package service
 
-// Commands are the 18 methods of `{serviceName}-commands`.
+// Commands are the 19 methods of `{serviceName}-commands`.
 func (s *Service) Commands() []Endpoint {
 	return []Endpoint{
 		{Pattern: "folders.new", Handle: s.foldersNew},
@@ -14,6 +14,7 @@ func (s *Service) Commands() []Endpoint {
 		{Pattern: "documents.{documentId}.restore", Handle: s.documentsRestore},
 		{Pattern: "documents.{documentId}.lock", Handle: s.documentsLock},
 		{Pattern: "documents.{documentId}.unlock", Handle: s.documentsUnlock},
+		{Pattern: "documents.{documentId}.relations.update", Handle: s.documentsRelationsUpdate},
 		{Pattern: "documents.request-content-upload", Handle: s.documentsRequestContentUpload},
 		{Pattern: "attachments.request-upload", Handle: s.attachmentsRequestUpload},
 		{Pattern: "attachments.{attachmentId}.confirm", Handle: s.attachmentsConfirm},
@@ -24,7 +25,7 @@ func (s *Service) Commands() []Endpoint {
 	}
 }
 
-// Queries are the 13 methods of `{serviceName}-queries`.
+// Queries are the 14 methods of `{serviceName}-queries`.
 func (s *Service) Queries() []Endpoint {
 	return []Endpoint{
 		{Pattern: "meta.describe", Handle: s.metaDescribe},
@@ -35,6 +36,7 @@ func (s *Service) Queries() []Endpoint {
 		{Pattern: "documents.versions.list", Handle: s.versionsList},
 		{Pattern: "documents.search", Handle: s.documentsSearch},
 		{Pattern: "documents.changes", Handle: s.documentsChanges},
+		{Pattern: "documents.suggest-relations", Handle: s.documentsSuggestRelations},
 		{Pattern: "topics.list", Handle: s.topicsList},
 		{Pattern: "attachments.list", Handle: s.attachmentsList},
 		{Pattern: "shares.list", Handle: s.sharesList},

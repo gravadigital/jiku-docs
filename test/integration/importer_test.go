@@ -90,9 +90,13 @@ func TestHedgeDocImport(t *testing.T) {
 	if len(v) != 1 || !strings.Contains(v[0]["message"].(string), "Autor original: Ana") {
 		t.Fatal(v)
 	}
-	// /importado/ is for administrators only.
-	if n := len(e.Q(tu.User, "documents.list", nil).Items()); n != 0 {
-		t.Fatalf("user sees %d imported documents", n)
+	// P-1: the notes of /importado/ are imported restricted (administrators only); a mapped note
+	// is internal, like any document.
+	if items := e.Q(tu.User, "documents.list", nil).Items(); len(items) != 1 || items[0]["id"] != srv {
+		t.Fatalf("user sees %v", items)
+	}
+	if d := e.OK(e.Q(tu.Admin, "documents.get", map[string]any{"id": docs[0]["id"]})); d["visibility"] != "restricted" {
+		t.Fatalf("/importado/ note visibility %v", d["visibility"])
 	}
 	if n := len(e.Q(tu.Admin, "documents.list", map[string]any{"filter": map[string]any{"pathPrefix": "/importado/"}}).Items()); n != 1 {
 		t.Fatalf("admin sees %d in /importado/", n)

@@ -63,13 +63,11 @@ func TestAttachments(t *testing.T) {
 		"mimeType": "application/x-msdownload", "fileSize": 4, "checksum": sumBytes([]byte("abcd"))}), protocol.CodeAttachmentTypeNotAllowed)
 	e.Fail(e.Cmd(tu.User, "attachments.request-upload", map[string]any{"id": tu.ID(), "documentId": doc, "fileName": "big.png",
 		"mimeType": "image/png", "fileSize": 100 << 20, "checksum": sumBytes([]byte("abcd"))}), protocol.CodeAttachmentTooLarge)
-	// Not visible = attachment_not_found; read-only = permission_denied for writes.
+	// Not visible = attachment_not_found / document_not_found (a restricted document for a user).
 	e.Fail(e.Cmd(tu.External, "attachments."+id+".request-download", nil), protocol.CodeAttachmentNotFound)
-	ro := e.Folder("", "ro", nil)
-	e.ACL(ro, tu.Rule("role", "user", "read"), tu.Rule("role", "admin", "manage"))
-	roDoc := e.Doc(tu.Admin, ro, "ro.md", "x")
-	e.Fail(e.Cmd(tu.User, "attachments.request-upload", map[string]any{"id": tu.ID(), "documentId": roDoc, "fileName": "a.png",
-		"mimeType": "image/png", "fileSize": 4, "checksum": sumBytes([]byte("abcd"))}), protocol.CodePermissionDenied)
+	resDoc := e.Doc(tu.Admin, f, "ro.md", "---\nvisibility: restricted\n---\nx")
+	e.Fail(e.Cmd(tu.User, "attachments.request-upload", map[string]any{"id": tu.ID(), "documentId": resDoc, "fileName": "a.png",
+		"mimeType": "image/png", "fileSize": 4, "checksum": sumBytes([]byte("abcd"))}), protocol.CodeDocumentNotFound)
 	// Delete is logical and idempotent.
 	e.OK(e.Cmd(tu.User, "attachments."+id+".delete", nil))
 	e.OK(e.Cmd(tu.User, "attachments."+id+".delete", nil))
@@ -83,8 +81,7 @@ func TestAttachments(t *testing.T) {
 
 func TestShares(t *testing.T) {
 	e := tu.NewEnv(t)
-	f := e.Folder("", "manuales", nil)
-	e.ACL(f, tu.Rule("role", "user", "write"), tu.Rule("user", tu.Admin, "manage"))
+	f := e.Folder("", "manuales", map[string]any{"sharingBlocked": true}) // obsolete: no effect
 	content := "---\njiku:\n  projects: [12]\n---\n# Manual\n\nver [otro](otro.md) y ![red](http://web.test/docs/attachments/ATT)\n<script>alert(1)</script>\n"
 	doc := e.Doc(tu.User, f, "manual.md", content)
 	att := attach(e, tu.User, doc, "red.png", []byte("png!"))
@@ -92,8 +89,10 @@ func TestShares(t *testing.T) {
 	e.OK(e.Cmd(tu.User, "documents."+doc+".update", map[string]any{"baseVersion": 1, "content": content2, "checksum": tu.Sum(content2)}))
 	exp := time.Now().Add(7 * 24 * time.Hour).UTC().Format(time.RFC3339)
 
-	// write is not enough: shares need manage.
-	e.Fail(e.Cmd(tu.User, "shares.new", map[string]any{"id": tu.ID(), "documentId": doc, "mode": "latest", "expiresAt": exp}), protocol.CodePermissionDenied)
+	// P-1: any internal person creates links (the user's own link is revoked below).
+	userShare := tu.ID()
+	e.OK(e.Cmd(tu.User, "shares.new", map[string]any{"id": userShare, "documentId": doc, "mode": "latest", "expiresAt": exp}))
+	e.Fail(e.Cmd(tu.External, "shares.new", map[string]any{"id": tu.ID(), "documentId": doc, "mode": "latest", "expiresAt": exp}), protocol.CodeCallerNotAuthorized)
 	e.Fail(e.Cmd(tu.Admin, "shares.new", map[string]any{"id": tu.ID(), "documentId": doc, "mode": "latest",
 		"expiresAt": time.Now().Add(200 * 24 * time.Hour).UTC().Format(time.RFC3339)}), protocol.CodeShareExpiryInvalid)
 	e.Fail(e.Cmd(tu.Admin, "shares.new", map[string]any{"id": tu.ID(), "documentId": doc, "mode": "latest",
@@ -137,7 +136,8 @@ func TestShares(t *testing.T) {
 	e.Fail(e.Q(tu.APIUser, "shares.resolve", map[string]any{"token": "jds_" + strings.Repeat("A", 43)}), protocol.CodeShareNotFound)
 	e.Fail(e.Q(tu.APIUser, "shares.resolve", map[string]any{"token": "garbage"}), protocol.CodeShareNotFound)
 
-	// shares.list (manage), with the access counted and the IP never stored in clear.
+	// shares.list (any internal person), with the access counted and the IP never stored in clear.
+	e.OK(e.Cmd(tu.User2, "shares."+userShare+".revoke", nil)) // any internal person revokes
 	list := e.Q(tu.Admin, "shares.list", map[string]any{"filter": map[string]any{"documentId": doc, "status": "active"}}).Items()
 	if len(list) != 1 || list[0]["accessCount"].(float64) != 1 || list[0]["note"] != "proveedor" || list[0]["token"] != nil {
 		t.Fatal(list)
@@ -146,7 +146,9 @@ func TestShares(t *testing.T) {
 	if err := e.DB.QueryRow(context.Background(), `SELECT ip_hash FROM share_accesses LIMIT 1`).Scan(&ipHash); err != nil || strings.Contains(string(ipHash), "203.0.113.9") {
 		t.Fatal("ip hash", err)
 	}
-	e.Fail(e.Q(tu.User, "shares.list", map[string]any{"filter": map[string]any{"documentId": doc}}), protocol.CodePermissionDenied)
+	if n := len(e.Q(tu.User, "shares.list", map[string]any{"filter": map[string]any{"documentId": doc}}).Items()); n != 2 {
+		t.Fatalf("user lists %d links", n)
+	}
 
 	// Pinned link keeps showing version 1.
 	pinned := e.OK(e.Cmd(tu.Admin, "shares.new", map[string]any{"id": tu.ID(), "documentId": doc, "mode": "pinned", "version": 1, "expiresAt": exp, "includeAttachments": false}))
@@ -156,8 +158,7 @@ func TestShares(t *testing.T) {
 	}
 	e.Fail(e.Q(tu.APIUser, "shares.attachment", map[string]any{"token": pinned["token"], "attachmentId": att}), protocol.CodeShareNotFound)
 
-	// Revoke: the creator or manage; then the link is dead.
-	e.Fail(e.Cmd(tu.User, "shares."+sid+".revoke", nil), protocol.CodePermissionDenied)
+	// Revoke; then the link is dead.
 	rv := e.OK(e.Cmd(tu.Admin, "shares."+sid+".revoke", nil))
 	if again := e.OK(e.Cmd(tu.Admin, "shares."+sid+".revoke", nil)); again["revokedAt"] != rv["revokedAt"] {
 		t.Fatal("revoking twice keeps the first date")
@@ -165,11 +166,8 @@ func TestShares(t *testing.T) {
 	e.Fail(e.Q(tu.APIUser, "shares.resolve", map[string]any{"token": token}), protocol.CodeShareNotFound)
 	e.WaitEvent("share.revoked", func(ev tu.Event) bool { return ev.Body["changes"].(map[string]any)["reason"] == "manual" })
 
-	// Blocking sharing on the folder cuts live links; deleting the document revokes them.
-	e.OK(e.Cmd(tu.Admin, "folders."+f+".edit", map[string]any{"sharingBlocked": true}))
-	e.Fail(e.Q(tu.APIUser, "shares.resolve", map[string]any{"token": pinned["token"]}), protocol.CodeShareNotFound)
-	e.Fail(e.Cmd(tu.Admin, "shares.new", map[string]any{"id": tu.ID(), "documentId": doc, "mode": "latest", "expiresAt": exp}), protocol.CodeSharingBlocked)
-	e.OK(e.Cmd(tu.Admin, "folders."+f+".edit", map[string]any{"sharingBlocked": false}))
+	// sharingBlocked has no effect (the folder was created with it); deleting the document
+	// revokes the links.
 	e.OK(e.Q(tu.APIUser, "shares.resolve", map[string]any{"token": pinned["token"]}))
 	e.OK(e.Cmd(tu.Admin, "documents."+doc+".delete", map[string]any{"baseVersion": 2}))
 	e.Fail(e.Q(tu.APIUser, "shares.resolve", map[string]any{"token": pinned["token"]}), protocol.CodeShareNotFound)

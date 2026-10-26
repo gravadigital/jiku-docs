@@ -95,7 +95,7 @@ func TestDescribe(t *testing.T) {
 	if d.Filterable["visibility"].Kind != KindEnum || d.Defaults.MaxLimit != 200 || len(d.Sortable) != 2 {
 		t.Errorf("%+v", d)
 	}
-	if d.Enums["visibility"][1].Label != "Público" {
+	if d.Enums["visibility"][1].Label != "Visible para el cliente" {
 		t.Errorf("labels %+v", d.Enums)
 	}
 }

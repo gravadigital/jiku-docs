@@ -1,7 +1,7 @@
 asyncapi: 3.0.0
 info:
   title: jiku-docs — comandos
-  version: 1.2.0
+  version: 1.3.0
   description: |
     Plano de escritura de jiku-docs (servicio NATS micro `jiku-docs-commands`).
     Request/reply sin persistencia. La identidad del caller es el `user-id` del subject,
@@ -37,6 +37,35 @@ info:
       `document_not_found`.
     - Guardar con `message` (o como servicio) protege la versión para siempre; las de `via: agent`
       sin mensaje se compactan por bloques como las humanas.
+
+    P-1, documentación sin carpetas (1.3.0, docs/p1/servicio.md):
+    - Permisos por clase y visibilidad, no por carpeta. `internal` y `public`: cualquier persona
+      interna (`admin`, `user`) lee y escribe. `restricted` (nueva): solo `admin` y servicios; para un
+      `user` o un externo no existe (`document_not_found`, `share_not_found`, `attachment_not_found`).
+    - Solo `admin` (o un servicio) pone o quita `restricted`, en `documents.new`, `update`, `restore` y
+      `relations.update` (el frontmatter es contenido): un `user` recibe `permission_denied`. Marcar
+      `public` ya no exige `manage`.
+    - Links: cualquier persona interna crea y revoca links de documentos `internal` y `public`. Un
+      `restricted` no admite links (`sharing_blocked` para un admin), y pasar un documento a
+      `restricted` revoca sus links activos (`share.revoked` con `reason: restricted`).
+    - `documents.{id}.unlock` con `force`: solo `admin` o servicio (`permission_denied` para un `user`).
+    - `folders.*` (incluido `acl.replace`): solo `admin` y servicios; un `user` recibe
+      `permission_denied`. Las carpetas solo organizan los archivos para el CLI y el daemon de sync.
+    - **Obsoleto (sin efecto):** las reglas ACL (`acl.replace`, `inheritAcl`), `externalBlocked` y
+      `sharingBlocked`. Se siguen aceptando y guardando, pero no deciden nada. Se van en la v2.
+    - `documents.new`: `folderId` y `fileName` opcionales. Sin `folderId` el servidor genera la carpeta
+      de las relaciones (`/clientes/<cliente>/<proyecto>/`, `/clientes/<cliente>/general/` o
+      `/general/`, creando las que falten); sin `fileName`, el título en kebab-case `.md`, único en la
+      carpeta (`-2`, `-3`...). La respuesta trae `folderId` y `fileName`. Cambiar relaciones después
+      no mueve el documento.
+    - Comando nuevo `documents.{id}.relations.update` (write): `{ baseVersion, add?, remove?, sessionId? }`.
+      Reescribe solo el bloque `jiku:` del frontmatter y crea una versión (`kind: update`) con un
+      mensaje automático ("Proyecto asignado: …"). Agregar un proyecto agrega su cliente si falta. Ids
+      contra core (`invalid_relation`). Sin cambios: `success` con la versión actual. Sin `via`: el
+      origen sale de la clase del caller.
+    - `document_locked` trae en `errorDetails` `holder`, `holderName`, `via` y `expiresAt`.
+    - Los nombres de autor se guardan al escribir: `actor.name` (o `username`) con la api, el `name`
+      de `users.list` por el bus, el nombre del servicio para un servicio.
 defaultContentType: application/json
 
 servers:
@@ -116,6 +145,13 @@ channels:
     messages:
       request: { payload: { $ref: '#/components/schemas/DocumentsUnlock' } }
       reply: { $ref: '#/components/messages/IdReply' }
+  documents.relations.update:
+    address: '{instance}.{userId}.jiku-docs-commands.v1.documents.{documentId}.relations.update'
+    description: 'P-1, "Asignar proyecto": cambia solo las relaciones del frontmatter, con versión base.'
+    parameters: { instance: { $ref: '#/components/parameters/instance' }, userId: { $ref: '#/components/parameters/userId' }, documentId: { $ref: '#/components/parameters/ulidParam' } }
+    messages:
+      request: { payload: { $ref: '#/components/schemas/RelationsUpdate' } }
+      reply: { $ref: '#/components/messages/RelationsReply' }
   documents.request-content-upload:
     address: '{instance}.{userId}.jiku-docs-commands.v1.documents.request-content-upload'
     parameters: { instance: { $ref: '#/components/parameters/instance' }, userId: { $ref: '#/components/parameters/userId' } }
@@ -162,25 +198,26 @@ channels:
       reply: { $ref: '#/components/messages/ShareRevokeReply' }
 
 operations:
-  foldersNew:          { action: receive, channel: { $ref: '#/channels/folders.new' },          reply: { channel: { $ref: '#/channels/folders.new' } },          x-permission: manage (carpeta padre), x-error-codes: [folder_not_found, already_exists, permission_denied] }
-  foldersEdit:         { action: receive, channel: { $ref: '#/channels/folders.edit' },         reply: { channel: { $ref: '#/channels/folders.edit' } },         x-permission: manage (carpeta y destino si se mueve), x-error-codes: [folder_not_found, already_exists, permission_denied, invalid_fields] }
-  foldersDelete:       { action: receive, channel: { $ref: '#/channels/folders.delete' },       reply: { channel: { $ref: '#/channels/folders.delete' } },       x-permission: manage, x-error-codes: [folder_not_found, folder_not_empty, permission_denied] }
-  foldersAclReplace:   { action: receive, channel: { $ref: '#/channels/folders.acl.replace' },  reply: { channel: { $ref: '#/channels/folders.acl.replace' } },  x-permission: manage, x-error-codes: [folder_not_found, permission_denied, invalid_fields] }
-  documentsNew:        { action: receive, channel: { $ref: '#/channels/documents.new' },        reply: { channel: { $ref: '#/channels/documents.new' } },        x-permission: write (carpeta), x-error-codes: [folder_not_found, already_exists, file_name_invalid, frontmatter_invalid, invalid_relation, content_too_large, checksum_mismatch, upload_not_found, permission_denied, upstream_unavailable] }
+  foldersNew:          { action: receive, channel: { $ref: '#/channels/folders.new' },          reply: { channel: { $ref: '#/channels/folders.new' } },          x-permission: admin o servicio, x-error-codes: [folder_not_found, already_exists, permission_denied] }
+  foldersEdit:         { action: receive, channel: { $ref: '#/channels/folders.edit' },         reply: { channel: { $ref: '#/channels/folders.edit' } },         x-permission: admin o servicio, x-error-codes: [folder_not_found, already_exists, permission_denied, invalid_fields] }
+  foldersDelete:       { action: receive, channel: { $ref: '#/channels/folders.delete' },       reply: { channel: { $ref: '#/channels/folders.delete' } },       x-permission: admin o servicio, x-error-codes: [folder_not_found, folder_not_empty, permission_denied] }
+  foldersAclReplace:   { action: receive, channel: { $ref: '#/channels/folders.acl.replace' },  reply: { channel: { $ref: '#/channels/folders.acl.replace' } },  x-permission: admin o servicio (obsoleto, las reglas no tienen efecto), x-error-codes: [folder_not_found, permission_denied, invalid_fields] }
+  documentsNew:        { action: receive, channel: { $ref: '#/channels/documents.new' },        reply: { channel: { $ref: '#/channels/documents.new' } },        x-permission: persona interna o servicio (restricted solo admin), x-error-codes: [folder_not_found, already_exists, file_name_invalid, frontmatter_invalid, invalid_relation, content_too_large, checksum_mismatch, upload_not_found, permission_denied, upstream_unavailable] }
   documentsUpdate:     { action: receive, channel: { $ref: '#/channels/documents.update' },     reply: { channel: { $ref: '#/channels/documents.update' } },     x-permission: write, x-error-codes: [document_not_found, version_conflict, document_locked, frontmatter_invalid, invalid_relation, content_too_large, checksum_mismatch, upload_not_found, permission_denied, upstream_unavailable] }
   documentsMove:       { action: receive, channel: { $ref: '#/channels/documents.move' },       reply: { channel: { $ref: '#/channels/documents.move' } },       x-permission: write (origen y destino), x-error-codes: [document_not_found, folder_not_found, version_conflict, document_locked, already_exists, file_name_invalid, permission_denied] }
   documentsDelete:     { action: receive, channel: { $ref: '#/channels/documents.delete' },     reply: { channel: { $ref: '#/channels/documents.delete' } },     x-permission: write, x-error-codes: [document_not_found, version_conflict, document_locked, permission_denied] }
   documentsRestore:    { action: receive, channel: { $ref: '#/channels/documents.restore' },    reply: { channel: { $ref: '#/channels/documents.restore' } },    x-permission: write, x-error-codes: [document_not_found, version_pruned, version_conflict, document_locked, permission_denied] }
   documentsLock:       { action: receive, channel: { $ref: '#/channels/documents.lock' },       reply: { channel: { $ref: '#/channels/documents.lock' } },       x-permission: write, x-error-codes: [document_not_found, document_locked, permission_denied] }
-  documentsUnlock:     { action: receive, channel: { $ref: '#/channels/documents.unlock' },     reply: { channel: { $ref: '#/channels/documents.unlock' } },     x-permission: write (force exige manage), x-error-codes: [document_not_found, lock_not_held, permission_denied] }
+  documentsUnlock:     { action: receive, channel: { $ref: '#/channels/documents.unlock' },     reply: { channel: { $ref: '#/channels/documents.unlock' } },     x-permission: write (force solo admin o servicio), x-error-codes: [document_not_found, lock_not_held, permission_denied] }
+  relationsUpdate:     { action: receive, channel: { $ref: '#/channels/documents.relations.update' }, reply: { channel: { $ref: '#/channels/documents.relations.update' } }, x-permission: write, x-error-codes: [document_not_found, version_conflict, document_locked, frontmatter_invalid, invalid_relation, invalid_fields, permission_denied, upstream_unavailable] }
   contentUpload:       { action: receive, channel: { $ref: '#/channels/documents.request-content-upload' }, reply: { channel: { $ref: '#/channels/documents.request-content-upload' } }, x-permission: persona interna o servicio, x-error-codes: [content_too_large, caller_not_authorized] }
   attachmentsUpload:   { action: receive, channel: { $ref: '#/channels/attachments.request-upload' },   reply: { channel: { $ref: '#/channels/attachments.request-upload' } },   x-permission: write (documento), x-error-codes: [document_not_found, attachment_type_not_allowed, attachment_too_large, already_exists, permission_denied, upstream_unavailable] }
   attachmentsConfirm:  { action: receive, channel: { $ref: '#/channels/attachments.confirm' },  reply: { channel: { $ref: '#/channels/attachments.confirm' } },  x-permission: el mismo caller que pidió la subida, x-error-codes: [attachment_not_found, upload_not_found, checksum_mismatch, permission_denied, upstream_unavailable] }
   attachmentsDownload: { action: receive, channel: { $ref: '#/channels/attachments.request-download' }, reply: { channel: { $ref: '#/channels/attachments.request-download' } }, x-permission: read (documento), x-error-codes: [attachment_not_found, upstream_unavailable] }
   attachmentsDelete:   { action: receive, channel: { $ref: '#/channels/attachments.delete' },   reply: { channel: { $ref: '#/channels/attachments.delete' } },   x-permission: write (documento), x-error-codes: [attachment_not_found, permission_denied] }
 
-  sharesNew:           { action: receive, channel: { $ref: '#/channels/shares.new' },           reply: { channel: { $ref: '#/channels/shares.new' } },           x-permission: manage (carpeta del documento), x-error-codes: [document_not_found, version_pruned, permission_denied, sharing_blocked, share_expiry_invalid, secret_warning_not_acknowledged, already_exists] }
-  sharesRevoke:        { action: receive, channel: { $ref: '#/channels/shares.revoke' },        reply: { channel: { $ref: '#/channels/shares.revoke' } },        x-permission: manage (carpeta) o creador del link, x-error-codes: [share_not_found, permission_denied] }
+  sharesNew:           { action: receive, channel: { $ref: '#/channels/shares.new' },           reply: { channel: { $ref: '#/channels/shares.new' } },           x-permission: write (cualquier persona interna; restricted no admite links), x-error-codes: [document_not_found, version_pruned, permission_denied, sharing_blocked, share_expiry_invalid, secret_warning_not_acknowledged, already_exists] }
+  sharesRevoke:        { action: receive, channel: { $ref: '#/channels/shares.revoke' },        reply: { channel: { $ref: '#/channels/shares.revoke' } },        x-permission: cualquier persona interna que lea el documento, x-error-codes: [share_not_found, permission_denied] }
 
 components:
   parameters:
@@ -204,6 +241,7 @@ components:
     AttachmentDownloadReply: { payload: { $ref: '#/components/schemas/ReplyAttachmentDownload' } }
     ShareNewReply:           { payload: { $ref: '#/components/schemas/ReplyShareNew' } }
     ShareRevokeReply:        { payload: { $ref: '#/components/schemas/ReplyShareRevoke' } }
+    RelationsReply:          { payload: { $ref: '#/components/schemas/ReplyRelations' } }
 
   schemas:
     # ---------- tipos base ----------
@@ -254,9 +292,9 @@ components:
         id: { $ref: '#/components/schemas/Ulid' }
         parentId: { $ref: '#/components/schemas/Ulid' }
         name: { type: string, minLength: 1, maxLength: 120, pattern: '^[^/\\]+$' }
-        inheritAcl: { type: boolean, default: true }
-        externalBlocked: { type: boolean, default: false }
-        sharingBlocked: { type: boolean, default: false, description: 'Impide links compartidos en la carpeta y sus descendientes. Se hereda.' }
+        inheritAcl: { type: boolean, default: true, deprecated: true, description: 'Obsoleto desde 1.3.0: las reglas ACL no tienen efecto.' }
+        externalBlocked: { type: boolean, default: false, deprecated: true, description: 'Obsoleto desde 1.3.0: sin efecto, lo reemplaza la visibilidad.' }
+        sharingBlocked: { type: boolean, default: false, deprecated: true, description: 'Obsoleto desde 1.3.0: sin efecto; un documento restricted no admite links.' }
     FoldersEdit:
       type: object
       additionalProperties: false
@@ -265,9 +303,9 @@ components:
         actor: { $ref: '#/components/schemas/Actor' }
         name: { type: string, minLength: 1, maxLength: 120, pattern: '^[^/\\]+$' }
         parentId: { $ref: '#/components/schemas/Ulid' }
-        inheritAcl: { type: boolean }
-        externalBlocked: { type: boolean }
-        sharingBlocked: { type: boolean }
+        inheritAcl: { type: boolean, deprecated: true }
+        externalBlocked: { type: boolean, deprecated: true }
+        sharingBlocked: { type: boolean, deprecated: true }
     AclRule:
       type: object
       additionalProperties: false
@@ -278,6 +316,8 @@ components:
         permission: { type: string, enum: [read, write, manage] }
     AclReplace:
       type: object
+      deprecated: true
+      description: 'Obsoleto desde 1.3.0: las reglas se guardan pero no deciden permisos (P-1).'
       additionalProperties: false
       required: [rules]
       properties:
@@ -296,13 +336,13 @@ components:
     DocumentsNew:
       type: object
       additionalProperties: false
-      required: [id, folderId, fileName, checksum]
+      required: [id, checksum]
       allOf: [{ $ref: '#/components/schemas/ContentSource' }]
       properties:
         actor: { $ref: '#/components/schemas/Actor' }
         id: { $ref: '#/components/schemas/Ulid' }
-        folderId: { $ref: '#/components/schemas/Ulid' }
-        fileName: { $ref: '#/components/schemas/FileName' }
+        folderId: { $ref: '#/components/schemas/Ulid', description: 'Opcional (1.3.0): sin él la carpeta sale de las relaciones del frontmatter.' }
+        fileName: { $ref: '#/components/schemas/FileName', description: 'Opcional (1.3.0): sin él, el título en kebab-case .md, único en la carpeta.' }
         content: { type: string, maxLength: 262144 }
         contentUploadId: { $ref: '#/components/schemas/Ulid' }
         checksum: { $ref: '#/components/schemas/Checksum' }
@@ -357,7 +397,35 @@ components:
       properties:
         actor: { $ref: '#/components/schemas/Actor' }
         sessionId: { $ref: '#/components/schemas/Ulid' }
-        force: { type: boolean, default: false, description: 'Libera el lock de otra sesión. Exige manage.' }
+        force: { type: boolean, default: false, description: 'Libera el lock de otra sesión. Solo admin o servicio.' }
+    RelationSet:
+      type: object
+      additionalProperties: false
+      properties:
+        clients: { type: array, maxItems: 100, items: { type: integer, minimum: 1 } }
+        projects: { type: array, maxItems: 100, items: { type: integer, minimum: 1 } }
+        requirements: { type: array, maxItems: 100, items: { type: integer, minimum: 1 } }
+        tasks: { type: array, maxItems: 100, items: { type: integer, minimum: 1 } }
+    Relations:
+      type: object
+      additionalProperties: false
+      required: [clients, projects, requirements, tasks]
+      properties:
+        clients: { type: array, items: { type: integer } }
+        projects: { type: array, items: { type: integer } }
+        requirements: { type: array, items: { type: integer } }
+        tasks: { type: array, items: { type: integer } }
+    RelationsUpdate:
+      type: object
+      additionalProperties: false
+      required: [baseVersion]
+      description: 'Al menos un id en add o remove (si no, invalid_fields); un id en los dos es invalid_fields. Resultado = (actuales ∪ add) \ remove, más el cliente de cada proyecto agregado. Sin via: el origen sale de la clase del caller.'
+      properties:
+        actor: { $ref: '#/components/schemas/Actor' }
+        baseVersion: { type: integer, minimum: 1 }
+        add: { $ref: '#/components/schemas/RelationSet' }
+        remove: { $ref: '#/components/schemas/RelationSet' }
+        sessionId: { $ref: '#/components/schemas/Ulid', description: 'La sesión que tiene el lock, si quien asigna está editando.' }
     ContentUploadRequest:
       type: object
       additionalProperties: false
@@ -454,10 +522,27 @@ components:
                 id: { $ref: '#/components/schemas/Ulid' }
                 version: { type: integer }
                 path: { type: string }
+                folderId: { $ref: '#/components/schemas/Ulid', description: 'Solo documents.new: la carpeta, dada o generada.' }
+                fileName: { type: string, description: 'Solo documents.new: el nombre, dado o generado.' }
                 warnings:
                   type: array
                   description: Avisos no bloqueantes, por ejemplo `possible_secret_detected`.
                   items: { type: string }
+        - $ref: '#/components/schemas/Failure'
+    ReplyRelations:
+      oneOf:
+        - type: object
+          required: [status, data]
+          properties:
+            status: { const: success }
+            data:
+              type: object
+              required: [id, version, relations]
+              properties:
+                id: { $ref: '#/components/schemas/Ulid' }
+                version: { type: integer, description: 'La versión nueva, o la actual si no cambió nada.' }
+                relations: { $ref: '#/components/schemas/Relations' }
+                warnings: { type: array, items: { type: string } }
         - $ref: '#/components/schemas/Failure'
     ReplyLock:
       oneOf:

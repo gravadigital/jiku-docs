@@ -28,7 +28,8 @@ import (
 	"github.com/gravadigital/jiku-docs/internal/service"
 )
 
-// DefaultFolder receives the notes without a mapping. Only administrators can read it.
+// DefaultFolder receives the notes without a mapping. They are imported with visibility
+// restricted (P-1): only administrators read them.
 const DefaultFolder = "/importado/"
 
 // DefaultAssetPrefixes are where HedgeDoc stored images (scheme-less URL prefixes).
@@ -422,6 +423,13 @@ func Run(ctx context.Context, o Options, svc *service.Service, log *slog.Logger)
 		p.assets = AssetURLs(content, o.AssetPrefixes)
 		for _, u := range p.assets {
 			content = strings.ReplaceAll(content, u, webURL+"/docs/attachments/"+AttachmentID(*p.note, u))
+		}
+		if p.folder == DefaultFolder {
+			// P-1: the folder no longer hides anything; the notes nobody classified stay readable
+			// only by admins, as /importado/ was.
+			if c, err := markdown.SetVisibility(content, markdown.VisibilityRestricted); err == nil {
+				content = c
+			}
 		}
 		p.base = content
 		if err := p.render(); err != nil {

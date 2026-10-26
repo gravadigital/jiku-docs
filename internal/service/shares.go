@@ -206,11 +206,8 @@ func (s *Service) sharesNew(ctx context.Context, c *Call) (any, error) {
 		if d == nil || d.DeletedAt != nil {
 			return protocol.E(protocol.CodeDocumentNotFound)
 		}
-		tree, err := treeTx(ctx, tx)
-		if err != nil {
-			return err
-		}
-		if _, err := docWritePerm(tree, tree.For(c.Caller.Principal()), d, acl.Manage); err != nil {
+		// Any internal person creates links of the documents it reads (internal and public).
+		if _, err := docWritePerm(c.Caller, d, acl.Write); err != nil {
 			return err
 		}
 		now := s.now()
@@ -228,7 +225,7 @@ func (s *Service) sharesNew(ctx context.Context, c *Call) (any, error) {
 			}
 			return protocol.Ef(protocol.CodeAlreadyExists, "Ya existe un link con ese id: si se perdió, revocalo y creá otro")
 		}
-		if tree.SharingBlocked(d.FolderID) {
+		if d.Visibility == markdown.VisibilityRestricted {
 			return protocol.E(protocol.CodeSharingBlocked)
 		}
 		if !expiresAt.After(now) || expiresAt.After(now.Add(ShareMaxTTL+time.Minute)) {
@@ -306,16 +303,10 @@ func (s *Service) sharesRevoke(ctx context.Context, c *Call) (any, error) {
 		if err != nil {
 			return err
 		}
-		tree, err := treeTx(ctx, tx)
-		if err != nil {
-			return err
-		}
-		perm := tree.For(c.Caller.Principal()).Permission(d.FolderID)
-		if perm < acl.Read {
+		// Any internal person who reads the document revokes its links; a link of a document the
+		// caller cannot read does not exist for it.
+		if d == nil || personPerm(c.Caller, d.Visibility) < acl.Write {
 			return protocol.E(protocol.CodeShareNotFound)
-		}
-		if perm < acl.Manage && r.CreatedBy != c.Caller.ID {
-			return protocol.E(protocol.CodePermissionDenied)
 		}
 		if r.RevokedAt != nil {
 			out = map[string]any{"id": id, "revokedAt": protocol.FormatTime(*r.RevokedAt)}
@@ -338,9 +329,16 @@ func (s *Service) sharesRevoke(ctx context.Context, c *Call) (any, error) {
 	return out, err
 }
 
-// revokeDocumentShares revokes the live links of a deleted document. Restoring it does not
-// bring them back.
-func (s *Service) revokeDocumentShares(ctx context.Context, tx pgx.Tx, em *emitter, d *docRow, by string, now time.Time) error {
+// Reasons a link is revoked by the service.
+const (
+	RevokeDocumentDeleted = "document_deleted"
+	// RevokeRestricted: the document became restricted, which admits no links (P-1).
+	RevokeRestricted = "restricted"
+)
+
+// revokeDocumentShares revokes the live links of a document that was deleted or became
+// restricted. Restoring it, or making it internal again, does not bring them back.
+func (s *Service) revokeDocumentShares(ctx context.Context, tx pgx.Tx, em *emitter, d *docRow, by string, now time.Time, reason string) error {
 	rows, err := tx.Query(ctx, `SELECT `+shareCols+` FROM shares WHERE document_id = $1 AND revoked_at IS NULL FOR UPDATE`, d.ID)
 	if err != nil {
 		return err
@@ -356,13 +354,13 @@ func (s *Service) revokeDocumentShares(ctx context.Context, tx pgx.Tx, em *emitt
 	}
 	rows.Close()
 	for _, r := range list {
-		if _, err := tx.Exec(ctx, `UPDATE shares SET revoked_at = $2, revoked_by = $3, revoke_reason = 'document_deleted',
-			token_retry_cipher = NULL WHERE id = $1`, r.ID, now, by); err != nil {
+		if _, err := tx.Exec(ctx, `UPDATE shares SET revoked_at = $2, revoked_by = $3, revoke_reason = $4,
+			token_retry_cipher = NULL WHERE id = $1`, r.ID, now, by, reason); err != nil {
 			return err
 		}
 		r.RevokedAt = &now
 		if err := em.emit(ctx, event{Type: "share.revoked", Entity: shareEntity(r, d.FolderID), Snapshot: r.eventSnapshot(),
-			Changes: map[string]any{"reason": "document_deleted"}, FolderID: d.FolderID, DocumentID: d.ID}); err != nil {
+			Changes: map[string]any{"reason": reason}, FolderID: d.FolderID, DocumentID: d.ID}); err != nil {
 			return err
 		}
 	}
@@ -393,14 +391,9 @@ func (s *Service) resolveShare(ctx context.Context, token string) (*shareContext
 	if err != nil {
 		return nil, err
 	}
-	if d == nil || d.DeletedAt != nil {
-		return nil, protocol.E(protocol.CodeShareNotFound)
-	}
-	tree, err := s.Tree(ctx)
-	if err != nil {
-		return nil, err
-	}
-	if _, ok := tree.Get(d.FolderID); !ok || tree.SharingBlocked(d.FolderID) {
+	// A restricted document has no live links (they are revoked when it becomes restricted);
+	// checking it here too means no path ever serves one, whatever the state of the link.
+	if d == nil || d.DeletedAt != nil || d.Visibility == markdown.VisibilityRestricted {
 		return nil, protocol.E(protocol.CodeShareNotFound)
 	}
 	return &shareContext{share: r, doc: d}, nil

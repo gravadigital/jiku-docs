@@ -86,6 +86,11 @@ func Start(ctx context.Context, o Options) (*Instance, error) {
 	if err != nil {
 		return nil, err
 	}
+	// P-1: the visibility migration finishes before the service answers anything, so the new
+	// model never exposes a document the folder ACL hid.
+	if _, err := svc.MigrateP1(ctx); err != nil {
+		return nil, err
+	}
 	server, err := bus.Start(o.NC, svc, o.Settings.ServiceName, o.Settings.Instance, o.Version, o.Log)
 	if err != nil {
 		return nil, err
@@ -97,6 +102,7 @@ func Start(ctx context.Context, o Options) (*Instance, error) {
 		pub := &outbox.Publisher{DB: o.DB, JS: js, NC: o.NC, Svc: svc, Instance: o.Settings.Instance, Log: o.Log, Metrics: o.Metrics}
 		inst.goRun(func() { _ = pub.Run(runCtx) })
 	}
+	inst.goRun(func() { backfillNames(runCtx, svc, o.Log) })
 	if o.Indexer {
 		inst.goRun(func() { _ = inst.Indexer.Run(runCtx, js, outbox.StreamName, o.Settings.Instance) })
 	}
@@ -148,4 +154,23 @@ func (i *Instance) Stop() {
 	i.server.Stop()
 	i.cancel()
 	i.wg.Wait()
+}
+
+// backfillNames completes the author names of rows written before P-1, retrying every minute
+// while core does not answer.
+func backfillNames(ctx context.Context, svc *service.Service, log *slog.Logger) {
+	for {
+		done, err := svc.BackfillNames(ctx)
+		if done {
+			return
+		}
+		if err != nil && ctx.Err() == nil {
+			log.Warn("author names backfill failed, retrying", "err", err.Error())
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(time.Minute):
+		}
+	}
 }

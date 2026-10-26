@@ -1,7 +1,7 @@
 asyncapi: 3.0.0
 info:
   title: jiku-docs — eventos y notificaciones
-  version: 1.1.0
+  version: 1.3.0
   description: |
     Dos canales salen del changelog de jiku-docs (outbox, misma transacción que el comando):
 
@@ -28,6 +28,18 @@ info:
       de módulos (que solo nombra los servicios micro `{serviceName}-commands` / `-queries`). El
       stream se llama siempre `JIKU_DOCS_EVENTS`.
     - `actor.via` es siempre `service` cuando el actor es un servicio.
+
+    P-1 (1.3.0, docs/p1/servicio.md; campos nuevos, sin cambios incompatibles):
+    - `snapshot.visibility` admite `restricted`; `snapshot.lock.holderName` es el nombre de quien
+      tiene el lock (o `null`).
+    - Las notificaciones de un documento `restricted` llegan solo a los admins.
+    - Cuando un documento pasa a `restricted`, cada persona interna que lo leía y ya no (los `user`)
+      recibe `access.changed`, sin detalle; al pasar de `public` a otra visibilidad, lo mismo para
+      los externos con permiso sobre alguno de sus proyectos. Es la señal para que el daemon de sync
+      reconcilie enseguida.
+    - `share.revoked` puede llevar `changes.reason: restricted` (el documento pasó a restricted).
+    - La migración de datos de P-1 escribe `document.updated` con `actor` el servicio jiku-docs y
+      `changes.message` "Migración P-1: …".
 defaultContentType: application/json
 
 servers:
@@ -153,7 +165,7 @@ components:
         version: { type: integer }
         checksum: { type: string }
         sizeBytes: { type: integer }
-        visibility: { type: string, enum: [internal, public] }
+        visibility: { type: string, enum: [internal, public, restricted] }
         folderId: { $ref: '#/components/schemas/Ulid' }
         path: { type: string }
         relations: { $ref: '#/components/schemas/Relations' }
@@ -164,6 +176,7 @@ components:
           properties:
             sessionId: { $ref: '#/components/schemas/Ulid' }
             holder: { type: string }
+            holderName: { type: [string, 'null'] }
             via: { type: string, enum: [human, agent] }
             expiresAt: { type: string, format: date-time }
     DocumentEventEnvelope:
@@ -286,7 +299,7 @@ components:
             changes:
               type: object
               properties:
-                reason: { type: string, enum: [manual, document_deleted], description: Solo en share.revoked. }
+                reason: { type: string, enum: [manual, document_deleted, restricted], description: Solo en share.revoked. }
 
     DocumentNotificationEnvelope:
       description: Igual a DocumentEventEnvelope sin snapshot.relations ni changes.relations.

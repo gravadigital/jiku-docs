@@ -5,7 +5,9 @@ import "github.com/gravadigital/jiku-docs/internal/query"
 // The resource sheets. The validator and meta.describe read these same structures, and the
 // contract tests compare them with docs/apis/jiku-docs-queries.yaml.
 
-var visibilityEnum = []string{"internal", "public"}
+// visibilityEnum: restricted is read only by admins and services (P-1). As a filter, a caller
+// that cannot read restricted documents gets an empty result, never an error.
+var visibilityEnum = []string{"internal", "public", "restricted"}
 
 var foldersSpec = &query.Spec{
 	Name:       "folders",
@@ -28,11 +30,13 @@ var foldersSpec = &query.Spec{
 	Levers:      []string{"filter", "sort", "page", "fields", "include", "count"},
 }
 
-// folderGetFields are the names folders.get accepts in `fields`.
+// folderGetIncludes are the names folders.get accepts in `include`. `acl` (obsolete since P-1:
+// the rules have no effect) only for admins and services.
 var folderGetIncludes = []string{"acl", "effectivePermission"}
 
 var documentFilterable = []string{"id", "folderId", "path", "pathPrefix", "clientId", "projectId", "requirementId", "taskId",
-	"topic", "visibility", "createdBy", "updatedBy", "createdAt", "updatedAt", "fileName", "deleted"}
+	"topic", "visibility", "createdBy", "updatedBy", "createdAt", "updatedAt", "fileName", "deleted",
+	"hasProject", "hasClient", "hasTopic"}
 
 var documentFilterSpecs = map[string]query.FilterSpec{
 	"id":            {Kind: query.KindString, ULID: true, List: true},
@@ -51,20 +55,29 @@ var documentFilterSpecs = map[string]query.FilterSpec{
 	"updatedAt":     {Kind: query.KindDate, Range: true},
 	"fileName":      {Kind: query.KindString, Prefix: true},
 	"deleted":       {Kind: query.KindBoolean},
+	// P-1: false is "Sin proyecto" (neither direct nor through a requirement or a task), "Sin
+	// cliente" (no jiku.clients) and "Sin tema".
+	"hasProject": {Kind: query.KindBoolean},
+	"hasClient":  {Kind: query.KindBoolean},
+	"hasTopic":   {Kind: query.KindBoolean},
 }
 
+// documentFields: clients and projects are the direct relations (jiku.clients, jiku.projects)
+// as ids, for "Cliente · Proyecto"; the api resolves the names with core (P-1).
 var documentFields = []string{"id", "title", "path", "folderId", "fileName", "version", "checksum", "sizeBytes",
-	"visibility", "createdAt", "createdBy", "updatedAt", "updatedBy", "deletedAt"}
+	"visibility", "createdAt", "createdBy", "createdByName", "updatedAt", "updatedBy", "updatedByName", "deletedAt",
+	"clients", "projects"}
 
 var documentsSpec = &query.Spec{
-	Name:       "documents",
-	Base:       []string{"id", "title", "path", "folderId", "version", "visibility", "updatedAt", "updatedBy"},
+	Name: "documents",
+	Base: []string{"id", "title", "path", "folderId", "version", "visibility", "updatedAt", "updatedBy", "updatedByName",
+		"clients", "projects"},
 	Fields:     documentFields,
 	Includable: []string{"relations", "topics", "lock"},
 	IncludableSpecs: map[string]query.FieldSpec{
 		"relations": {Kind: "computed", Fields: []string{"clients", "projects", "requirements", "tasks"}},
 		"topics":    {Kind: "computed"},
-		"lock":      {Kind: "relation", Cardinality: "one", Fields: []string{"sessionId", "holder", "via", "expiresAt"}, Optional: true},
+		"lock":      {Kind: "relation", Cardinality: "one", Fields: []string{"sessionId", "holder", "holderName", "via", "expiresAt"}, Optional: true},
 	},
 	Filterable:      documentFilterable,
 	FilterableSpecs: documentFilterSpecs,
@@ -91,8 +104,8 @@ var searchSpec = &query.Spec{
 
 var versionsSpec = &query.Spec{
 	Name:       "documents.versions",
-	Base:       []string{"version", "checksum", "sizeBytes", "author", "via", "sessionId", "message", "createdAt", "kind", "protected"},
-	Fields:     []string{"version", "checksum", "sizeBytes", "author", "via", "sessionId", "message", "createdAt", "kind", "protected"},
+	Base:       []string{"version", "checksum", "sizeBytes", "author", "authorName", "via", "sessionId", "message", "createdAt", "kind", "protected"},
+	Fields:     []string{"version", "checksum", "sizeBytes", "author", "authorName", "via", "sessionId", "message", "createdAt", "kind", "protected"},
 	Filterable: []string{"documentId", "author", "via", "createdAt", "kind", "protected"},
 	FilterableSpecs: map[string]query.FilterSpec{
 		"documentId": {Kind: query.KindString, ULID: true, Required: true},
@@ -152,7 +165,7 @@ var sharesSpec = &query.Spec{
 	Sortable:    []string{"createdAt", "expiresAt"},
 	DefaultSort: []string{"-createdAt"},
 	Enums: map[string][]string{"status": {"active", "revoked", "expired"}, "mode": {"latest", "pinned"},
-		"revokeReason": {"manual", "document_deleted"}},
+		"revokeReason": {"manual", "document_deleted", "restricted"}},
 	Levers: []string{"filter", "sort", "page"},
 }
 

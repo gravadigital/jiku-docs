@@ -265,16 +265,18 @@ const (
 )
 
 type versionInput struct {
-	docID     string
-	kind      string
-	version   int
-	key       string
-	p         *prepared
-	author    string
-	via       string
-	sessionID string
-	message   string
-	at        time.Time
+	docID   string
+	kind    string
+	version int
+	key     string
+	p       *prepared
+	author  string
+	// authorName is the name of the author when the version is written (P-1).
+	authorName *string
+	via        string
+	sessionID  string
+	message    string
+	at         time.Time
 }
 
 // versionProtected is the permanent protection of a version, decided on insert: creations,
@@ -289,9 +291,9 @@ func insertVersion(ctx context.Context, tx pgx.Tx, v versionInput) error {
 		v.kind = KindUpdate
 	}
 	_, err := tx.Exec(ctx, `INSERT INTO document_versions (document_id, version, storage_key, checksum, size_bytes, title, author, via,
-		session_id, message, created_at, kind, protected) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,NULLIF($9,''),NULLIF($10,''),$11,$12,$13)`,
+		session_id, message, created_at, kind, protected, author_name) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,NULLIF($9,''),NULLIF($10,''),$11,$12,$13,$14)`,
 		v.docID, v.version, v.key, v.p.checksum, v.p.size, v.p.title, v.author, v.via, v.sessionID, v.message, v.at,
-		v.kind, versionProtected(v.kind, v.via, v.message))
+		v.kind, versionProtected(v.kind, v.via, v.message), v.authorName)
 	return err
 }
 

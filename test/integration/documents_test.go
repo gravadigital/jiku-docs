@@ -13,11 +13,9 @@ import (
 	tu "github.com/gravadigital/jiku-docs/internal/testutil"
 )
 
-// writable returns a folder where User can write.
+// writable returns a folder (since P-1 any internal person writes in any folder).
 func writable(e *tu.Env) string {
-	f := e.Folder("", "equipo", nil)
-	e.ACL(f, tu.Rule("role", "user", "write"), tu.Rule("user", tu.Admin, "manage"))
-	return f
+	return e.Folder("", "equipo", nil)
 }
 
 func TestDocumentLifecycle(t *testing.T) {
@@ -86,9 +84,9 @@ func TestDocumentLifecycle(t *testing.T) {
 	if ir.ErrorDetails["entityType"] != "project" || ir.ErrorDetails["entityId"].(float64) != 999 {
 		t.Fatal(ir.ErrorDetails)
 	}
-	// Making it public needs manage.
-	pub := "---\nvisibility: public\n---\n# x\n"
-	e.Fail(e.Cmd(tu.User, "documents."+id+".update", map[string]any{"baseVersion": 2, "content": pub, "checksum": tu.Sum(pub)}), protocol.CodePermissionDenied)
+	// P-1: any internal person sets public; only an admin sets restricted.
+	res := "---\nvisibility: restricted\n---\n# x\n"
+	e.Fail(e.Cmd(tu.User, "documents."+id+".update", map[string]any{"baseVersion": 2, "content": res, "checksum": tu.Sum(res)}), protocol.CodePermissionDenied)
 	// A secret is a warning, not a failure.
 	sec := v2 + "password: Sup3rSecretValue\n"
 	w := e.OK(e.Cmd(tu.User, "documents."+id+".update", map[string]any{"baseVersion": 2, "content": sec, "checksum": tu.Sum(sec)}))
@@ -155,10 +153,9 @@ func TestDocumentLifecycle(t *testing.T) {
 	e.Fail(e.CmdRaw(tu.User, "documents.new", map[string]any{"id": tu.ID(), "folderId": folder, "fileName": "big.md", "content": big, "checksum": tu.Sum(big)}), protocol.CodeContentTooLarge)
 	e.Fail(e.CmdRaw(tu.User, "documents.new", map[string]any{"id": tu.ID(), "folderId": folder, "fileName": "x.md", "checksum": tu.Sum("x")}), protocol.CodeInvalidFields)
 	e.Fail(e.CmdRaw(tu.User, "documents.new", map[string]any{"id": tu.ID(), "folderId": folder, "fileName": "x.md", "content": "x", "checksum": tu.Sum("x"), "author": "me"}), protocol.CodeInvalidFields)
-	// Readable but not writable.
-	ro := e.Folder("", "solo-lectura", nil)
-	e.ACL(ro, tu.Rule("role", "user", "read"))
-	e.Fail(e.Cmd(tu.User, "documents.new", map[string]any{"id": tu.ID(), "folderId": ro, "fileName": "x.md", "content": "x", "checksum": tu.Sum("x")}), protocol.CodePermissionDenied)
+	// A user does not create a restricted document; a missing folder is folder_not_found.
+	e.Fail(e.Cmd(tu.User, "documents.new", map[string]any{"id": tu.ID(), "folderId": folder, "fileName": "x.md", "content": res, "checksum": tu.Sum(res)}), protocol.CodePermissionDenied)
+	e.Fail(e.Cmd(tu.User, "documents.new", map[string]any{"id": tu.ID(), "folderId": tu.ID(), "fileName": "x.md", "content": "x", "checksum": tu.Sum("x")}), protocol.CodeFolderNotFound)
 }
 
 func toStrings(v any) []string {
@@ -173,7 +170,6 @@ func toStrings(v any) []string {
 func TestLocks(t *testing.T) {
 	e := tu.NewEnv(t, tu.Options{JanitorTick: 200 * time.Millisecond})
 	folder := writable(e)
-	e.ACL(folder, tu.Rule("role", "user", "write"), tu.Rule("user", tu.Admin, "manage"))
 	id := e.Doc(tu.User, folder, "lock.md", "uno")
 	s1, s2 := tu.ID(), tu.ID()
 	l := e.OK(e.Cmd(tu.User, "documents."+id+".lock", map[string]any{"sessionId": s1, "via": "agent", "ttlSeconds": 300}))
@@ -183,7 +179,7 @@ func TestLocks(t *testing.T) {
 	// Renewing is idempotent and emits no second document.locked.
 	e.OK(e.Cmd(tu.User, "documents."+id+".lock", map[string]any{"sessionId": s1, "via": "agent", "ttlSeconds": 300}))
 	locked := e.Fail(e.Cmd(tu.User2, "documents."+id+".lock", map[string]any{"sessionId": s2, "via": "human"}), protocol.CodeDocumentLocked)
-	if locked.ErrorDetails["holder"] != tu.User || locked.ErrorDetails["via"] != "agent" || locked.ErrorDetails["expiresAt"] == nil {
+	if locked.ErrorDetails["holder"] != tu.User || locked.ErrorDetails["holderName"] != "Usuario" || locked.ErrorDetails["via"] != "agent" || locked.ErrorDetails["expiresAt"] == nil {
 		t.Fatal(locked.ErrorDetails)
 	}
 	// Writes from another session fail; from the session succeed.
@@ -191,10 +187,10 @@ func TestLocks(t *testing.T) {
 	e.Fail(e.Cmd(tu.User, "documents."+id+".update", map[string]any{"baseVersion": 1, "content": "dos", "checksum": tu.Sum("dos")}), protocol.CodeDocumentLocked)
 	e.OK(e.Cmd(tu.User, "documents."+id+".update", map[string]any{"baseVersion": 1, "content": "dos", "checksum": tu.Sum("dos"), "sessionId": s1, "via": "agent"}))
 	g := e.OK(e.Q(tu.User2, "documents.get", map[string]any{"id": id, "include": []string{"lock"}}))
-	if g["lock"].(map[string]any)["sessionId"] != s1 {
+	if g["lock"].(map[string]any)["sessionId"] != s1 || g["lock"].(map[string]any)["holderName"] != "Usuario" {
 		t.Fatal(g)
 	}
-	// unlock: not held, then force needs manage, then the holder releases.
+	// unlock: not held, then force is for admins only, then the holder releases.
 	e.Fail(e.Cmd(tu.User2, "documents."+id+".unlock", map[string]any{"sessionId": s2}), protocol.CodeLockNotHeld)
 	e.Fail(e.Cmd(tu.User2, "documents."+id+".unlock", map[string]any{"sessionId": s2, "force": true}), protocol.CodePermissionDenied)
 	e.OK(e.Cmd(tu.User, "documents."+id+".unlock", map[string]any{"sessionId": s1}))

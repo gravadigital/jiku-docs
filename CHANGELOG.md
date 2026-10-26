@@ -4,6 +4,49 @@ Formato: [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/). Versionado
 
 ## [Unreleased]
 
+### Security
+
+- P-1, documentación sin carpetas (`docs/p1/servicio.md`, contratos 1.3.0): los permisos los deciden la clase del
+  caller y la visibilidad del documento, no la ACL de carpetas. Visibilidad nueva `restricted`: solo `admin` y
+  servicios; para un `user` o un externo no existe por ninguna vía (`list`, `count`, `get` con y sin `version`,
+  `search` y fragmentos, `changes`, `versions.list`, `topics.list` y sus conteos, `attachments.*`, `shares.*` incluida
+  la ruta pública de un link anterior, `docs-notify`, `suggest-relations`). Solo `admin` (o un servicio) pone o quita
+  `restricted` en `new`, `update`, `restore` y `relations.update`. Pasar a `restricted` revoca los links activos
+  (`revokeReason: restricted`), y un `restricted` no admite links (`sharing_blocked`).
+- Migración de datos de P-1, al arrancar y antes de atender, una sola vez: todo documento que un `user` no podía leer
+  con la ACL vigente pasa a `restricted`; todo `public` bajo un `externalBlocked` efectivo pasa a `internal`; cada
+  cambio es una versión del servicio con mensaje. A un externo, `clients`/`projects` de los ítems e
+  `include: [relations]` solo traen sus propios proyectos.
+
+### Changed
+
+- Personas internas (`admin`, `user`) leen y escriben todos los documentos `internal` y `public`, en cualquier carpeta;
+  marcar `public` ya no exige `manage`. Cualquier persona interna crea, lista y revoca links. `unlock` con `force`:
+  solo `admin` o servicio. `folders.*` (comandos): solo `admin` y servicios (`permission_denied` para un `user`); las
+  personas internas ven todas las carpetas. **Obsoletos, sin efecto:** reglas ACL (`acl.replace`, `inheritAcl`,
+  `include: [acl]`), `externalBlocked` y `sharingBlocked`.
+- `documents.new`: `folderId` y `fileName` opcionales; el servidor genera la carpeta de las relaciones
+  (`/clientes/<cliente>/<proyecto>/`, `/clientes/<cliente>/general/`, `/general/`) y el nombre desde el título. La
+  respuesta trae `folderId` y `fileName`.
+- `document_locked` trae `holderName` en `errorDetails`. Labels de visibilidad en `meta.describe`: Interno, Visible para
+  el cliente, Restringido.
+- Importador de HedgeDoc: las notas sin mapeo (`/importado/`) se importan `restricted`.
+- `access.changed` (sin detalle) a cada `user` cuando un documento pasa a `restricted`, y a los externos afectados
+  cuando deja de ser `public`.
+
+### Added
+
+- Comando `documents.{id}.relations.update` (`{ baseVersion, add?, remove?, sessionId? }`): reescribe solo el bloque
+  `jiku:`, agrega el cliente de un proyecto agregado, versión con mensaje automático; idempotente.
+- Consulta `documents.suggest-relations` (`{ id }` → hasta 5 `{ projectId, clientId, score, reason }`; `projectId`
+  `null` en un candidato solo de cliente).
+- Filtros `hasProject`, `hasClient` y `hasTopic` en `documents.list` y `documents.search`; `projectMatch`
+  (`direct`/`indirect`) con `filter.projectId`; campos `createdByName`, `updatedByName`, `clients`, `projects`
+  (ítems de `list`, `get`, `search`), `authorName` (`versions.list`) y `lock.holderName`.
+- Migración `0005`: `restricted`, columnas de nombres, `revoke_reason = restricted`. Los nombres existentes se
+  completan desde core en segundo plano.
+- Contratos 1.3.0 (`jiku-docs-commands`, `-queries`, `-events`).
+
 ### Changed
 
 - Compactación del historial de versiones (`docs/compactacion-historial-v1.md`): un proceso diario (desde

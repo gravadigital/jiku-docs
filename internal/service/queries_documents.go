@@ -36,6 +36,7 @@ func (d *docRow) view() map[string]any {
 		"createdAt": protocol.FormatTime(d.CreatedAt), "createdBy": d.CreatedBy,
 		"updatedAt": protocol.FormatTime(d.UpdatedAt), "updatedBy": d.UpdatedBy, "deletedAt": deleted,
 		"prunedVersionsCount": d.PrunedVersions,
+		"createdByName":       strOrNil(d.CreatedByName), "updatedByName": strOrNil(d.UpdatedByName),
 	}
 }
 
@@ -100,6 +101,19 @@ func docConds(conds map[string]query.Cond, a *args) []string {
 			} else {
 				out = append(out, "d.deleted_at IS NULL")
 			}
+		case "hasProject", "hasClient", "hasTopic":
+			// "Sin proyecto" (hasProject false) means no project at all: neither direct nor
+			// through a requirement or a task. hasClient looks at jiku.clients only.
+			exists := map[string]string{
+				"hasProject": "EXISTS (SELECT 1 FROM document_relations hr WHERE hr.document_id = d.id AND hr.entity_type IN ('project','requirement','task'))",
+				"hasClient":  "EXISTS (SELECT 1 FROM document_relations hr WHERE hr.document_id = d.id AND hr.entity_type = 'client')",
+				"hasTopic":   "EXISTS (SELECT 1 FROM document_topics ht WHERE ht.document_id = d.id)",
+			}[name]
+			if *c.Bool {
+				out = append(out, exists)
+			} else {
+				out = append(out, "NOT "+exists)
+			}
 		}
 	}
 	return out
@@ -134,7 +148,7 @@ func (s *Service) documentsList(ctx context.Context, c *Call) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	v, err := s.viewer(ctx, c.Caller, nil)
+	v, err := s.viewer(ctx, c.Caller)
 	if err != nil {
 		return nil, err
 	}
@@ -181,16 +195,30 @@ func (s *Service) documentsList(ctx context.Context, c *Call) (any, error) {
 	if hasMore {
 		docs = docs[:q.Limit]
 	}
-	extras, err := s.loadIncludes(ctx, docs, q.Include)
+	extras, err := s.loadIncludes(ctx, v, docs, q.Include)
 	if err != nil {
 		return nil, err
 	}
+	ids := make([]string, len(docs))
+	for i, d := range docs {
+		ids[i] = d.ID
+	}
+	direct, err := s.directRelations(ctx, v, ids)
+	if err != nil {
+		return nil, err
+	}
+	matchSet := filterProjects(q.Filter)
 	items := make([]map[string]any, len(docs))
 	keys := make([][]any, len(docs))
 	for i, d := range docs {
-		it := project(d.view(), q.Fields)
+		full := d.view()
+		full["clients"], full["projects"] = direct[d.ID].clients(), direct[d.ID].projects()
+		it := project(full, q.Fields)
 		for k, val := range extras[d.ID] {
 			it[k] = val
+		}
+		if matchSet != nil {
+			it["projectMatch"] = direct[d.ID].match(matchSet)
 		}
 		items[i] = it
 		k := make([]any, len(q.Sort))
@@ -203,7 +231,7 @@ func (s *Service) documentsList(ctx context.Context, c *Call) (any, error) {
 }
 
 // loadIncludes batch-loads relations, topics and locks of a page.
-func (s *Service) loadIncludes(ctx context.Context, docs []*docRow, include []string) (map[string]map[string]any, error) {
+func (s *Service) loadIncludes(ctx context.Context, v *viewer, docs []*docRow, include []string) (map[string]map[string]any, error) {
 	out := map[string]map[string]any{}
 	if len(include) == 0 || len(docs) == 0 {
 		return out, nil
@@ -232,7 +260,7 @@ func (s *Service) loadIncludes(ctx context.Context, docs []*docRow, include []st
 			}
 			rows.Close()
 			for _, id := range ids {
-				out[id]["relations"] = relationsView(byDoc[id])
+				out[id]["relations"] = v.relations(relationsView(byDoc[id]))
 			}
 		case "topics":
 			rows, err := s.DB.Query(ctx, `SELECT document_id, topic FROM document_topics WHERE document_id = ANY($1) ORDER BY topic`, ids)
@@ -257,7 +285,7 @@ func (s *Service) loadIncludes(ctx context.Context, docs []*docRow, include []st
 				out[id]["topics"] = t
 			}
 		case "lock":
-			rows, err := s.DB.Query(ctx, `SELECT document_id, session_id, holder, via, expires_at FROM document_locks
+			rows, err := s.DB.Query(ctx, `SELECT document_id, session_id, holder, holder_name, via, expires_at FROM document_locks
 				WHERE document_id = ANY($1) AND expires_at > $2`, ids, s.now())
 			if err != nil {
 				return nil, err
@@ -266,7 +294,7 @@ func (s *Service) loadIncludes(ctx context.Context, docs []*docRow, include []st
 			for rows.Next() {
 				var id string
 				l := &lockRow{}
-				if err := rows.Scan(&id, &l.SessionID, &l.Holder, &l.Via, &l.ExpiresAt); err != nil {
+				if err := rows.Scan(&id, &l.SessionID, &l.Holder, &l.HolderName, &l.Via, &l.ExpiresAt); err != nil {
 					rows.Close()
 					return nil, err
 				}
@@ -298,7 +326,7 @@ func (s *Service) documentsGet(ctx context.Context, c *Call) (any, error) {
 		fields = documentGetFields
 	}
 	fields = append([]string{"id"}, fields...)
-	v, err := s.viewer(ctx, c.Caller, nil)
+	v, err := s.viewer(ctx, c.Caller)
 	if err != nil {
 		return nil, err
 	}
@@ -308,6 +336,11 @@ func (s *Service) documentsGet(ctx context.Context, c *Call) (any, error) {
 	}
 	key := ""
 	full := d.view()
+	direct, err := s.directRelations(ctx, v, []string{d.ID})
+	if err != nil {
+		return nil, err
+	}
+	full["clients"], full["projects"] = direct[d.ID].clients(), direct[d.ID].projects()
 	if hasVersion && int(version) != d.Version && v.c.IsExternal() {
 		// An external person sees the document because it is public NOW. Earlier versions may be
 		// from before it was published, and hold what was removed to publish it. No details: not
@@ -317,11 +350,13 @@ func (s *Service) documentsGet(ctx context.Context, c *Call) (any, error) {
 	if hasVersion && int(version) != d.Version {
 		var ver struct {
 			key, checksum, title, author string
+			authorName                   *string
 			size                         int
 			at                           time.Time
 		}
-		err := s.DB.QueryRow(ctx, `SELECT storage_key, checksum, size_bytes, title, author, created_at FROM document_versions
-			WHERE document_id = $1 AND version = $2`, id, version).Scan(&ver.key, &ver.checksum, &ver.size, &ver.title, &ver.author, &ver.at)
+		err := s.DB.QueryRow(ctx, `SELECT storage_key, checksum, size_bytes, title, author, author_name, created_at FROM document_versions
+			WHERE document_id = $1 AND version = $2`, id, version).Scan(&ver.key, &ver.checksum, &ver.size, &ver.title, &ver.author,
+			&ver.authorName, &ver.at)
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, missingVersion(ctx, s.DB, id, d.Version, int(version))
 		}
@@ -330,7 +365,7 @@ func (s *Service) documentsGet(ctx context.Context, c *Call) (any, error) {
 		}
 		key = ver.key
 		full["version"], full["checksum"], full["sizeBytes"], full["title"] = int(version), ver.checksum, ver.size, ver.title
-		full["updatedAt"], full["updatedBy"] = protocol.FormatTime(ver.at), ver.author
+		full["updatedAt"], full["updatedBy"], full["updatedByName"] = protocol.FormatTime(ver.at), ver.author, strOrNil(ver.authorName)
 	}
 	if key == "" && (v.c.IsExternal() || slices.Contains(include, "content")) {
 		if err := s.DB.QueryRow(ctx, `SELECT storage_key FROM document_versions WHERE document_id = $1 AND version = $2`,
@@ -380,7 +415,7 @@ func (s *Service) documentsGet(ctx context.Context, c *Call) (any, error) {
 				out["content"] = string(b)
 			}
 		case "relations", "topics", "lock":
-			extra, err := s.loadIncludes(ctx, []*docRow{d}, []string{inc})
+			extra, err := s.loadIncludes(ctx, v, []*docRow{d}, []string{inc})
 			if err != nil {
 				return nil, err
 			}
@@ -434,7 +469,7 @@ func (s *Service) versionsList(ctx context.Context, c *Call) (any, error) {
 		return nil, err
 	}
 	docCond, _ := q.Filter.Get("documentId")
-	v, err := s.viewer(ctx, c.Caller, nil)
+	v, err := s.viewer(ctx, c.Caller)
 	if err != nil {
 		return nil, err
 	}
@@ -475,7 +510,7 @@ func (s *Service) versionsList(ctx context.Context, c *Call) (any, error) {
 		where = append(where, ks)
 	}
 	rows, err := s.DB.Query(ctx, `SELECT v.version, v.checksum, v.size_bytes, v.author, v.via, v.session_id, v.message, v.created_at,
-		v.kind, v.protected FROM document_versions v WHERE `+strings.Join(where, " AND ")+` ORDER BY `+orderBy(q.Sort, versionSortCols)+` LIMIT `+a.add(q.Limit+1), a...)
+		v.kind, v.protected, v.author_name FROM document_versions v WHERE `+strings.Join(where, " AND ")+` ORDER BY `+orderBy(q.Sort, versionSortCols)+` LIMIT `+a.add(q.Limit+1), a...)
 	if err != nil {
 		return nil, err
 	}
@@ -484,16 +519,16 @@ func (s *Service) versionsList(ctx context.Context, c *Call) (any, error) {
 	for rows.Next() {
 		var version, size int
 		var checksum, author, via, kind string
-		var session, message *string
+		var session, message, authorName *string
 		var at time.Time
 		var protected bool
-		if err := rows.Scan(&version, &checksum, &size, &author, &via, &session, &message, &at, &kind, &protected); err != nil {
+		if err := rows.Scan(&version, &checksum, &size, &author, &via, &session, &message, &at, &kind, &protected, &authorName); err != nil {
 			rows.Close()
 			return nil, err
 		}
 		items = append(items, map[string]any{"version": version, "checksum": checksum, "sizeBytes": size, "author": author,
-			"via": via, "sessionId": strOrNil(session), "message": strOrNil(message), "createdAt": protocol.FormatTime(at),
-			"kind": kind, "protected": protected})
+			"authorName": strOrNil(authorName), "via": via, "sessionId": strOrNil(session), "message": strOrNil(message),
+			"createdAt": protocol.FormatTime(at), "kind": kind, "protected": protected})
 		keys = append(keys, []any{int64(version)})
 	}
 	rows.Close()
@@ -552,7 +587,7 @@ func (s *Service) documentsSearch(ctx context.Context, c *Call) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	v, err := s.viewer(ctx, c.Caller, nil)
+	v, err := s.viewer(ctx, c.Caller)
 	if err != nil {
 		return nil, err
 	}
@@ -574,22 +609,25 @@ func (s *Service) documentsSearch(ctx context.Context, c *Call) (any, error) {
 	SELECT h.document_id, h.version, d.title, d.path, h.heading_path,
 		CASE WHEN h.body = '' THEN array_to_string(h.heading_path, ' › ')
 		ELSE ts_headline('es_unaccent', h.body, q.tsq, 'MaxWords=40, MinWords=15, StartSel=**, StopSel=**, MaxFragments=2, FragmentDelimiter=" … "') END,
-		h.score, d.updated_at, d.updated_by
+		h.score, d.updated_at, d.updated_by, d.updated_by_name, d.created_by, d.created_by_name, d.visibility
 	FROM hits h JOIN documents d ON d.id = h.document_id CROSS JOIN q
 	ORDER BY h.score DESC, h.document_id LIMIT ` + a.add(limit)
 	rows, err := s.DB.Query(ctx, sql, a...)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
 	items := []map[string]any{}
+	var ids []string
 	for rows.Next() {
-		var docID, title, path, snippet, updatedBy string
+		var docID, title, path, snippet, updatedBy, createdBy, visibility string
+		var updatedByName, createdByName *string
 		var version int
 		var heading []string
 		var score float32
 		var updated time.Time
-		if err := rows.Scan(&docID, &version, &title, &path, &heading, &snippet, &score, &updated, &updatedBy); err != nil {
+		if err := rows.Scan(&docID, &version, &title, &path, &heading, &snippet, &score, &updated, &updatedBy, &updatedByName,
+			&createdBy, &createdByName, &visibility); err != nil {
+			rows.Close()
 			return nil, err
 		}
 		if r := []rune(snippet); len(r) > 500 {
@@ -598,10 +636,139 @@ func (s *Service) documentsSearch(ctx context.Context, c *Call) (any, error) {
 		if heading == nil {
 			heading = []string{}
 		}
+		ids = append(ids, docID)
 		items = append(items, map[string]any{"documentId": docID, "version": version, "title": title, "path": path,
-			"headingPath": heading, "snippet": snippet, "score": score, "updatedAt": protocol.FormatTime(updated), "updatedBy": updatedBy})
+			"headingPath": heading, "snippet": snippet, "score": score, "updatedAt": protocol.FormatTime(updated), "updatedBy": updatedBy,
+			"updatedByName": strOrNil(updatedByName), "createdBy": createdBy, "createdByName": strOrNil(createdByName),
+			"visibility": visibility})
 	}
-	return map[string]any{"items": items}, rows.Err()
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	direct, err := s.directRelations(ctx, v, ids)
+	if err != nil {
+		return nil, err
+	}
+	matchSet := filterProjects(filter)
+	for _, it := range items {
+		id := it["documentId"].(string)
+		it["clients"], it["projects"] = direct[id].clients(), direct[id].projects()
+		if matchSet != nil {
+			it["projectMatch"] = direct[id].match(matchSet)
+		}
+	}
+	return map[string]any{"items": items}, nil
+}
+
+// direct are the clients and projects a document names in its own frontmatter (jiku.clients,
+// jiku.projects), for the "Cliente · Proyecto" of each item and projectMatch.
+type direct struct {
+	clientIDs, projectIDs []int64 // as shown to the caller
+	allProjects           []int64 // every direct project, for projectMatch
+}
+
+func (d *direct) clients() []int64 {
+	if d == nil || d.clientIDs == nil {
+		return []int64{}
+	}
+	return d.clientIDs
+}
+
+func (d *direct) projects() []int64 {
+	if d == nil || d.projectIDs == nil {
+		return []int64{}
+	}
+	return d.projectIDs
+}
+
+// match is projectMatch: direct when one of the filtered projects is in jiku.projects,
+// indirect when the document reaches the project only through a requirement or a task.
+func (d *direct) match(set map[int64]bool) string {
+	if d != nil {
+		for _, p := range d.allProjects {
+			if set[p] {
+				return "direct"
+			}
+		}
+	}
+	return "indirect"
+}
+
+// directRelations batch-loads the direct clients and projects of documents. An external person
+// sees only the projects it has permission on, and no client ids (the relations are internal
+// data, D-11).
+func (s *Service) directRelations(ctx context.Context, v *viewer, ids []string) (map[string]*direct, error) {
+	out := map[string]*direct{}
+	if len(ids) == 0 {
+		return out, nil
+	}
+	rows, err := s.DB.Query(ctx, `SELECT document_id, entity_type, entity_id FROM document_relations
+		WHERE document_id = ANY($1) AND entity_type IN ('client', 'project') ORDER BY document_id, entity_type, entity_id`, ids)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id, et string
+		var eid int64
+		if err := rows.Scan(&id, &et, &eid); err != nil {
+			return nil, err
+		}
+		d := out[id]
+		if d == nil {
+			d = &direct{}
+			out[id] = d
+		}
+		switch {
+		case et == "project":
+			d.allProjects = append(d.allProjects, eid)
+			if !v.c.IsExternal() || slices.Contains(v.projects, eid) {
+				d.projectIDs = append(d.projectIDs, eid)
+			}
+		case et == "client" && !v.c.IsExternal():
+			d.clientIDs = append(d.clientIDs, eid)
+		}
+	}
+	return out, rows.Err()
+}
+
+// relations is the relations include as the viewer may see it: an external person gets only
+// its own projects (no clients, requirements or tasks: internal ids, D-11).
+func (v *viewer) relations(r markdown.Relations) markdown.Relations {
+	if !v.c.IsExternal() {
+		return r
+	}
+	out := markdown.Relations{Clients: []int64{}, Requirements: []int64{}, Tasks: []int64{}, Projects: []int64{}}
+	for _, p := range r.Projects {
+		if slices.Contains(v.projects, p) {
+			out.Projects = append(out.Projects, p)
+		}
+	}
+	return out
+}
+
+// filterProjects are the project ids of filter.projectId (top level and inside or), or nil.
+func filterProjects(f *query.Filter) map[int64]bool {
+	if f == nil {
+		return nil
+	}
+	var set map[int64]bool
+	add := func(conds map[string]query.Cond) {
+		if c, ok := conds["projectId"]; ok {
+			if set == nil {
+				set = map[int64]bool{}
+			}
+			for _, id := range c.Ints {
+				set[id] = true
+			}
+		}
+	}
+	add(f.Conds)
+	for _, o := range f.Or {
+		add(o)
+	}
+	return set
 }
 
 // ChangelogRetention is how long the feed keeps events.
@@ -632,7 +799,7 @@ func (s *Service) documentsChanges(ctx context.Context, c *Call) (any, error) {
 				With("oldestSeq", purged+1)
 		}
 	}
-	v, err := s.viewer(ctx, c.Caller, nil)
+	v, err := s.viewer(ctx, c.Caller)
 	if err != nil {
 		return nil, err
 	}

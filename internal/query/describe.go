@@ -35,7 +35,7 @@ type Defaults struct {
 
 // Labels of enum values shown by the interfaces.
 var enumLabels = map[string]string{
-	"internal": "Interno", "public": "Público",
+	"internal": "Interno", "public": "Visible para el cliente", "restricted": "Restringido",
 	"human": "Persona", "agent": "Agente", "service": "Servicio",
 	"read": "Lectura", "write": "Escritura", "manage": "Administración",
 	"latest": "Última versión", "pinned": "Versión fija",

@@ -10,6 +10,7 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"github.com/gravadigital/jiku-docs/internal/acl"
+	"github.com/gravadigital/jiku-docs/internal/caller"
 	"github.com/gravadigital/jiku-docs/internal/protocol"
 	"github.com/gravadigital/jiku-docs/internal/store"
 	"github.com/gravadigital/jiku-docs/internal/validate"
@@ -68,12 +69,13 @@ func (f *folderRow) entity() map[string]any {
 	return map[string]any{"type": "folder", "id": f.ID, "path": f.Path}
 }
 
-// requireFolderPerm: not readable = folder_not_found, readable without min = permission_denied.
-func requireFolderPerm(ev *acl.Evaluator, tree *acl.Tree, id string, min acl.Perm) error {
+// requireFolder: a missing folder (or any folder, for an external) is folder_not_found; a
+// visible one without min is permission_denied.
+func requireFolder(c *caller.Caller, tree *acl.Tree, id string, min acl.Perm) error {
 	if _, ok := tree.Get(id); !ok {
 		return protocol.E(protocol.CodeFolderNotFound)
 	}
-	p := ev.Permission(id)
+	p := folderPerm(c)
 	if p < acl.Read {
 		return protocol.E(protocol.CodeFolderNotFound)
 	}
@@ -83,8 +85,20 @@ func requireFolderPerm(ev *acl.Evaluator, tree *acl.Tree, id string, min acl.Per
 	return nil
 }
 
+// requireFolderManager: folders.* commands are for admins and services only (P-1). A user is
+// permission_denied, an external caller_not_authorized (it never writes).
+func requireFolderManager(c *caller.Caller) error {
+	if err := requireWriter(c); err != nil {
+		return err
+	}
+	if !c.SeesRestricted() {
+		return protocol.Ef(protocol.CodePermissionDenied, "Las carpetas las administran solo los administradores y los servicios")
+	}
+	return nil
+}
+
 func (s *Service) foldersNew(ctx context.Context, c *Call) (any, error) {
-	if err := requireWriter(c.Caller); err != nil {
+	if err := requireFolderManager(c.Caller); err != nil {
 		return nil, err
 	}
 	o := validate.ParseObject(c.Payload, "", "id", "parentId", "name", "inheritAcl", "externalBlocked", "sharingBlocked")
@@ -108,8 +122,7 @@ func (s *Service) CreateFolder(ctx context.Context, c *Call, id, parentID, name 
 		if err != nil {
 			return err
 		}
-		ev := tree.For(c.Caller.Principal())
-		if err := requireFolderPerm(ev, tree, parentID, acl.Manage); err != nil {
+		if err := requireFolder(c.Caller, tree, parentID, acl.Manage); err != nil {
 			return err
 		}
 		existing, deleted, err := getFolder(ctx, tx, id)
@@ -127,24 +140,11 @@ func (s *Service) CreateFolder(ctx context.Context, c *Call, id, parentID, name 
 		parent, _ := tree.Get(parentID)
 		f := &folderRow{ID: id, ParentID: parentID, Name: name, Path: parent.Path + name + "/",
 			InheritACL: inherit, ExternalBlocked: extBlocked, Sharing: sharing}
-		now := s.now()
-		_, err = tx.Exec(ctx, `INSERT INTO folders (id, parent_id, name, path, inherit_acl, external_blocked, sharing_blocked,
-			created_by, created_at, updated_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$9)`,
-			f.ID, f.ParentID, f.Name, f.Path, f.InheritACL, f.ExternalBlocked, f.Sharing, c.Caller.ID, now)
+		err = s.insertFolder(ctx, tx, c, f)
 		if store.IsUniqueViolation(err, "") {
 			return protocol.Ef(protocol.CodeAlreadyExists, "Ya existe una carpeta con ese nombre en la carpeta padre")
 		}
 		if err != nil {
-			return err
-		}
-		if err := keepManager(ctx, tx, c, f.ID, f.InheritACL); err != nil {
-			return err
-		}
-		if err := bumpTree(ctx, tx); err != nil {
-			return err
-		}
-		em := s.emitter(tx, c.Caller, c.CorrelationID)
-		if err := em.emit(ctx, event{Type: "folder.created", Entity: f.entity(), Snapshot: f.snapshot(), FolderID: f.ID}); err != nil {
 			return err
 		}
 		out = map[string]any{"id": f.ID, "path": f.Path}
@@ -153,8 +153,26 @@ func (s *Service) CreateFolder(ctx context.Context, c *Call, id, parentID, name 
 	return out, err
 }
 
+// insertFolder writes a folder row, bumps the tree and emits folder.created.
+func (s *Service) insertFolder(ctx context.Context, tx pgx.Tx, c *Call, f *folderRow) error {
+	_, err := tx.Exec(ctx, `INSERT INTO folders (id, parent_id, name, path, inherit_acl, external_blocked, sharing_blocked,
+		created_by, created_at, updated_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$9)`,
+		f.ID, f.ParentID, f.Name, f.Path, f.InheritACL, f.ExternalBlocked, f.Sharing, c.Caller.ID, s.now())
+	if err != nil {
+		return err
+	}
+	if err := keepManager(ctx, tx, c, f.ID, f.InheritACL); err != nil {
+		return err
+	}
+	if err := bumpTree(ctx, tx); err != nil {
+		return err
+	}
+	em := s.emitter(tx, c.Caller, c.CorrelationID)
+	return em.emit(ctx, event{Type: "folder.created", Entity: f.entity(), Snapshot: f.snapshot(), FolderID: f.ID})
+}
+
 func (s *Service) foldersEdit(ctx context.Context, c *Call) (any, error) {
-	if err := requireWriter(c.Caller); err != nil {
+	if err := requireFolderManager(c.Caller); err != nil {
 		return nil, err
 	}
 	id := c.Params["folderId"]
@@ -183,8 +201,7 @@ func (s *Service) foldersEdit(ctx context.Context, c *Call) (any, error) {
 		if err != nil {
 			return err
 		}
-		ev := tree.For(c.Caller.Principal())
-		if err := requireFolderPerm(ev, tree, id, acl.Manage); err != nil {
+		if err := requireFolder(c.Caller, tree, id, acl.Manage); err != nil {
 			return err
 		}
 		cur, _, err := getFolder(ctx, tx, id)
@@ -201,7 +218,7 @@ func (s *Service) foldersEdit(ctx context.Context, c *Call) (any, error) {
 			changes["name"] = fromTo(cur.Name, name)
 		}
 		if hasParent && parentID != cur.ParentID {
-			if err := requireFolderPerm(ev, tree, parentID, acl.Manage); err != nil {
+			if err := requireFolder(c.Caller, tree, parentID, acl.Manage); err != nil {
 				return err
 			}
 			if tree.IsSelfOrDescendant(parentID, id) {
@@ -280,7 +297,7 @@ func keepManager(ctx context.Context, tx pgx.Tx, c *Call, folderID string, inher
 }
 
 func (s *Service) foldersDelete(ctx context.Context, c *Call) (any, error) {
-	if err := requireWriter(c.Caller); err != nil {
+	if err := requireFolderManager(c.Caller); err != nil {
 		return nil, err
 	}
 	id := c.Params["folderId"]
@@ -306,7 +323,7 @@ func (s *Service) foldersDelete(ctx context.Context, c *Call) (any, error) {
 		if err != nil {
 			return err
 		}
-		if err := requireFolderPerm(tree.For(c.Caller.Principal()), tree, id, acl.Manage); err != nil {
+		if err := requireFolder(c.Caller, tree, id, acl.Manage); err != nil {
 			return err
 		}
 		if id == protocol.RootFolderID {
@@ -336,7 +353,7 @@ func (s *Service) foldersDelete(ctx context.Context, c *Call) (any, error) {
 }
 
 func (s *Service) foldersACLReplace(ctx context.Context, c *Call) (any, error) {
-	if err := requireWriter(c.Caller); err != nil {
+	if err := requireFolderManager(c.Caller); err != nil {
 		return nil, err
 	}
 	id := c.Params["folderId"]
@@ -375,7 +392,7 @@ func (s *Service) ReplaceACL(ctx context.Context, c *Call, id string, rules []ac
 		if err != nil {
 			return err
 		}
-		if err := requireFolderPerm(tree.For(c.Caller.Principal()), tree, id, acl.Manage); err != nil {
+		if err := requireFolder(c.Caller, tree, id, acl.Manage); err != nil {
 			return err
 		}
 		f, _ := tree.Get(id)

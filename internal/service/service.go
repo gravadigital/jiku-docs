@@ -1,4 +1,4 @@
-// Package service is jiku-docs' business logic: the 18 commands and 13 queries, authorisation,
+// Package service is jiku-docs' business logic: the 19 commands and 14 queries, authorisation,
 // versioning, locks, content validation and the changelog that feeds the outbox. It is
 // transport-agnostic: package bus feeds it NATS micro requests, and the importer calls it
 // in-process as the service identity.
@@ -306,7 +306,11 @@ func (s *Service) ResolveCaller(ctx context.Context, subjectID string, actor *Ac
 	if !ok {
 		return nil, protocol.E(protocol.CodeCallerNotAuthorized)
 	}
-	return &caller.Caller{SubjectID: subjectID, ID: u.ID, Name: u.Name, Class: class, Roles: u.Roles}, nil
+	name := u.Name
+	if name == "" {
+		name = u.Username
+	}
+	return &caller.Caller{SubjectID: subjectID, ID: u.ID, Name: name, Class: class, Roles: u.Roles}, nil
 }
 
 // SelfCaller is jiku-docs acting as itself (importer, relation review).

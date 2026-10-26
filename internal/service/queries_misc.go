@@ -122,7 +122,7 @@ func (s *Service) foldersList(ctx context.Context, c *Call) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	ev := tree.For(c.Caller.Principal())
+	perm := folderPerm(c.Caller)
 	var cursor []any
 	if q.Cursor != nil {
 		cursor = make([]any, len(q.Sort))
@@ -139,9 +139,9 @@ func (s *Service) foldersList(ctx context.Context, c *Call) (any, error) {
 		keys []any
 	}
 	var all []entry
-	if !c.Caller.IsExternal() {
+	if perm >= acl.Read {
 		for _, f := range tree.Folders {
-			if ev.Permission(f.ID) < acl.Read || !matchFolder(f, q.Filter.Conds) {
+			if !matchFolder(f, q.Filter.Conds) {
 				continue
 			}
 			k := make([]any, len(q.Sort))
@@ -175,7 +175,7 @@ func (s *Service) foldersList(ctx context.Context, c *Call) (any, error) {
 		it := project(folderView(e.f, tree), q.Fields)
 		for _, inc := range q.Include {
 			if inc == "effectivePermission" {
-				it["effectivePermission"] = permOrNil(ev.Permission(e.f.ID))
+				it["effectivePermission"] = permOrNil(perm)
 			}
 		}
 		items = append(items, it)
@@ -243,19 +243,19 @@ func (s *Service) foldersGet(ctx context.Context, c *Call) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	ev := tree.For(c.Caller.Principal())
+	perm := folderPerm(c.Caller)
 	f, ok := tree.Get(id)
-	if !ok || c.Caller.IsExternal() || ev.Permission(id) < acl.Read {
+	if !ok || perm < acl.Read {
 		return nil, protocol.E(protocol.CodeFolderNotFound)
 	}
 	out := project(folderView(f, tree), fields)
 	for _, inc := range include {
 		switch inc {
 		case "effectivePermission":
-			out["effectivePermission"] = permOrNil(ev.Permission(id))
+			out["effectivePermission"] = permOrNil(perm)
 		case "acl":
-			if ev.Permission(id) < acl.Manage {
-				return nil, protocol.Ef(protocol.CodePermissionDenied, "Ver las reglas de una carpeta exige permiso de administración")
+			if perm < acl.Manage {
+				return nil, protocol.Ef(protocol.CodePermissionDenied, "Las reglas de carpeta (obsoletas) las ven solo los administradores")
 			}
 			rules := f.Rules
 			if rules == nil {
@@ -274,7 +274,7 @@ func (s *Service) topicsList(ctx context.Context, c *Call) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	v, err := s.viewer(ctx, c.Caller, nil)
+	v, err := s.viewer(ctx, c.Caller)
 	if err != nil {
 		return nil, err
 	}
@@ -327,7 +327,7 @@ func (s *Service) attachmentsList(ctx context.Context, c *Call) (any, error) {
 		return nil, err
 	}
 	docCond, _ := q.Filter.Get("documentId")
-	v, err := s.viewer(ctx, c.Caller, nil)
+	v, err := s.viewer(ctx, c.Caller)
 	if err != nil {
 		return nil, err
 	}
@@ -355,7 +355,7 @@ func (s *Service) sharesList(ctx context.Context, c *Call) (any, error) {
 		return nil, err
 	}
 	docCond, _ := q.Filter.Get("documentId")
-	v, err := s.viewer(ctx, c.Caller, nil)
+	v, err := s.viewer(ctx, c.Caller)
 	if err != nil {
 		return nil, err
 	}
@@ -363,7 +363,8 @@ func (s *Service) sharesList(ctx context.Context, c *Call) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	if v.folderPerm(d.FolderID) < acl.Manage {
+	// Any internal person who reads the document sees its links; externals never manage links.
+	if v.c.IsExternal() {
 		return nil, protocol.E(protocol.CodePermissionDenied)
 	}
 	now := s.now()

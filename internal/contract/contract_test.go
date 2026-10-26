@@ -42,13 +42,13 @@ func channelPatterns(d *contract.Doc) []string {
 	return out
 }
 
-// The service registers exactly the methods of the contracts: 18 commands, 13 queries.
+// The service registers exactly the methods of the contracts: 19 commands, 14 queries.
 func TestEndpointsMatchContracts(t *testing.T) {
 	v := load(t)
 	s := &service.Service{}
 	cmds, qs := patterns(s.Commands()), patterns(s.Queries())
-	if len(cmds) != 18 || len(qs) != 13 {
-		t.Fatalf("expected 18 commands and 13 queries, got %d and %d", len(cmds), len(qs))
+	if len(cmds) != 19 || len(qs) != 14 {
+		t.Fatalf("expected 19 commands and 14 queries, got %d and %d", len(cmds), len(qs))
 	}
 	if got, want := strings.Join(cmds, " "), strings.Join(channelPatterns(v.Commands), " "); got != want {
 		t.Errorf("commands differ from the contract:\nservice:  %s\ncontract: %s", got, want)

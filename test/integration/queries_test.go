@@ -33,9 +33,10 @@ func TestListFiltersAndPagination(t *testing.T) {
 		ids = append(ids, e.Doc(tu.User, acme, fmt.Sprintf("doc-%d.md", i), fm("12", "internal", "infra")+fmt.Sprintf("# Doc %d\n", i)))
 	}
 	reqDoc := e.Doc(tu.User, clientes, "req.md", "---\njiku:\n  requirements: [812]\n---\n# Requisito\n")
-	e.Doc(tu.Admin, interno, "secreto.md", fm("12", "internal", "rrhh")+"# Interno\n")
+	e.Doc(tu.Admin, interno, "secreto.md", fm("12", "restricted", "rrhh")+"# Interno\n")
 
-	// projectId includes documents related to requirements of the project; interno is not readable.
+	// projectId includes documents related to requirements of the project; the restricted one is
+	// not readable by a user.
 	byProject := e.Q(tu.User, "documents.list", map[string]any{"filter": map[string]any{"projectId": 12}, "count": true})
 	if n := len(byProject.Items()); n != 8 || byProject.M()["page"].(map[string]any)["total"].(float64) != 8 {
 		t.Fatalf("projectId: %d items %s", n, byProject.Raw)
@@ -142,13 +143,19 @@ func TestExternalVisibility(t *testing.T) {
 	viaReq := e.Doc(tu.Admin, clientes, "req.md", "---\nvisibility: public\njiku:\n  requirements: [812]\n---\n# Req\n")
 	e.Doc(tu.Admin, clientes, "interno.md", fm("12", "internal", "")+"# Interno\n")
 	e.Doc(tu.Admin, clientes, "otro-proyecto.md", fm("31", "public", "")+"# Otro\n")
+	// P-1: externalBlocked has no effect any more; the visibility decides.
 	blocked := e.Doc(tu.Admin, sub, "srv.md", fm("12", "public", "")+"# Srv\n")
+	hidden := e.Doc(tu.Admin, clientes, "restringido.md", fm("12", "restricted", "")+"# Restringido\n")
 
 	items := e.Q(tu.External, "documents.list", map[string]any{"sort": []string{"path"}}).Items()
-	if len(items) != 2 || items[0]["id"] != visible || items[1]["id"] != viaReq {
+	if len(items) != 3 || items[0]["id"] != visible || items[1]["id"] != viaReq || items[2]["id"] != blocked {
 		t.Fatalf("external sees %v", items)
 	}
-	e.Fail(e.Q(tu.External, "documents.get", map[string]any{"id": blocked}), protocol.CodeDocumentNotFound)
+	// An external sees only its own projects and no clients.
+	if p := items[0]["projects"].([]any); len(p) != 1 || p[0].(float64) != 12 || len(items[0]["clients"].([]any)) != 0 {
+		t.Fatalf("external relations %v", items[0])
+	}
+	e.Fail(e.Q(tu.External, "documents.get", map[string]any{"id": hidden}), protocol.CodeDocumentNotFound)
 	e.OK(e.Q(tu.External, "documents.get", map[string]any{"id": visible, "include": []string{"content"}}))
 	if items := e.Q(tu.External, "folders.list", nil).Items(); len(items) != 0 {
 		t.Errorf("externals never see folders: %v", items)
@@ -157,11 +164,11 @@ func TestExternalVisibility(t *testing.T) {
 	e.Fail(e.Cmd(tu.External, "documents."+visible+".delete", map[string]any{"baseVersion": 1}), protocol.CodeCallerNotAuthorized)
 	// The api acting for the external person sees the same.
 	viaAPI := e.Q(tu.APIUser, "documents.list", map[string]any{"actor": actor(tu.External, "external-user")}).Items()
-	if len(viaAPI) != 2 {
+	if len(viaAPI) != 3 {
 		t.Fatalf("api+actor: %v", viaAPI)
 	}
 	// The api without actor is a service: everything.
-	if n := len(e.Q(tu.APIUser, "documents.list", nil).Items()); n != 5 {
+	if n := len(e.Q(tu.APIUser, "documents.list", nil).Items()); n != 6 {
 		t.Errorf("api as service sees %d", n)
 	}
 }
@@ -264,7 +271,7 @@ func TestSearch(t *testing.T) {
 	a := e.Doc(tu.Admin, f, "aduana.md", fm("12", "internal", "")+"# Integración con aduanas\n\nEl servicio de la Aduana responde lento.\n\n## Pruebas\nprueba de carga\n")
 	e.Doc(tu.Admin, f, "otro.md", "# Otro tema\n\nnada que ver\n")
 	priv := e.Folder("", "privado", map[string]any{"inheritAcl": false})
-	e.Doc(tu.Admin, priv, "aduana-priv.md", "# Aduana privada\n")
+	e.Doc(tu.Admin, priv, "aduana-priv.md", "---\nvisibility: restricted\n---\n# Aduana privada\n")
 	e.Eventually("indexed", func() bool {
 		var n int
 		_ = e.DB.QueryRow(context.Background(), `SELECT count(*) FROM index_status`).Scan(&n)
@@ -306,7 +313,7 @@ func TestChangesFeed(t *testing.T) {
 		t.Fatal(empty)
 	}
 	a := e.Doc(tu.User, pub, "a.md", "uno")
-	e.Doc(tu.Admin, priv, "p.md", "privado")
+	e.Doc(tu.Admin, priv, "p.md", "---\nvisibility: restricted\n---\nprivado")
 	e.OK(e.Cmd(tu.User, "documents."+a+".update", map[string]any{"baseVersion": 1, "content": "dos", "checksum": tu.Sum("dos")}))
 	r := e.OK(e.Q(tu.User, "documents.changes", map[string]any{"sinceSeq": 0}))
 	items := r["items"].([]any)

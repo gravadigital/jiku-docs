@@ -1,7 +1,7 @@
 asyncapi: 3.0.0
 info:
   title: jiku-docs — consultas
-  version: 1.2.0
+  version: 1.3.0
   description: |
     Plano de lectura de jiku-docs (servicio NATS micro `jiku-docs-queries`).
     Misma gramática que `jiku-queries` de core: filter / sort / page / fields / include / count.
@@ -49,6 +49,35 @@ info:
       `document_not_found`, sin `errorDetails`.
     - `documents.get` devuelve `prunedVersionsCount` (cuántas versiones se compactaron) como campo
       base; a un externo no se le devuelve.
+
+    P-1, documentación sin carpetas (1.3.0, docs/p1/servicio.md):
+    - Visibilidad `restricted`: solo `admin` y servicios la leen. Para un `user` o un externo no existe
+      por ninguna vía: `documents.list` (y su `count`), `get` (con y sin `version`), `search` y sus
+      fragmentos, `changes`, `versions.list`, `topics.list` (los conteos no lo cuentan),
+      `attachments.list`, `shares.*`, `suggest-relations`. Responde `document_not_found` o lo omite.
+    - `filter.visibility: restricted` pedido por quien no lo puede leer devuelve **lista vacía**
+      (nunca `invalid_fields`): no revela nada.
+    - Carpetas: las personas internas ven todas (`effectivePermission`: `write` para `user`, `manage`
+      para `admin` y servicios); `include: [acl]` solo admin y servicios (`permission_denied`). Las
+      reglas ACL, `inheritAcl`, `externalBlocked` y `sharingBlocked` son **obsoletas**: se devuelven
+      pero no tienen efecto.
+    - Filtros nuevos en `documents.list` y `documents.search`: `hasProject`, `hasClient`, `hasTopic`
+      (boolean). `hasProject: false` es "Sin proyecto": sin relación directa con proyecto, ni por
+      requisito ni por tarea. `hasClient` mira `jiku.clients`; `hasTopic`, los temas.
+    - Con `filter.projectId` (también dentro de `or`), cada ítem de `list` y `search` trae
+      `projectMatch`: `direct` (el proyecto está en `jiku.projects`) o `indirect` (llega por un
+      requisito o una tarea del proyecto).
+    - Nombres: `createdByName` y `updatedByName` en `list`, `get` y `search`; `authorName` en
+      `versions.list`; `holderName` en `lock`. Se guardan al escribir; `null` si no se conocen.
+    - `clients` y `projects` (ids de `jiku.clients` y `jiku.projects`) en cada ítem de `list`, `get` y
+      `search`. A un externo solo se le devuelven los proyectos de sus `project-permissions` y ningún
+      cliente; lo mismo en `include: [relations]`.
+    - Consulta nueva `documents.suggest-relations` `{ id }` (requiere leer el documento; un externo
+      recibe `permission_denied`): `{ items: [{ projectId, clientId, score, reason }] }`, hasta 5,
+      por coincidencias de nombres, partes del nombre o código de proyectos y nombres de clientes de
+      core en el título (pesa más) y el contenido. Excluye los proyectos ya vinculados. Un candidato
+      solo de cliente (el texto nombra al cliente y ningún proyecto suyo coincide) trae
+      `projectId: null`; nunca `0`. `score` entre 0 y 1.
 defaultContentType: application/json
 
 servers:
@@ -110,6 +139,13 @@ channels:
     messages:
       request: { payload: { $ref: '#/components/schemas/ChangesQuery' } }
       reply: { payload: { $ref: '#/components/schemas/ReplyChanges' } }
+  documents.suggest-relations:
+    address: '{instance}.{userId}.jiku-docs-queries.v1.documents.suggest-relations'
+    description: 'P-1, "Asignar sugerido": candidatos de proyecto (o cliente) por título y contenido.'
+    parameters: *p
+    messages:
+      request: { payload: { $ref: '#/components/schemas/SuggestRelationsQuery' } }
+      reply: { payload: { $ref: '#/components/schemas/ReplySuggestRelations' } }
   topics.list:
     address: '{instance}.{userId}.jiku-docs-queries.v1.topics.list'
     parameters: *p
@@ -153,10 +189,11 @@ operations:
   versionsList:      { action: receive, channel: { $ref: '#/channels/documents.versions.list' }, reply: { channel: { $ref: '#/channels/documents.versions.list' } }, x-error-codes: [invalid_fields, invalid_cursor, document_not_found] }
   documentsSearch:   { action: receive, channel: { $ref: '#/channels/documents.search' },        reply: { channel: { $ref: '#/channels/documents.search' } },        x-error-codes: [invalid_fields, query_timeout, upstream_unavailable, semantic_search_not_configured] }
   documentsChanges:  { action: receive, channel: { $ref: '#/channels/documents.changes' },       reply: { channel: { $ref: '#/channels/documents.changes' } },       x-error-codes: [invalid_fields, invalid_cursor] }
+  suggestRelations:  { action: receive, channel: { $ref: '#/channels/documents.suggest-relations' }, reply: { channel: { $ref: '#/channels/documents.suggest-relations' } }, x-error-codes: [invalid_fields, document_not_found, permission_denied, upstream_unavailable] }
   topicsList:        { action: receive, channel: { $ref: '#/channels/topics.list' },             reply: { channel: { $ref: '#/channels/topics.list' } },             x-error-codes: [invalid_fields] }
   attachmentsList:   { action: receive, channel: { $ref: '#/channels/attachments.list' },        reply: { channel: { $ref: '#/channels/attachments.list' } },        x-error-codes: [invalid_fields, document_not_found] }
 
-  sharesList:        { action: receive, channel: { $ref: '#/channels/shares.list' },             reply: { channel: { $ref: '#/channels/shares.list' } },             x-permission: manage (carpeta del documento), x-error-codes: [invalid_fields, invalid_cursor, document_not_found, permission_denied] }
+  sharesList:        { action: receive, channel: { $ref: '#/channels/shares.list' },             reply: { channel: { $ref: '#/channels/shares.list' } },             x-permission: persona interna que lee el documento, x-error-codes: [invalid_fields, invalid_cursor, document_not_found, permission_denied] }
   sharesResolve:     { action: receive, channel: { $ref: '#/channels/shares.resolve' },          reply: { channel: { $ref: '#/channels/shares.resolve' } },          x-permission: solo caller api sin actor, x-error-codes: [share_not_found, caller_not_authorized] }
   sharesAttachment:  { action: receive, channel: { $ref: '#/channels/shares.attachment' },       reply: { channel: { $ref: '#/channels/shares.attachment' } },       x-permission: solo caller api sin actor, x-error-codes: [share_not_found, caller_not_authorized] }
 
@@ -244,7 +281,7 @@ components:
         actor: { $ref: '#/components/schemas/Actor' }
         id: { $ref: '#/components/schemas/Ulid' }
         fields: { type: array, items: { type: string } }
-        include: { type: array, items: { type: string, enum: [acl, effectivePermission] }, description: '`acl` solo con permiso manage; sin él responde permission_denied.' }
+        include: { type: array, items: { type: string, enum: [acl, effectivePermission] }, description: '`acl` (obsoleto) solo admin y servicios; si no, permission_denied.' }
 
     # ---------- documentos ----------
     DocumentsFilter:
@@ -260,13 +297,16 @@ components:
         requirementId: { $ref: '#/components/schemas/IntOrList' }
         taskId: { $ref: '#/components/schemas/IntOrList' }
         topic: { $ref: '#/components/schemas/StrOrList' }
-        visibility: { type: string, enum: [internal, public] }
+        visibility: { type: string, enum: [internal, public, restricted], description: 'restricted pedido por quien no lo lee: lista vacía.' }
         createdBy: { $ref: '#/components/schemas/StrOrList' }
         updatedBy: { $ref: '#/components/schemas/StrOrList' }
         createdAt: { $ref: '#/components/schemas/DateRange' }
         updatedAt: { $ref: '#/components/schemas/DateRange' }
         fileName: { type: string, description: Prefijo, sin distinguir mayúsculas. }
         deleted: { type: boolean, default: false }
+        hasProject: { type: boolean, description: 'false = "Sin proyecto": ni directo ni por requisito o tarea.' }
+        hasClient: { type: boolean, description: 'false = "Sin cliente" (sin jiku.clients).' }
+        hasTopic: { type: boolean, description: 'false = "Sin tema".' }
         or:
           type: array
           maxItems: 10
@@ -282,8 +322,8 @@ components:
         page: { $ref: '#/components/schemas/Page' }
         fields:
           type: array
-          items: { type: string, enum: [id, title, path, folderId, fileName, version, checksum, sizeBytes, visibility, createdAt, createdBy, updatedAt, updatedBy, deletedAt] }
-          description: 'Default: id, title, path, folderId, version, visibility, updatedAt, updatedBy.'
+          items: { type: string, enum: [id, title, path, folderId, fileName, version, checksum, sizeBytes, visibility, createdAt, createdBy, createdByName, updatedAt, updatedBy, updatedByName, deletedAt, clients, projects] }
+          description: 'Default: id, title, path, folderId, version, visibility, updatedAt, updatedBy, updatedByName, clients, projects.'
         include: { type: array, items: { type: string, enum: [relations, topics, lock] } }
         count: { oneOf: [{ type: boolean }, { const: only }] }
     DocumentsGetQuery:
@@ -338,6 +378,13 @@ components:
           additionalProperties: false
           properties:
             pathPrefix: { type: string }
+    SuggestRelationsQuery:
+      type: object
+      additionalProperties: false
+      required: [id]
+      properties:
+        actor: { $ref: '#/components/schemas/Actor' }
+        id: { $ref: '#/components/schemas/Ulid' }
     TopicsListQuery:
       type: object
       additionalProperties: false
@@ -372,6 +419,7 @@ components:
       properties:
         sessionId: { $ref: '#/components/schemas/Ulid' }
         holder: { type: string }
+        holderName: { type: [string, 'null'], description: 'Nombre de quien tiene el lock (1.3.0).' }
         via: { type: string, enum: [human, agent] }
         expiresAt: { type: string, format: date-time }
     Folder:
@@ -381,9 +429,9 @@ components:
         name: { type: string }
         path: { type: string, description: 'Empieza y termina con /: "/" es la raíz, "/clientes/acme/" una subcarpeta.' }
         parentId: { type: [string, 'null'] }
-        inheritAcl: { type: boolean }
-        externalBlocked: { type: boolean }
-        sharingBlocked: { type: boolean, description: Valor efectivo (incluye herencia). }
+        inheritAcl: { type: boolean, deprecated: true }
+        externalBlocked: { type: boolean, deprecated: true, description: Obsoleto (1.3.0), sin efecto. }
+        sharingBlocked: { type: boolean, deprecated: true, description: Obsoleto (1.3.0), sin efecto. Valor efectivo (incluye herencia). }
         createdAt: { type: string, format: date-time }
         createdBy: { type: string }
         effectivePermission: { type: [string, 'null'], enum: [read, write, manage, null] }
@@ -406,12 +454,17 @@ components:
         version: { type: integer }
         checksum: { type: string }
         sizeBytes: { type: integer }
-        visibility: { type: string, enum: [internal, public] }
+        visibility: { type: string, enum: [internal, public, restricted] }
         createdAt: { type: string, format: date-time }
         createdBy: { type: string }
+        createdByName: { type: [string, 'null'] }
         updatedAt: { type: string, format: date-time }
         updatedBy: { type: string }
+        updatedByName: { type: [string, 'null'] }
         deletedAt: { type: [string, 'null'], format: date-time }
+        clients: { type: array, items: { type: integer }, description: 'Ids de jiku.clients (a un externo, vacío).' }
+        projects: { type: array, items: { type: integer }, description: 'Ids de jiku.projects (a un externo, solo los suyos).' }
+        projectMatch: { type: string, enum: [direct, indirect], description: 'Solo con filter.projectId.' }
         prunedVersionsCount: { type: integer, minimum: 0, description: 'Solo documents.get, campo base (nunca a un externo): cuántas versiones borró la compactación del historial.' }
         content: { type: string, description: 'Solo con include content y tamaño <= 256 KiB.' }
         contentUrl: { type: string, format: uri, description: 'En lugar de content si supera 256 KiB. Vence a los 300 s.' }
@@ -426,6 +479,7 @@ components:
         checksum: { type: string }
         sizeBytes: { type: integer }
         author: { type: string }
+        authorName: { type: [string, 'null'] }
         via: { type: string, enum: [human, agent, service] }
         sessionId: { type: [string, 'null'] }
         message: { type: [string, 'null'] }
@@ -444,6 +498,13 @@ components:
         score: { type: number }
         updatedAt: { type: string, format: date-time }
         updatedBy: { type: string }
+        updatedByName: { type: [string, 'null'] }
+        createdBy: { type: string }
+        createdByName: { type: [string, 'null'] }
+        visibility: { type: string, enum: [internal, public, restricted] }
+        clients: { type: array, items: { type: integer } }
+        projects: { type: array, items: { type: integer } }
+        projectMatch: { type: string, enum: [direct, indirect] }
     Change:
       type: object
       properties:
@@ -514,7 +575,7 @@ components:
         expiresAt: { type: string, format: date-time }
         revokedAt: { type: [string, 'null'], format: date-time }
         revokedBy: { type: [string, 'null'] }
-        revokeReason: { type: [string, 'null'], enum: [manual, document_deleted, null] }
+        revokeReason: { type: [string, 'null'], enum: [manual, document_deleted, restricted, null] }
         accessCount: { type: integer }
         lastAccessAt: { type: [string, 'null'], format: date-time }
 
@@ -591,6 +652,28 @@ components:
                 items: { type: array, items: { $ref: '#/components/schemas/Change' } }
                 nextSeq: { type: integer, description: 'Último seq examinado (aunque su cambio no fuera visible para el caller); igual a sinceSeq si no hubo nada nuevo. Nunca menor que sinceSeq: es el sinceSeq del próximo pedido.' }
                 hasMore: { type: boolean }
+        - $ref: '#/components/schemas/Failure'
+    ReplySuggestRelations:
+      oneOf:
+        - type: object
+          required: [status, data]
+          properties:
+            status: { const: success }
+            data:
+              type: object
+              required: [items]
+              properties:
+                items:
+                  type: array
+                  maxItems: 5
+                  items:
+                    type: object
+                    required: [projectId, clientId, score, reason]
+                    properties:
+                      projectId: { type: [integer, 'null'], description: 'null en un candidato solo de cliente; nunca 0.' }
+                      clientId: { type: [integer, 'null'] }
+                      score: { type: number, minimum: 0, maximum: 1 }
+                      reason: { type: string, description: 'Por ejemplo "El título menciona «Videoconferencia»".' }
         - $ref: '#/components/schemas/Failure'
     ReplyTopics:
       oneOf:

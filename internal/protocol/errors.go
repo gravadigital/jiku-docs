@@ -74,7 +74,7 @@ var messages = map[string]string{
 	CodeUpstreamUnavailable:         "Jiku no respondió: reintentá en unos segundos",
 	CodeInternalError:               "Error interno",
 	CodeShareNotFound:               "El link no existe o ya no es válido",
-	CodeSharingBlocked:              "La carpeta no permite links compartidos",
+	CodeSharingBlocked:              "Un documento restringido no admite links compartidos",
 	CodeShareExpiryInvalid:          "El vencimiento tiene que ser futuro y como máximo a 180 días",
 	CodeSecretWarningNotAcked:       "El documento puede contener secretos: confirmá antes de compartirlo",
 	CodeSemanticSearchNotConfigured: "La búsqueda semántica no está disponible: usá mode text",

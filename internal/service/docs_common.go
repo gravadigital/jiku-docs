@@ -17,6 +17,17 @@ import (
 
 func itoa(n int) string { return strconv.Itoa(n) }
 
+// nameOf is the name stored with what a caller writes: the actor's name (or username) when
+// the api writes for a person, the name in core's users for a person on the bus, and the
+// name of the service for a service. nil when there is none.
+func nameOf(c *caller.Caller) *string {
+	if c == nil || c.Name == "" {
+		return nil
+	}
+	n := c.Name
+	return &n
+}
+
 // docRow is a row of `documents`.
 type docRow struct {
 	ID            string
@@ -33,6 +44,9 @@ type docRow struct {
 	CreatedAt     time.Time
 	UpdatedBy     string
 	UpdatedAt     time.Time
+	// CreatedByName and UpdatedByName are the names stored on write (P-1); nil when unknown.
+	CreatedByName *string
+	UpdatedByName *string
 	DeletedAt     *time.Time
 	// PrunedVersions is how many versions the history compaction removed.
 	PrunedVersions int
@@ -40,12 +54,13 @@ type docRow struct {
 
 const docCols = `d.id, d.folder_id, d.file_name, d.path, d.title, d.visibility, d.current_version, d.checksum,
 	d.size_bytes, d.secret_warning, d.created_by, d.created_at, d.updated_by, d.updated_at, d.deleted_at,
-	d.pruned_versions_count`
+	d.pruned_versions_count, d.created_by_name, d.updated_by_name`
 
 func scanDoc(row pgx.Row) (*docRow, error) {
 	d := &docRow{}
 	err := row.Scan(&d.ID, &d.FolderID, &d.FileName, &d.Path, &d.Title, &d.Visibility, &d.Version, &d.Checksum,
-		&d.Size, &d.SecretWarning, &d.CreatedBy, &d.CreatedAt, &d.UpdatedBy, &d.UpdatedAt, &d.DeletedAt, &d.PrunedVersions)
+		&d.Size, &d.SecretWarning, &d.CreatedBy, &d.CreatedAt, &d.UpdatedBy, &d.UpdatedAt, &d.DeletedAt, &d.PrunedVersions,
+		&d.CreatedByName, &d.UpdatedByName)
 	if err != nil {
 		return nil, err
 	}
@@ -124,24 +139,26 @@ func loadTopics(ctx context.Context, q store.Querier, docID string) ([]string, e
 
 // lockRow is the lock of a document.
 type lockRow struct {
-	SessionID string
-	Holder    string
-	Via       string
-	ExpiresAt time.Time
+	SessionID  string
+	Holder     string
+	HolderName *string
+	Via        string
+	ExpiresAt  time.Time
 }
 
 func (l *lockRow) view() map[string]any {
 	if l == nil {
 		return nil
 	}
-	return map[string]any{"sessionId": l.SessionID, "holder": l.Holder, "via": l.Via, "expiresAt": protocol.FormatTime(l.ExpiresAt)}
+	return map[string]any{"sessionId": l.SessionID, "holder": l.Holder, "holderName": strOrNil(l.HolderName), "via": l.Via,
+		"expiresAt": protocol.FormatTime(l.ExpiresAt)}
 }
 
 // loadLock returns the live lock (expired locks are treated as absent).
 func loadLock(ctx context.Context, q store.Querier, docID string, now time.Time) (*lockRow, error) {
 	l := &lockRow{}
-	err := q.QueryRow(ctx, `SELECT session_id, holder, via, expires_at FROM document_locks WHERE document_id = $1`, docID).
-		Scan(&l.SessionID, &l.Holder, &l.Via, &l.ExpiresAt)
+	err := q.QueryRow(ctx, `SELECT session_id, holder, holder_name, via, expires_at FROM document_locks WHERE document_id = $1`, docID).
+		Scan(&l.SessionID, &l.Holder, &l.HolderName, &l.Via, &l.ExpiresAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil
 	}
@@ -156,22 +173,66 @@ func loadLock(ctx context.Context, q store.Querier, docID string, now time.Time)
 
 // ---- who sees what -------------------------------------------------------------------------
 
+// P-1 (docs/p1/servicio.md): the class of the caller and the visibility of the document decide
+// access; folder ACL rules, externalBlocked and sharingBlocked have no effect.
+//
+//	visibility   admin          user           external-user                         service
+//	internal     read + write   read + write   never                                 everything
+//	public       read + write   read + write   read, if related to one of its        everything
+//	                                           projects (project-permissions)
+//	restricted   read + write   never          never                                 everything
+//
+// What a caller cannot read does not exist for it, by any path: *_not_found or omitted.
+
+// personPerm is the permission of a non-external caller on a document of a visibility:
+// services and admins manage, users write what is not restricted.
+func personPerm(c *caller.Caller, visibility string) acl.Perm {
+	switch {
+	case c.IsService(), c.IsAdmin():
+		return acl.Manage
+	case c.IsExternal(), visibility == markdown.VisibilityRestricted:
+		return acl.None
+	}
+	return acl.Write
+}
+
+// folderPerm is the permission of a caller on any live folder. Folders only organise the
+// files (the sync daemon mirrors their paths): internal persons see them all and write
+// documents in any of them; only admins and services manage them. Externals never see folders.
+func folderPerm(c *caller.Caller) acl.Perm {
+	switch {
+	case c.IsService(), c.IsAdmin():
+		return acl.Manage
+	case c.IsExternal():
+		return acl.None
+	}
+	return acl.Write
+}
+
+// checkVisibilityChange: any internal person sets internal or public; only admins (and
+// services) set or remove restricted. Applied on every write that carries content (new,
+// update, restore): the frontmatter is the content.
+func checkVisibilityChange(c *caller.Caller, from, to string) error {
+	if from == "" {
+		from = markdown.VisibilityInternal
+	}
+	if from == to {
+		return nil
+	}
+	if (from == markdown.VisibilityRestricted || to == markdown.VisibilityRestricted) && !c.SeesRestricted() {
+		return protocol.Ef(protocol.CodePermissionDenied, "Solo un administrador puede poner o quitar la visibilidad restricted")
+	}
+	return nil
+}
+
 // viewer is a caller with the data needed to decide visibility, computed once per request.
 type viewer struct {
 	c        *caller.Caller
-	tree     *acl.Tree
-	ev       *acl.Evaluator
 	projects []int64 // externals: projects from project-permissions
 }
 
-func (s *Service) viewer(ctx context.Context, c *caller.Caller, tree *acl.Tree) (*viewer, error) {
-	if tree == nil {
-		var err error
-		if tree, err = s.Tree(ctx); err != nil {
-			return nil, err
-		}
-	}
-	v := &viewer{c: c, tree: tree, ev: tree.For(c.Principal())}
+func (s *Service) viewer(ctx context.Context, c *caller.Caller) (*viewer, error) {
+	v := &viewer{c: c}
 	if c.IsExternal() {
 		p, err := s.Core.ProjectPermissions(ctx, c.ID)
 		if err != nil {
@@ -182,25 +243,13 @@ func (s *Service) viewer(ctx context.Context, c *caller.Caller, tree *acl.Tree) 
 	return v, nil
 }
 
-// folderPerm is the effective permission on a folder. Externals have none: they never see
-// folders, only documents.
-func (v *viewer) folderPerm(folderID string) acl.Perm {
-	if v.c.IsExternal() {
-		return acl.None
-	}
-	return v.ev.Permission(folderID)
-}
-
-// docPerm is the effective permission on a document. For externals it is read when the three
-// conditions of section 4 hold, else none.
+// docPerm is the effective permission on a document. For externals it is read when the
+// document is public and related to one of their projects, else none.
 func (v *viewer) docPerm(ctx context.Context, q store.Querier, d *docRow) (acl.Perm, error) {
-	if _, ok := v.tree.Get(d.FolderID); !ok {
-		return acl.None, nil
-	}
 	if !v.c.IsExternal() {
-		return v.ev.Permission(d.FolderID), nil
+		return personPerm(v.c, d.Visibility), nil
 	}
-	if d.Visibility != "public" || v.tree.ExternalBlocked(d.FolderID) || len(v.projects) == 0 {
+	if d.Visibility != markdown.VisibilityPublic || len(v.projects) == 0 {
 		return acl.None, nil
 	}
 	var ok bool
@@ -213,23 +262,19 @@ func (v *viewer) docPerm(ctx context.Context, q store.Querier, d *docRow) (acl.P
 }
 
 // docPredicate is the SQL condition "the caller can read document alias", appended to args.
+// It is the only gate of every list, count, search, feed and topic count.
 func (v *viewer) docPredicate(alias string, a *args) string {
 	switch {
-	case v.c.IsService():
+	case v.c.IsService(), v.c.IsAdmin():
 		return "TRUE"
 	case v.c.IsExternal():
 		if len(v.projects) == 0 {
 			return "FALSE"
 		}
-		return "(" + alias + ".visibility = 'public' AND " + alias + ".folder_id = ANY(" + a.add(v.tree.NotExternalBlocked()) +
-			") AND EXISTS (SELECT 1 FROM document_relations vr WHERE vr.document_id = " + alias + ".id AND vr.project_id = ANY(" +
-			a.add(v.projects) + ")))"
+		return "(" + alias + ".visibility = 'public' AND EXISTS (SELECT 1 FROM document_relations vr WHERE vr.document_id = " +
+			alias + ".id AND vr.project_id = ANY(" + a.add(v.projects) + ")))"
 	default:
-		folders := v.ev.Folders(acl.Read)
-		if len(folders) == 0 {
-			return "FALSE"
-		}
-		return alias + ".folder_id = ANY(" + a.add(folders) + ")"
+		return alias + ".visibility <> 'restricted'"
 	}
 }
 

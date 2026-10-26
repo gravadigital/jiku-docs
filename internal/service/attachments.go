@@ -90,10 +90,6 @@ func (s *Service) attachmentsRequestUpload(ctx context.Context, c *Call) (any, e
 
 // RequestAttachmentUpload asks core for an upload ticket and records the pending attachment.
 func (s *Service) RequestAttachmentUpload(ctx context.Context, c *Call, in AttachmentUpload) (map[string]any, error) {
-	tree, err := s.Tree(ctx)
-	if err != nil {
-		return nil, err
-	}
 	d, err := getDoc(ctx, s.DB, in.DocumentID, false)
 	if err != nil {
 		return nil, err
@@ -101,7 +97,7 @@ func (s *Service) RequestAttachmentUpload(ctx context.Context, c *Call, in Attac
 	if d == nil || d.DeletedAt != nil {
 		return nil, protocol.E(protocol.CodeDocumentNotFound)
 	}
-	if _, err := docWritePerm(tree, tree.For(c.Caller.Principal()), d, acl.Write); err != nil {
+	if _, err := docWritePerm(c.Caller, d, acl.Write); err != nil {
 		return nil, err
 	}
 	existing, err := getAttachment(ctx, s.DB, in.ID, false)
@@ -152,7 +148,7 @@ func (s *Service) ConfirmAttachment(ctx context.Context, c *Call, id string) (ma
 	if a == nil || a.Status == "deleted" {
 		return nil, protocol.E(protocol.CodeAttachmentNotFound)
 	}
-	v, err := s.viewer(ctx, c.Caller, nil)
+	v, err := s.viewer(ctx, c.Caller)
 	if err != nil {
 		return nil, err
 	}
@@ -248,7 +244,7 @@ func (s *Service) attachmentsRequestDownload(ctx context.Context, c *Call) (any,
 	if a == nil || a.Status != "ready" {
 		return nil, protocol.E(protocol.CodeAttachmentNotFound)
 	}
-	v, err := s.viewer(ctx, c.Caller, nil)
+	v, err := s.viewer(ctx, c.Caller)
 	if err != nil {
 		return nil, err
 	}
@@ -283,11 +279,7 @@ func (s *Service) attachmentsDelete(ctx context.Context, c *Call) (any, error) {
 		if err != nil {
 			return err
 		}
-		tree, err := treeTx(ctx, tx)
-		if err != nil {
-			return err
-		}
-		if _, err := docWritePerm(tree, tree.For(c.Caller.Principal()), d, acl.Write); err != nil {
+		if _, err := docWritePerm(c.Caller, d, acl.Write); err != nil {
 			if protocol.CodeOf(err) == protocol.CodeDocumentNotFound {
 				return protocol.E(protocol.CodeAttachmentNotFound)
 			}

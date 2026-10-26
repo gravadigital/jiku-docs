@@ -10,18 +10,17 @@ import (
 
 	"github.com/gravadigital/jiku-docs/internal/acl"
 	"github.com/gravadigital/jiku-docs/internal/blob"
+	"github.com/gravadigital/jiku-docs/internal/caller"
+	"github.com/gravadigital/jiku-docs/internal/markdown"
 	"github.com/gravadigital/jiku-docs/internal/protocol"
 	"github.com/gravadigital/jiku-docs/internal/store"
 	"github.com/gravadigital/jiku-docs/internal/validate"
 )
 
-// docWritePerm checks a write on a document inside a transaction: invisible = not found,
-// readable without write = permission_denied. It returns the permission for further checks.
-func docWritePerm(tree *acl.Tree, ev *acl.Evaluator, d *docRow, min acl.Perm) (acl.Perm, error) {
-	if _, ok := tree.Get(d.FolderID); !ok && d.DeletedAt == nil {
-		return acl.None, protocol.E(protocol.CodeDocumentNotFound)
-	}
-	p := ev.Permission(d.FolderID)
+// docWritePerm checks a write on a document: invisible = not found, readable without the
+// permission = permission_denied. It returns the permission for further checks.
+func docWritePerm(c *caller.Caller, d *docRow, min acl.Perm) (acl.Perm, error) {
+	p := personPerm(c, d.Visibility)
 	if p < acl.Read {
 		return p, protocol.E(protocol.CodeDocumentNotFound)
 	}
@@ -44,7 +43,8 @@ func checkLock(l *lockRow, sessionID, callerID string, holderOK bool) error {
 		return nil
 	}
 	return protocol.E(protocol.CodeDocumentLocked).
-		With("holder", l.Holder).With("via", l.Via).With("expiresAt", protocol.FormatTime(l.ExpiresAt))
+		With("holder", l.Holder).With("holderName", strOrNil(l.HolderName)).With("via", l.Via).
+		With("expiresAt", protocol.FormatTime(l.ExpiresAt))
 }
 
 // NewDocument is the input of documents.new (also used by the importer).
@@ -67,13 +67,13 @@ func (s *Service) documentsNew(ctx context.Context, c *Call) (any, error) {
 	}
 	o := validate.ParseObject(c.Payload, "", "id", "folderId", "fileName", "content", "contentUploadId", "checksum", "via", "message")
 	id, _ := o.ULID("id", true)
-	folderID, _ := o.ULID("folderId", true)
+	folderID, _ := o.ULID("folderId", false)
 	via, _ := o.Enum("via", false, "human", "agent", "service")
 	message, _ := o.String("message", false, validate.MaxLen(500))
 	if err := o.Err(); err != nil {
 		return nil, err
 	}
-	fileName, err := readFileName(o, "fileName", true)
+	fileName, err := readFileName(o, "fileName", false)
 	if err != nil {
 		return nil, err
 	}
@@ -86,10 +86,14 @@ func (s *Service) documentsNew(ctx context.Context, c *Call) (any, error) {
 }
 
 // CreateDocument creates a document with version 1. Retrying with the same id and content
-// returns the existing document; with another content, already_exists.
+// returns the existing document; with another content, already_exists. Without FolderID the
+// folder is generated from the relations; without FileName the name comes from the title.
 func (s *Service) CreateDocument(ctx context.Context, c *Call, in NewDocument) (map[string]any, error) {
 	p, err := s.prepare(ctx, in.Content, in.FileName, nil)
 	if err != nil {
+		return nil, err
+	}
+	if err := checkVisibilityChange(c.Caller, "", p.fm.Visibility); err != nil {
 		return nil, err
 	}
 	via := c.Caller.DefaultVia(in.Via)
@@ -99,32 +103,72 @@ func (s *Service) CreateDocument(ctx context.Context, c *Call, in NewDocument) (
 			return nil, err
 		}
 		var v1 string
-		if err := q.QueryRow(ctx, `SELECT checksum FROM document_versions WHERE document_id = $1 AND version = 1`, in.ID).Scan(&v1); err != nil {
+		if err := q.QueryRow(ctx, `SELECT checksum FROM document_versions WHERE document_id = $1 AND version = 1`, in.ID).Scan(&v1); err != nil &&
+			!errors.Is(err, pgx.ErrNoRows) {
 			return nil, err
 		}
-		if v1 == p.checksum && d.FolderID == in.FolderID && strings.EqualFold(d.FileName, in.FileName) {
-			return map[string]any{"id": d.ID, "version": 1, "path": d.Path}, nil
+		// Only a retry of the same caller-visible creation gets the document back: an id of a
+		// document the caller cannot read reveals nothing but that the id is taken.
+		if personPerm(c.Caller, d.Visibility) >= acl.Read && v1 == p.checksum &&
+			(in.FolderID == "" || d.FolderID == in.FolderID) && (in.FileName == "" || strings.EqualFold(d.FileName, in.FileName)) {
+			return map[string]any{"id": d.ID, "version": 1, "path": d.Path, "folderId": d.FolderID, "fileName": d.FileName}, nil
 		}
 		return nil, protocol.Ef(protocol.CodeAlreadyExists, "Ya existe un documento con ese id y otro contenido")
 	}
-	// Permission first: a caller that cannot write the folder learns nothing about the id.
 	tree, err := s.Tree(ctx)
 	if err != nil {
 		return nil, err
 	}
-	if err := requireFolderPerm(tree.For(c.Caller.Principal()), tree, in.FolderID, acl.Write); err != nil {
-		return nil, err
+	if in.FolderID != "" {
+		if err := requireFolder(c.Caller, tree, in.FolderID, acl.Write); err != nil {
+			return nil, err
+		}
 	}
 	if out, err := idempotent(ctx, s.DB); out != nil || err != nil {
 		return out, err
+	}
+	folderID := in.FolderID
+	if folderID == "" {
+		if folderID, err = s.generatedFolder(ctx, c, p.fm); err != nil {
+			return nil, err
+		}
+	}
+	title := p.title
+	if in.FileName == "" && title == "" {
+		title = "documento"
+		p.title = title
 	}
 	key := storageKey(in.ID, 1, p.checksum)
 	if err := s.Blob.Put(ctx, key, p.content, "text/markdown; charset=utf-8"); err != nil {
 		return nil, err
 	}
+	for attempt := 0; ; attempt++ {
+		fileName := in.FileName
+		if fileName == "" {
+			if fileName, err = s.freeFileName(ctx, folderID, title); err != nil {
+				return nil, err
+			}
+		}
+		out, err := s.insertDocument(ctx, c, in, p, folderID, fileName, key, via)
+		if errors.Is(err, errRetryIdempotent) {
+			return idempotent(ctx, s.DB)
+		}
+		if errors.Is(err, errNameTaken) {
+			if in.FileName == "" && attempt < 10 {
+				continue // a concurrent creation took the generated name: pick the next one
+			}
+			return nil, protocol.Ef(protocol.CodeAlreadyExists, "Ya existe un documento con ese nombre en la carpeta").With("fileName", fileName)
+		}
+		return out, err
+	}
+}
+
+var errNameTaken = errors.New("file name taken in the folder")
+
+func (s *Service) insertDocument(ctx context.Context, c *Call, in NewDocument, p *prepared, folderID, fileName, key, via string) (map[string]any, error) {
 	var out map[string]any
-	err = store.InTx(ctx, s.DB, func(tx pgx.Tx) error {
-		ok, err := lockFolderShared(ctx, tx, in.FolderID)
+	err := store.InTx(ctx, s.DB, func(tx pgx.Tx) error {
+		ok, err := lockFolderShared(ctx, tx, folderID)
 		if err != nil {
 			return err
 		}
@@ -135,14 +179,10 @@ func (s *Service) CreateDocument(ctx context.Context, c *Call, in NewDocument) (
 		if err != nil {
 			return err
 		}
-		ev := tree.For(c.Caller.Principal())
-		if err := requireFolderPerm(ev, tree, in.FolderID, acl.Write); err != nil {
+		if err := requireFolder(c.Caller, tree, folderID, acl.Write); err != nil {
 			return err
 		}
-		if p.fm.Visibility == "public" && ev.Permission(in.FolderID) < acl.Manage {
-			return protocol.Ef(protocol.CodePermissionDenied, "Marcar un documento como público exige permiso de administración sobre la carpeta")
-		}
-		folder, _ := tree.Get(in.FolderID)
+		folder, _ := tree.Get(folderID)
 		created, updated := s.now(), s.now()
 		if !in.CreatedAt.IsZero() {
 			created = in.CreatedAt.UTC().Truncate(time.Millisecond)
@@ -151,23 +191,24 @@ func (s *Service) CreateDocument(ctx context.Context, c *Call, in NewDocument) (
 		if !in.UpdatedAt.IsZero() {
 			updated = in.UpdatedAt.UTC().Truncate(time.Millisecond)
 		}
-		path := folder.Path + in.FileName
+		path := folder.Path + fileName
+		name := nameOf(c.Caller)
 		_, err = tx.Exec(ctx, `INSERT INTO documents (id, folder_id, file_name, path, title, visibility, current_version, checksum,
-			size_bytes, secret_warning, created_by, created_at, updated_by, updated_at)
-			VALUES ($1,$2,$3,$4,$5,$6,1,$7,$8,$9,$10,$11,$10,$12)`,
-			in.ID, in.FolderID, in.FileName, path, p.title, p.fm.Visibility, p.checksum, p.size, len(p.findings) > 0,
-			c.Caller.ID, created, updated)
+			size_bytes, secret_warning, created_by, created_at, updated_by, updated_at, created_by_name, updated_by_name)
+			VALUES ($1,$2,$3,$4,$5,$6,1,$7,$8,$9,$10,$11,$10,$12,$13,$13)`,
+			in.ID, folderID, fileName, path, p.title, p.fm.Visibility, p.checksum, p.size, len(p.findings) > 0,
+			c.Caller.ID, created, updated, name)
 		if store.IsUniqueViolation(err, "documents_pkey") {
 			return errRetryIdempotent
 		}
 		if store.IsUniqueViolation(err, "") {
-			return protocol.Ef(protocol.CodeAlreadyExists, "Ya existe un documento con ese nombre en la carpeta").With("fileName", in.FileName)
+			return errNameTaken
 		}
 		if err != nil {
 			return err
 		}
 		if err := insertVersion(ctx, tx, versionInput{docID: in.ID, kind: KindCreate, version: 1, key: key, p: p, author: c.Caller.ID,
-			via: via, message: in.Message, at: created}); err != nil {
+			authorName: name, via: via, message: in.Message, at: created}); err != nil {
 			return err
 		}
 		if err := writeMeta(ctx, tx, in.ID, p); err != nil {
@@ -188,15 +229,12 @@ func (s *Service) CreateDocument(ctx context.Context, c *Call, in NewDocument) (
 		if err := em.docEvent(ctx, "document.created", st, changes, via); err != nil {
 			return err
 		}
-		out = map[string]any{"id": in.ID, "version": 1, "path": path}
+		out = map[string]any{"id": in.ID, "version": 1, "path": path, "folderId": folderID, "fileName": fileName}
 		if w := p.warnings(); w != nil {
 			out["warnings"] = w
 		}
 		return nil
 	})
-	if errors.Is(err, errRetryIdempotent) {
-		return idempotent(ctx, s.DB)
-	}
 	return out, err
 }
 
@@ -258,13 +296,7 @@ func (s *Service) UpdateDocument(ctx context.Context, c *Call, id string, base i
 		if d == nil || d.DeletedAt != nil {
 			return protocol.E(protocol.CodeDocumentNotFound)
 		}
-		tree, err := treeTx(ctx, tx)
-		if err != nil {
-			return err
-		}
-		ev := tree.For(c.Caller.Principal())
-		perm, err := docWritePerm(tree, ev, d, acl.Write)
-		if err != nil {
+		if _, err := docWritePerm(c.Caller, d, acl.Write); err != nil {
 			return err
 		}
 		if p.checksum == d.Checksum {
@@ -281,22 +313,29 @@ func (s *Service) UpdateDocument(ctx context.Context, c *Call, id string, base i
 		if base != d.Version {
 			return protocol.E(protocol.CodeVersionConflict).With("currentVersion", d.Version)
 		}
-		if p.fm.Visibility == "public" && d.Visibility != "public" && perm < acl.Manage {
-			return protocol.Ef(protocol.CodePermissionDenied, "Marcar un documento como público exige permiso de administración sobre la carpeta")
+		if err := checkVisibilityChange(c.Caller, d.Visibility, p.fm.Visibility); err != nil {
+			return err
 		}
 		before, err := s.loadDocState(ctx, tx, id)
 		if err != nil {
 			return err
 		}
 		now := s.now()
+		name := nameOf(c.Caller)
 		if err := insertVersion(ctx, tx, versionInput{docID: id, kind: KindUpdate, version: newVersion, key: key, p: p, author: c.Caller.ID,
-			via: via, sessionID: sessionID, message: message, at: now}); err != nil {
+			authorName: name, via: via, sessionID: sessionID, message: message, at: now}); err != nil {
 			return err
 		}
 		if _, err := tx.Exec(ctx, `UPDATE documents SET title = $2, visibility = $3, current_version = $4, checksum = $5,
-			size_bytes = $6, secret_warning = $7, updated_by = $8, updated_at = $9 WHERE id = $1`,
-			id, p.title, p.fm.Visibility, newVersion, p.checksum, p.size, len(p.findings) > 0, c.Caller.ID, now); err != nil {
+			size_bytes = $6, secret_warning = $7, updated_by = $8, updated_at = $9, updated_by_name = $10 WHERE id = $1`,
+			id, p.title, p.fm.Visibility, newVersion, p.checksum, p.size, len(p.findings) > 0, c.Caller.ID, now, name); err != nil {
 			return err
+		}
+		em := s.emitter(tx, c.Caller, c.CorrelationID)
+		if p.fm.Visibility == markdown.VisibilityRestricted && d.Visibility != markdown.VisibilityRestricted {
+			if err := s.revokeDocumentShares(ctx, tx, em, d, c.Caller.ID, now, RevokeRestricted); err != nil {
+				return err
+			}
 		}
 		if err := writeMeta(ctx, tx, id, p); err != nil {
 			return err
@@ -309,7 +348,6 @@ func (s *Service) UpdateDocument(ctx context.Context, c *Call, id string, base i
 			return err
 		}
 		changes := versionChanges(before, after, message)
-		em := s.emitter(tx, c.Caller, c.CorrelationID)
 		if err := em.docEvent(ctx, "document.updated", after, changes, via); err != nil {
 			return err
 		}
@@ -380,14 +418,13 @@ func (s *Service) documentsMove(ctx context.Context, c *Call) (any, error) {
 		if err != nil {
 			return err
 		}
-		ev := tree.For(c.Caller.Principal())
-		if _, err := docWritePerm(tree, ev, d, acl.Write); err != nil {
+		if _, err := docWritePerm(c.Caller, d, acl.Write); err != nil {
 			return err
 		}
 		target := d.FolderID
 		if hasFolder {
 			target = folderID
-			if err := requireFolderPerm(ev, tree, target, acl.Write); err != nil {
+			if err := requireFolder(c.Caller, tree, target, acl.Write); err != nil {
 				return err
 			}
 			if ok, err := lockFolderShared(ctx, tx, target); err != nil || !ok {
@@ -456,12 +493,7 @@ func (s *Service) documentsDelete(ctx context.Context, c *Call) (any, error) {
 		if d == nil {
 			return protocol.E(protocol.CodeDocumentNotFound)
 		}
-		tree, err := treeTx(ctx, tx)
-		if err != nil {
-			return err
-		}
-		ev := tree.For(c.Caller.Principal())
-		if _, err := docWritePerm(tree, ev, d, acl.Write); err != nil {
+		if _, err := docWritePerm(c.Caller, d, acl.Write); err != nil {
 			return err
 		}
 		if d.DeletedAt != nil {
@@ -485,7 +517,7 @@ func (s *Service) documentsDelete(ctx context.Context, c *Call) (any, error) {
 			return err
 		}
 		em := s.emitter(tx, c.Caller, c.CorrelationID)
-		if err := s.revokeDocumentShares(ctx, tx, em, d, c.Caller.ID, now); err != nil {
+		if err := s.revokeDocumentShares(ctx, tx, em, d, c.Caller.ID, now, RevokeDocumentDeleted); err != nil {
 			return err
 		}
 		st, err := s.loadDocState(ctx, tx, id)
@@ -518,11 +550,7 @@ func (s *Service) documentsRestore(ctx context.Context, c *Call) (any, error) {
 	if cur == nil {
 		return nil, protocol.E(protocol.CodeDocumentNotFound)
 	}
-	tree, err := s.Tree(ctx)
-	if err != nil {
-		return nil, err
-	}
-	if _, err := docWritePerm(tree, tree.For(c.Caller.Principal()), cur, acl.Write); err != nil {
+	if _, err := docWritePerm(c.Caller, cur, acl.Write); err != nil {
 		return nil, err
 	}
 	var srcKey string
@@ -561,13 +589,7 @@ func (s *Service) documentsRestore(ctx context.Context, c *Call) (any, error) {
 		if err != nil {
 			return err
 		}
-		tree, err := treeTx(ctx, tx)
-		if err != nil {
-			return err
-		}
-		ev := tree.For(c.Caller.Principal())
-		perm, err := docWritePerm(tree, ev, d, acl.Write)
-		if err != nil {
+		if _, err := docWritePerm(c.Caller, d, acl.Write); err != nil {
 			return err
 		}
 		lock, err := loadLock(ctx, tx, id, s.now())
@@ -590,8 +612,8 @@ func (s *Service) documentsRestore(ctx context.Context, c *Call) (any, error) {
 		if !still {
 			return missingVersion(ctx, tx, id, d.Version, int(from))
 		}
-		if p.fm.Visibility == "public" && d.Visibility != "public" && perm < acl.Manage {
-			return protocol.Ef(protocol.CodePermissionDenied, "Marcar un documento como público exige permiso de administración sobre la carpeta")
+		if err := checkVisibilityChange(c.Caller, d.Visibility, p.fm.Visibility); err != nil {
+			return err
 		}
 		wasDeleted := d.DeletedAt != nil
 		if wasDeleted {
@@ -607,13 +629,15 @@ func (s *Service) documentsRestore(ctx context.Context, c *Call) (any, error) {
 			return err
 		}
 		now := s.now()
+		name := nameOf(c.Caller)
 		if err := insertVersion(ctx, tx, versionInput{docID: id, kind: KindRestore, version: newVersion, key: key, p: p, author: c.Caller.ID,
-			via: c.Caller.DefaultVia(""), message: message, at: now}); err != nil {
+			authorName: name, via: c.Caller.DefaultVia(""), message: message, at: now}); err != nil {
 			return err
 		}
 		_, err = tx.Exec(ctx, `UPDATE documents SET title = $2, visibility = $3, current_version = $4, checksum = $5,
-			size_bytes = $6, secret_warning = $7, updated_by = $8, updated_at = $9, deleted_at = NULL, deleted_by = NULL WHERE id = $1`,
-			id, p.title, p.fm.Visibility, newVersion, p.checksum, p.size, len(p.findings) > 0, c.Caller.ID, now)
+			size_bytes = $6, secret_warning = $7, updated_by = $8, updated_at = $9, deleted_at = NULL, deleted_by = NULL,
+			updated_by_name = $10 WHERE id = $1`,
+			id, p.title, p.fm.Visibility, newVersion, p.checksum, p.size, len(p.findings) > 0, c.Caller.ID, now, name)
 		if store.IsUniqueViolation(err, "") {
 			return protocol.Ef(protocol.CodeAlreadyExists, "Ya existe otro documento con ese nombre en la carpeta")
 		}
@@ -630,6 +654,11 @@ func (s *Service) documentsRestore(ctx context.Context, c *Call) (any, error) {
 		changes := versionChanges(before, after, message)
 		changes["restoredFrom"] = from
 		em := s.emitter(tx, c.Caller, c.CorrelationID)
+		if p.fm.Visibility == markdown.VisibilityRestricted && d.Visibility != markdown.VisibilityRestricted {
+			if err := s.revokeDocumentShares(ctx, tx, em, d, c.Caller.ID, now, RevokeRestricted); err != nil {
+				return err
+			}
+		}
 		if err := em.docEvent(ctx, "document.restored", after, changes, ""); err != nil {
 			return err
 		}
@@ -666,18 +695,14 @@ func (s *Service) documentsLock(ctx context.Context, c *Call) (any, error) {
 		if d == nil || d.DeletedAt != nil {
 			return protocol.E(protocol.CodeDocumentNotFound)
 		}
-		tree, err := treeTx(ctx, tx)
-		if err != nil {
-			return err
-		}
-		if _, err := docWritePerm(tree, tree.For(c.Caller.Principal()), d, acl.Write); err != nil {
+		if _, err := docWritePerm(c.Caller, d, acl.Write); err != nil {
 			return err
 		}
 		now := s.now()
 		expires := now.Add(time.Duration(ttl) * time.Second)
 		var existing lockRow
-		err = tx.QueryRow(ctx, `SELECT session_id, holder, via, expires_at FROM document_locks WHERE document_id = $1`, id).
-			Scan(&existing.SessionID, &existing.Holder, &existing.Via, &existing.ExpiresAt)
+		err = tx.QueryRow(ctx, `SELECT session_id, holder, holder_name, via, expires_at FROM document_locks WHERE document_id = $1`, id).
+			Scan(&existing.SessionID, &existing.Holder, &existing.HolderName, &existing.Via, &existing.ExpiresAt)
 		hasRow := err == nil
 		if err != nil && !errors.Is(err, pgx.ErrNoRows) {
 			return err
@@ -686,7 +711,8 @@ func (s *Service) documentsLock(ctx context.Context, c *Call) (any, error) {
 		out = map[string]any{"id": id, "sessionId": sessionID, "expiresAt": protocol.FormatTime(expires)}
 		if hasRow && existing.ExpiresAt.After(now) {
 			if existing.SessionID == sessionID && existing.Holder == c.Caller.ID {
-				_, err := tx.Exec(ctx, `UPDATE document_locks SET expires_at = $2, via = $3 WHERE document_id = $1`, id, expires, via)
+				_, err := tx.Exec(ctx, `UPDATE document_locks SET expires_at = $2, via = $3, holder_name = $4 WHERE document_id = $1`,
+					id, expires, via, nameOf(c.Caller))
 				return err // renewal: no event
 			}
 			return checkLock(&existing, "", "", false)
@@ -705,8 +731,8 @@ func (s *Service) documentsLock(ctx context.Context, c *Call) (any, error) {
 				return err
 			}
 		}
-		if _, err := tx.Exec(ctx, `INSERT INTO document_locks (document_id, session_id, holder, via, expires_at) VALUES ($1,$2,$3,$4,$5)`,
-			id, sessionID, c.Caller.ID, via, expires); err != nil {
+		if _, err := tx.Exec(ctx, `INSERT INTO document_locks (document_id, session_id, holder, holder_name, via, expires_at)
+			VALUES ($1,$2,$3,$4,$5,$6)`, id, sessionID, c.Caller.ID, nameOf(c.Caller), via, expires); err != nil {
 			return err
 		}
 		st, err := s.loadDocState(ctx, tx, id)
@@ -737,16 +763,11 @@ func (s *Service) documentsUnlock(ctx context.Context, c *Call) (any, error) {
 		if d == nil || d.DeletedAt != nil {
 			return protocol.E(protocol.CodeDocumentNotFound)
 		}
-		tree, err := treeTx(ctx, tx)
-		if err != nil {
+		if _, err := docWritePerm(c.Caller, d, acl.Write); err != nil {
 			return err
 		}
-		min := acl.Write
-		if force {
-			min = acl.Manage
-		}
-		if _, err := docWritePerm(tree, tree.For(c.Caller.Principal()), d, min); err != nil {
-			return err
+		if force && !c.Caller.SeesRestricted() {
+			return protocol.Ef(protocol.CodePermissionDenied, "Forzar el desbloqueo es solo para administradores")
 		}
 		lock, err := loadLock(ctx, tx, id, s.now())
 		if err != nil {
