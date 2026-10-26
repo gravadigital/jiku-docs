@@ -208,10 +208,15 @@ func (s *Service) documentsList(ctx context.Context, c *Call) (any, error) {
 		return nil, err
 	}
 	matchSet := filterProjects(q.Filter)
+	fulls := make([]map[string]any, len(docs))
+	for i, d := range docs {
+		fulls[i] = d.view()
+	}
+	s.fillNames(ctx, fulls, docNamePairs...)
 	items := make([]map[string]any, len(docs))
 	keys := make([][]any, len(docs))
 	for i, d := range docs {
-		full := d.view()
+		full := fulls[i]
 		full["clients"], full["projects"] = direct[d.ID].clients(), direct[d.ID].projects()
 		it := project(full, q.Fields)
 		for k, val := range extras[d.ID] {
@@ -301,13 +306,17 @@ func (s *Service) loadIncludes(ctx context.Context, v *viewer, docs []*docRow, i
 				byDoc[id] = l
 			}
 			rows.Close()
+			var views []map[string]any
 			for _, id := range ids {
 				if l := byDoc[id]; l != nil {
-					out[id]["lock"] = l.view()
+					view := l.view()
+					views = append(views, view)
+					out[id]["lock"] = view
 				} else {
 					out[id]["lock"] = nil
 				}
 			}
+			s.fillNames(ctx, views, lockNamePairs...)
 		}
 	}
 	return out, nil
@@ -367,6 +376,7 @@ func (s *Service) documentsGet(ctx context.Context, c *Call) (any, error) {
 		full["version"], full["checksum"], full["sizeBytes"], full["title"] = int(version), ver.checksum, ver.size, ver.title
 		full["updatedAt"], full["updatedBy"], full["updatedByName"] = protocol.FormatTime(ver.at), ver.author, strOrNil(ver.authorName)
 	}
+	s.fillNames(ctx, []map[string]any{full}, docNamePairs...)
 	if key == "" && (v.c.IsExternal() || slices.Contains(include, "content")) {
 		if err := s.DB.QueryRow(ctx, `SELECT storage_key FROM document_versions WHERE document_id = $1 AND version = $2`,
 			id, d.Version).Scan(&key); err != nil {
@@ -539,6 +549,7 @@ func (s *Service) versionsList(ctx context.Context, c *Call) (any, error) {
 	if hasMore {
 		items, keys = items[:q.Limit], keys[:q.Limit]
 	}
+	s.fillNames(ctx, items, versionNamePairs...)
 	if v.c.IsExternal() {
 		// The only visible version is the current one; like documents.get, its checksum and size
 		// describe the body without frontmatter, the content an external person receives (D-11).
@@ -646,6 +657,7 @@ func (s *Service) documentsSearch(ctx context.Context, c *Call) (any, error) {
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
+	s.fillNames(ctx, items, docNamePairs...)
 	direct, err := s.directRelations(ctx, v, ids)
 	if err != nil {
 		return nil, err

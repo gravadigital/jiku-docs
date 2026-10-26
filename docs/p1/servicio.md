@@ -99,6 +99,13 @@ Al aplicar la migración:
   (y `authorName` en las versiones).
   - El nombre se guarda al escribir: `actor.name` (o `username`) cuando escribe la api, el `name` de `users.list` cuando
     escribe una persona por el bus, y el nombre del servicio cuando escribe un servicio.
+  - Si el `actor` de la api no trae `name` ni `username` (el token de la web no los trae, JIKU-WEB-5), el nombre se busca
+    en `users.list` de core antes de escribir.
+  - Al leer, un nombre `null` guardado se completa desde core si lo conoce, sin escribirlo en la base. Así se ven los
+    documentos escritos antes del arreglo o mientras core no respondía.
+  - El nombre no es una decisión de acceso: si core no responde queda `null` y la operación sigue (no hay
+    `upstream_unavailable`). Caché en memoria: 10 min por nombre, 1 min para un id que core no conoce, 30 s sin
+    consultar después de un fallo, 2 s de espera como máximo.
   - Una migración completa los existentes consultando a core.
   - Alcanza para "Editado por" y para el lock: `lock.holderName`.
 - **Clientes y proyectos en los ítems.** Cada ítem de `documents.list` y `search` incluye `clients` y `projects` como

@@ -69,6 +69,9 @@ type Service struct {
 	treeMu sync.Mutex
 	tree   *acl.Tree
 
+	// names caches author names resolved with core (names.go).
+	names nameCache
+
 	epOnce            sync.Once
 	commands, queries []Endpoint
 }
@@ -179,6 +182,13 @@ func (s *Service) Dispatch(ctx context.Context, req Request) (reply protocol.Rep
 	if err == nil {
 		c, err = s.ResolveCaller(ctx, callerID, actor)
 	}
+	if err == nil && req.Plane == protocol.PlaneCommands && actor != nil && c.Name == "" {
+		// The api's actor came without name nor username: the name stored with the write comes
+		// from core's users (names.go). Best effort, never an access decision.
+		if n, ok := s.resolveNames(ctx, []string{c.ID})[c.ID]; ok {
+			c.Name = n
+		}
+	}
 	if err == nil {
 		effective = c.ID
 		var data any
@@ -188,6 +198,10 @@ func (s *Service) Dispatch(ctx context.Context, req Request) (reply protocol.Rep
 		}
 	}
 	err = s.translate(err, method)
+	if pe := (*protocol.Error)(nil); errors.As(err, &pe) && pe.Code == protocol.CodeDocumentLocked && pe.Details != nil {
+		// The lock may have been taken without a name (see names.go).
+		s.fillNames(ctx, []map[string]any{pe.Details}, lockNamePairs...)
+	}
 	code = protocol.CodeOf(err)
 	return protocol.Failure(err)
 }

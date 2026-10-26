@@ -68,7 +68,10 @@ info:
       `projectMatch`: `direct` (el proyecto está en `jiku.projects`) o `indirect` (llega por un
       requisito o una tarea del proyecto).
     - Nombres: `createdByName` y `updatedByName` en `list`, `get` y `search`; `authorName` en
-      `versions.list`; `holderName` en `lock`. Se guardan al escribir; `null` si no se conocen.
+      `versions.list`; `holderName` en `lock`. Se guardan al escribir; `null` si no se conocen. Si
+      el `actor` de la api llega sin `name` ni `username`, el nombre sale de `users` de core; un
+      nombre `null` guardado se completa al leer desde core cuando lo conoce (sin escribirlo). Si
+      core no responde, el nombre queda `null`: nunca falla la consulta por eso.
     - `clients` y `projects` (ids de `jiku.clients` y `jiku.projects`) en cada ítem de `list`, `get` y
       `search`. A un externo solo se le devuelven los proyectos de sus `project-permissions` y ningún
       cliente; lo mismo en `include: [relations]`.

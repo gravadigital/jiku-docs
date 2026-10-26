@@ -49,6 +49,12 @@ Formato: [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/). Versionado
 
 ### Fixed
 
+- JIKU-WEB-5: lo que una persona escribía desde la web quedaba sin nombre (`createdByName`, `updatedByName`,
+  `authorName`, `lock.holderName` en `null`; la web mostraba "Otra persona"), porque el `actor` de la api no trae
+  `name` ni `username`. Ahora el nombre se busca en `users.list` de core al escribir, y al leer se completa desde core
+  todo nombre `null` guardado (sin escribirlo), también en el `errorDetails.holderName` de `document_locked`. Es
+  best-effort: caché en memoria con TTL y, si core no responde, el nombre queda `null` sin fallar la operación. Sin
+  cambios de forma en los contratos.
 - El janitor dejaba de correr hasta reiniciar: si la sentencia que toma un advisory lock de sesión fallaba después de
   concederlo (un `statement_timeout` con la base cargada), la conexión volvía al pool con el lock tomado y otro
   componente (el outbox) la seguía usando; el `pg_try_advisory_lock` del janitor fallaba en silencio en cada vuelta.
