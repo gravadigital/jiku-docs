@@ -18,6 +18,7 @@ import (
 	"github.com/gravadigital/jiku-docs/internal/metrics"
 	"github.com/gravadigital/jiku-docs/internal/protocol"
 	"github.com/gravadigital/jiku-docs/internal/service"
+	"github.com/gravadigital/jiku-docs/internal/store"
 )
 
 // Stream parameters (section 8).
@@ -27,7 +28,6 @@ const (
 	DuplicateWindow = 2 * time.Minute
 	SweepInterval   = 5 * time.Second
 	batchSize       = 200
-	leaderLock      = 7_301_000_003
 )
 
 // StreamConfig is the configuration of JIKU_DOCS_EVENTS.
@@ -77,17 +77,13 @@ func (p *Publisher) Run(ctx context.Context) error {
 }
 
 func (p *Publisher) runLeader(ctx context.Context) error {
-	conn, err := p.DB.Acquire(ctx)
-	if err != nil {
-		return err
-	}
-	defer conn.Release()
+	var lock *store.AdvisoryLock
 	for {
-		var leader bool
-		if err := conn.QueryRow(ctx, `SELECT pg_try_advisory_lock($1)`, leaderLock).Scan(&leader); err != nil {
+		var err error
+		if lock, err = store.TryAdvisoryLock(ctx, p.DB, store.LockOutbox); err != nil {
 			return err
 		}
-		if leader {
+		if lock != nil {
 			break
 		}
 		select {
@@ -96,9 +92,9 @@ func (p *Publisher) runLeader(ctx context.Context) error {
 		case <-time.After(SweepInterval):
 		}
 	}
-	defer func() {
-		_, _ = conn.Exec(context.Background(), `SELECT pg_advisory_unlock($1)`, leaderLock)
-	}()
+	defer lock.Release()
+	conn := lock.Conn()
+	defer func() { _, _ = conn.Exec(context.Background(), `UNLISTEN *`) }()
 	if _, err := conn.Exec(ctx, `LISTEN jiku_docs_changelog`); err != nil {
 		return err
 	}

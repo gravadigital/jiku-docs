@@ -494,14 +494,14 @@ func TestHistory14OneReplicaRuns(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer conn.Release()
-	if _, err := conn.Exec(ctx, `SELECT pg_advisory_lock($1)`, service.HistoryCompactionLock); err != nil {
+	if _, err := conn.Exec(ctx, `SELECT pg_advisory_lock($1)`, int64(store.LockHistoryCompaction)); err != nil {
 		t.Fatal(err)
 	}
 	if rep, err := other.CompactHistory(ctx, service.HistoryOptions{}); err != nil || !rep.Skipped {
 		t.Fatalf("must skip while another replica runs: %+v %v", rep, err)
 	}
 	h.expect(id, span(1, 6)...)
-	if _, err := conn.Exec(ctx, `SELECT pg_advisory_unlock($1)`, service.HistoryCompactionLock); err != nil {
+	if _, err := conn.Exec(ctx, `SELECT pg_advisory_unlock($1)`, int64(store.LockHistoryCompaction)); err != nil {
 		t.Fatal(err)
 	}
 	// Both at the same time: exactly one does the work.

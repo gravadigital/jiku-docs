@@ -35,7 +35,6 @@ import (
 const (
 	p1StateKey     = "migration:p1-visibility"
 	p1NamesKey     = "migration:p1-names"
-	p1Lock         = 7_301_000_006
 	p1MsgRestrict  = "Migración P-1: visibilidad restricted (la carpeta no era legible para el rol user)"
 	p1MsgInternal  = "Migración P-1: visibilidad internal (la carpeta bloqueaba a los externos)"
 	p1MigrationVia = "service"
@@ -60,15 +59,11 @@ type P1Report struct {
 // MigrateP1 applies the P-1 visibility migration if it has not finished yet. Safe to call from
 // several replicas: they serialise on an advisory lock.
 func (s *Service) MigrateP1(ctx context.Context) (*P1Report, error) {
-	conn, err := s.DB.Acquire(ctx)
+	lock, err := store.AdvisoryLockWait(ctx, s.DB, store.LockMigrationP1)
 	if err != nil {
 		return nil, err
 	}
-	defer conn.Release()
-	if _, err := conn.Exec(ctx, `SELECT pg_advisory_lock($1)`, p1Lock); err != nil {
-		return nil, err
-	}
-	defer func() { _, _ = conn.Exec(context.Background(), `SELECT pg_advisory_unlock($1)`, p1Lock) }()
+	defer lock.Release()
 
 	st, err := s.p1Load(ctx)
 	if err != nil {

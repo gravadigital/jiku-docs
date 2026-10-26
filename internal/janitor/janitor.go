@@ -17,9 +17,8 @@ import (
 
 	"github.com/gravadigital/jiku-docs/internal/metrics"
 	"github.com/gravadigital/jiku-docs/internal/service"
+	"github.com/gravadigital/jiku-docs/internal/store"
 )
-
-const leaderLock = 7_301_000_004
 
 // Janitor runs the periodic jobs.
 type Janitor struct {
@@ -62,16 +61,19 @@ func (j *Janitor) Run(ctx context.Context) error {
 
 // RunOnce runs whatever is due, if this replica gets the lock.
 func (j *Janitor) RunOnce(ctx context.Context) {
-	conn, err := j.DB.Acquire(ctx)
+	// The lock lives on its own connection for the whole run and is released on it, even on a
+	// failure or a panic; see store.AdvisoryLock.
+	lock, err := store.TryAdvisoryLock(ctx, j.DB, store.LockJanitor)
 	if err != nil {
+		if ctx.Err() == nil {
+			j.Log.Warn("janitor: leader lock failed", "err", err.Error())
+		}
 		return
 	}
-	defer conn.Release()
-	var leader bool
-	if err := conn.QueryRow(ctx, `SELECT pg_try_advisory_lock($1)`, leaderLock).Scan(&leader); err != nil || !leader {
-		return
+	if lock == nil {
+		return // another replica runs it
 	}
-	defer func() { _, _ = conn.Exec(context.Background(), `SELECT pg_advisory_unlock($1)`, leaderLock) }()
+	defer lock.Release()
 
 	if n, err := j.Svc.ExpireLocks(ctx); err != nil {
 		j.Log.Warn("janitor: lock expiry failed", "err", err.Error())

@@ -19,10 +19,6 @@ import (
 // the last version of each editing block; older, the last of each calendar day. Protected
 // versions and the current one are never removed.
 
-// HistoryCompactionLock is the advisory lock key of the compaction: one replica (or one
-// `jiku-docs history compact`) runs it at a time.
-const HistoryCompactionLock = 7_301_000_005
-
 // HistoryPolicy are the thresholds of the retention policy (section 6).
 type HistoryPolicy struct {
 	KeepAll     time.Duration  // DOCS_HISTORY_KEEP_ALL: every version younger than this stays
@@ -216,23 +212,17 @@ var ErrCompactionBusy = errors.New("history compaction already running")
 func (s *Service) CompactHistory(ctx context.Context, opts HistoryOptions) (*HistoryReport, error) {
 	start := time.Now()
 	rep := &HistoryReport{DryRun: opts.DryRun}
-	conn, err := s.DB.Acquire(ctx)
+	// store.LockHistoryCompaction: one replica (or one `jiku-docs history compact`) at a time.
+	lock, err := store.TryAdvisoryLock(ctx, s.DB, store.LockHistoryCompaction)
 	if err != nil {
 		return nil, err
 	}
-	defer conn.Release()
-	var got bool
-	if err := conn.QueryRow(ctx, `SELECT pg_try_advisory_lock($1)`, HistoryCompactionLock).Scan(&got); err != nil {
-		return nil, err
-	}
-	if !got {
+	if lock == nil {
 		rep.Skipped = true
 		s.Log.Info("history compaction: another process holds the lock, skipping")
 		return rep, nil
 	}
-	defer func() {
-		_, _ = conn.Exec(context.Background(), `SELECT pg_advisory_unlock($1)`, HistoryCompactionLock)
-	}()
+	defer lock.Release()
 
 	p := s.historyPolicy()
 	s.Log.Info("history compaction started", "dryRun", opts.DryRun, "document", opts.DocumentID)

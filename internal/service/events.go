@@ -10,6 +10,7 @@ import (
 	"github.com/gravadigital/jiku-docs/internal/caller"
 	"github.com/gravadigital/jiku-docs/internal/markdown"
 	"github.com/gravadigital/jiku-docs/internal/protocol"
+	"github.com/gravadigital/jiku-docs/internal/store"
 )
 
 // EventActor is who caused an event.
@@ -33,11 +34,6 @@ type Envelope struct {
 	Snapshot      map[string]any `json:"snapshot,omitempty"`
 	Changes       map[string]any `json:"changes,omitempty"`
 }
-
-// changelogLock serialises the changelog inserts of concurrent transactions, so `seq` order is
-// commit order: a reader of `documents.changes` (or the publisher) never skips a seq that a
-// slower transaction commits later. At the target scale (30 users) the cost is nil.
-const changelogLock = 7_301_000_002
 
 // event is what a command emits, before it has a seq.
 type event struct {
@@ -68,7 +64,11 @@ func (s *Service) emitter(tx pgx.Tx, c *caller.Caller, corr string) *emitter {
 
 func (e *emitter) emit(ctx context.Context, ev event) error {
 	if !e.locked {
-		if _, err := e.tx.Exec(ctx, `SELECT pg_advisory_xact_lock($1)`, changelogLock); err != nil {
+		// store.LockChangelog serialises the changelog inserts of concurrent transactions, so
+		// `seq` order is commit order: a reader of `documents.changes` (or the publisher) never
+		// skips a seq that a slower transaction commits later. Transaction-scoped: it ends with
+		// the commit or the rollback.
+		if _, err := e.tx.Exec(ctx, `SELECT pg_advisory_xact_lock($1)`, int64(store.LockChangelog)); err != nil {
 			return err
 		}
 		e.locked = true

@@ -90,10 +90,6 @@ func loadMigrations() ([]migration, error) {
 	return out, nil
 }
 
-// migrationLock is the advisory lock key that serialises concurrent migrators (two replicas
-// starting at once).
-const migrationLock = 7_301_000_001
-
 // Migrate applies pending migrations, each in its own transaction. Safe to run from several
 // processes at once.
 func Migrate(ctx context.Context, pool *pgxpool.Pool, log *slog.Logger) (applied int, err error) {
@@ -107,17 +103,13 @@ func MigrateTo(ctx context.Context, pool *pgxpool.Pool, log *slog.Logger, upTo i
 	if err != nil {
 		return 0, err
 	}
-	conn, err := pool.Acquire(ctx)
+	// LockMigrations serialises concurrent migrators (two replicas starting at once).
+	lock, err := AdvisoryLockWait(ctx, pool, LockMigrations)
 	if err != nil {
 		return 0, err
 	}
-	defer conn.Release()
-	if _, err := conn.Exec(ctx, `SELECT pg_advisory_lock($1)`, migrationLock); err != nil {
-		return 0, err
-	}
-	defer func() {
-		_, _ = conn.Exec(context.Background(), `SELECT pg_advisory_unlock($1)`, migrationLock)
-	}()
+	defer lock.Release()
+	conn := lock.Conn()
 	if _, err := conn.Exec(ctx, `CREATE TABLE IF NOT EXISTS schema_migrations (
 		version integer PRIMARY KEY, name text NOT NULL, applied_at timestamptz NOT NULL DEFAULT now())`); err != nil {
 		return 0, err

@@ -47,6 +47,16 @@ Formato: [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/). Versionado
   completan desde core en segundo plano.
 - Contratos 1.3.0 (`jiku-docs-commands`, `-queries`, `-events`).
 
+### Fixed
+
+- El janitor dejaba de correr hasta reiniciar: si la sentencia que toma un advisory lock de sesión fallaba después de
+  concederlo (un `statement_timeout` con la base cargada), la conexión volvía al pool con el lock tomado y otro
+  componente (el outbox) la seguía usando; el `pg_try_advisory_lock` del janitor fallaba en silencio en cada vuelta.
+  Los locks de sesión (janitor, outbox, compactación, migraciones, P-1) pasan por `store.AdvisoryLock`: conexión
+  dedicada mientras dura la tarea, unlock en esa misma conexión (también ante error o panic) y, si la toma o la
+  liberación fallan, la conexión se cierra en vez de volver al pool. Las claves están centralizadas en
+  `internal/store/advisory.go`; el janitor registra el fallo de la toma.
+
 ### Changed
 
 - Compactación del historial de versiones (`docs/compactacion-historial-v1.md`): un proceso diario (desde
