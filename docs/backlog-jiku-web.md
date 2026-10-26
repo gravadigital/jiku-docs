@@ -9,24 +9,30 @@ Estados:
 
 | # | Tema | Origen | Estado |
 | --- | --- | --- | --- |
-| 1 | Pantalla de historial de versiones del documento en `web`, y campo de mensaje opcional al guardar en el editor | `docs/compactacion-historial-v1.md`, sección 5 | aprobado (postergado hasta ahora) |
+| 1 | Pantalla de historial de versiones del documento en `web`, y campo de mensaje opcional al guardar en el editor | `docs/compactacion-historial-v1.md`, sección 5 | aprobado, va dentro de P-1 (botón de historial de la pantalla 06) |
 | 2 | CSP de la ruta pública `/p/docs/*`: sumar a `img-src` el origen del storage configurado. En local las imágenes no cargan porque el storage es http | Prueba e2e en navegador | a confirmar |
-| 3 | CORS de la api solo bajo `/api`: hoy `/p/docs/*` responde `Access-Control-Allow-Origin: *` | Prueba e2e por el bus. Era parte del REQ-018 descartado; se pide sin el cambio de tokens | a confirmar |
-| 4 | Log `warn` en core por cada `files.request-upload` de jiku-docs (`resolve-actor.ts`): bajarlo a `debug` para callers de clase conector | Prueba e2e por el bus. Era parte del REQ-018 descartado | a confirmar |
+| 3 | CORS de la api solo bajo `/api`: hoy `/p/docs/*` responde `Access-Control-Allow-Origin: *` | Prueba e2e por el bus. Era parte del REQ-018 descartado; se pide sin el cambio de tokens | aprobado, va en P-2 |
+| 4 | Log `warn` en core por cada `files.request-upload` de jiku-docs (`resolve-actor.ts`): bajarlo a `debug` para callers de clase conector | Prueba e2e por el bus. Era parte del REQ-018 descartado | aprobado, va en P-2 |
 | 5 | opus-web: un externo sin permiso sobre un proyecto ve el tablero vacío y "No hay proyectos disponibles" | Prueba e2e en navegador; no es del módulo docs | a confirmar |
 | 6 | Textos de interfaz de docs propuestos sin fuente en la UX: errores de `permission_denied` al crear un link, fallo al revocar, fallo al tomar el lock y el contador "Documentación (5+)" | Informe de REQ-016 | a confirmar |
 | 7 | Componente `alert` en el Design System: hoy `DocsNotice` está implementado de forma local | Informe de REQ-016 | a confirmar |
 | 8 | Altas sin `id` en las rutas de la api: no se pueden reintentar sin duplicar | Informe de REQ-016 | a confirmar |
 | 9 | Documentos de más de 256 KiB: no se pueden crear ni editar desde la web, que no tiene subida por URL | Informe de REQ-016 | a confirmar |
-| 10 | **Bug JIKU-WEB-1:** el visor interno (`/docs/{id}`) muestra el frontmatter como texto. La UX (`docs/ux/surfaces/web/screens/documento.md:160`) dice que no se muestra, y `MarkdownViewer mode="document"` no lo quita. Propuesta: quitarlo antes de renderizar, como opus-web con `stripFrontmatter` | e2e en navegador con usuario humano | a confirmar (recomendado) |
-| 11 | **Bug JIKU-WEB-2:** "Crear y editar" en "Nuevo documento" deja `/docs/{id}?editar=1` con el botón Editar en spinner y nunca toma el lock. Se reprodujo 5 de 5 veces; con recarga completa funciona. Causa probable: carrera entre `onClose()` + `router.push` en `NewDocumentDialog` y el efecto de `DocumentView` (`router.replace` + `session.start`) | e2e en navegador con usuario humano | a confirmar (recomendado) |
-| 13 | web, detalle de requisito: la tabla de la card "Documentación" desborda la card y corta la columna Ruta a 1440 px | Relevamiento de capturas | a confirmar |
-| 14 | web, detalle de requisito: las pills de estado, tipo y prioridad se anuncian las tres como "Estado: …" en lectores de pantalla | Relevamiento de capturas | a confirmar |
-| 15 | web, listado de tareas: una tarea muestra "Vencido hace: 32666 día(s)" (fecha inválida o nula) | Relevamiento de capturas | a confirmar |
+| 10 | **Bug JIKU-WEB-1:** el visor interno (`/docs/{id}`) muestra el frontmatter como texto. La UX (`docs/ux/surfaces/web/screens/documento.md:160`) dice que no se muestra, y `MarkdownViewer mode="document"` no lo quita. Propuesta: quitarlo antes de renderizar, como opus-web con `stripFrontmatter` | e2e en navegador con usuario humano | aprobado, va dentro de P-1 |
+| 11 | **Bug JIKU-WEB-2:** "Crear y editar" en "Nuevo documento" deja `/docs/{id}?editar=1` con el botón Editar en spinner y nunca toma el lock. Se reprodujo 5 de 5 veces; con recarga completa funciona. Causa probable: carrera entre `onClose()` + `router.push` en `NewDocumentDialog` y el efecto de `DocumentView` (`router.replace` + `session.start`) | e2e en navegador con usuario humano | aprobado, va dentro de P-1 |
+| 13 | web, detalle de requisito: la tabla de la card "Documentación" desborda la card y corta la columna Ruta a 1440 px | Relevamiento de capturas | aprobado, va dentro de P-1 |
+| 14 | web, detalle de requisito: las pills de estado, tipo y prioridad se anuncian las tres como "Estado: …" en lectores de pantalla | Relevamiento de capturas | aprobado, va en P-2 |
+| 15 | web, listado de tareas: una tarea muestra "Vencido hace: 32666 día(s)" (fecha inválida o nula) | Relevamiento de capturas | aprobado, va en P-2 |
 | 16 | 404 de web y opus-web: es la página por defecto de Next.js, sin estilos ni navegación | Relevamiento de capturas | a confirmar |
 | 17 | opus-web a 390 px: sin navegación ni "Nuevo requisito"; la vista Columnas se ignora; tocar una card abre la página en lugar del modal | Relevamiento de capturas | a confirmar |
-| 18 | opus-web: el externo que abre un requisito interno ve "Error al cargar el requisito" con "Reintentar", sin header ni explicación | Relevamiento de capturas | a confirmar |
-| 12 | La web muestra "por otra persona" en el lock cuando el que edita es el propio usuario o el servicio, porque `persons` no resuelve esos ids | e2e en navegador | a confirmar |
+| 18 | opus-web: el externo que abre un requisito interno ve "Error al cargar el requisito" con "Reintentar", sin header ni explicación | Relevamiento de capturas | aprobado, va en P-2 |
+| 12 | La web muestra "por otra persona" en el lock cuando el que edita es el propio usuario o el servicio, porque `persons` no resuelve esos ids | e2e en navegador | aprobado, va dentro de P-1 |
+
+## Agrupación para ejecutar
+
+- **P-1** (jiku-docs y jiku-go primero, después REQ de la web): documentación sin carpetas, con los ítems 1, 10, 11, 12 y 13 y la card del detalle de proyecto.
+- **P-2** (REQ de arreglos chicos en jiku): ítems 3, 4, 14, 15 y 18.
+- **No se aplican por ahora:** 2, 5, 6, 7, 8, 9, 16 y 17.
 
 ## Pedidos del dueño
 
@@ -88,6 +94,15 @@ La casilla "Solo visibles para el cliente" queda aparte del buscador. Hay vistas
   - **Contratos, especificación y migración:** de la ACL actual y de los documentos importados.
 - **jiku-go:** `restricted` en el CLI. `new` sin `--folder`. Revisar `ls` y `mv` como herramientas de ruta interna.
 - **api (jiku):** rutas nuevas para lo anterior y para las sugerencias del buscador. Proyectos, clientes y personas salen de core; los temas, de jiku-docs.
+
+**Card "Documentación" del detalle de proyecto (agregado 2026-10-26).** Referencia: `docs/p1/card-documentacion-detalle-proyecto.png`.
+- **Encabezado:** "Documentación" con la cantidad, un "+" (nuevo documento con el proyecto ya elegido) y "Ver todos ›".
+- **"Ver todos":** lleva a la pantalla de Documentación con el filtro de proyecto activado (pantalla 04, con "Volver al proyecto").
+- **Filas:**
+  - ícono, título y fecha de actualización a la derecha ("—" si no hay);
+  - debajo, los temas como pills, o "Sin tema";
+  - un documento que aparece en el proyecto pero no tiene ese proyecto como propio (por ejemplo, vinculado por un requisito o una tarea del proyecto) lleva la marca "vinculado, sin proyecto propio". El diseño del REQ precisa la regla exacta.
+- **Mismo criterio** para las cards de requisito y tarea: sin ruta, y absorbe el ítem 13.
 
 **Estado:** definido. Se ejecuta cuando el dueño lo indique: jiku-docs y jiku-go en paralelo, y después el REQ de la web en jiku.
 
