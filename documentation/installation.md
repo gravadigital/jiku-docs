@@ -79,7 +79,7 @@ One bucket, private, for the versions of every document (`docs/`), large uploads
 Then prepare it once (and again whenever `DOCS_TRASH_RETENTION_DAYS` changes):
 
 ```sh
-docker run --rm --env-file .env gravadigital/jiku-docs:1.0.0 storage init
+docker run --rm --env-file .env gravadigital/jiku-docs:1.1.0 storage init
 ```
 
 `storage init` is idempotent. It creates the bucket if the credentials allow it, leaves it
@@ -101,7 +101,7 @@ for health and metrics is `8080` (`DOCS_HTTP_ADDR`); the image's `HEALTHCHECK` r
 docker run -d --name jiku-docs --env-file .env \
   -v /path/to/sentinel-client.creds:/run/secrets/nats.creds:ro \
   -e NATS_CREDS=/run/secrets/nats.creds \
-  gravadigital/jiku-docs:1.0.0
+  gravadigital/jiku-docs:1.1.0
 ```
 
 `NATS_CREDS` are the sentinel credentials of Jiku's bus: they grant nothing by themselves, they

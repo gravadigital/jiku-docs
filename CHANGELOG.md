@@ -34,6 +34,8 @@ for agents is in [CLAUDE.md](CLAUDE.md#cutting-a-release).
 
 ## [Unreleased]
 
+## [1.1.0] - 2026-10-28
+
 ### Changed
 
 - **The repository is now in English.** Documentation, internal docs (renamed to English file names, such as
@@ -63,10 +65,19 @@ for agents is in [CLAUDE.md](CLAUDE.md#cutting-a-release).
   installation, configuration, operations, bus reference and known limitations.
 - **License**: Apache-2.0 ([`LICENSE`](LICENSE)) and [`NOTICE`](NOTICE).
 
+### Fixed
+
+- **The release pipeline publishes again.** The integration tests started MinIO from the `minio/minio`
+  image, which can no longer be pulled from Docker Hub, so the 1.0.0 release run failed its tests and never
+  published the image. The test S3 is now Garage (`dxflrs/garage`). Garage has no bucket versioning, so the
+  test of `storage init` suspending an old bucket's versioning skips there; the rest of `storage init`
+  (bucket and lifecycle rules) is still verified. The service itself is unchanged: it still talks to any
+  S3-compatible provider.
+
 ### Notes for existing installations
 
-1.0.0 was tagged locally and never published, so there are no production installations. For a local
-environment that ran 1.0.0:
+The `v1.0.0` tag was pushed, but its release run failed before publishing, so no 1.0.0 image exists and
+there are no production installations. For a local environment that ran 1.0.0:
 
 - Run `jiku-docs storage init` again (the local compose does it on `up`): it replaces the bucket's lifecycle
   configuration, so the `papelera/` rule is dropped and the `trash/` rule is applied.
