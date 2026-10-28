@@ -9,7 +9,7 @@ Estados:
 
 | # | Tema | Origen | Estado |
 | --- | --- | --- | --- |
-| 1 | Pantalla de historial de versiones del documento en `web`, y campo de mensaje opcional al guardar en el editor | `docs/compactacion-historial-v1.md`, sección 5 | aprobado, va dentro de P-1 (botón de historial de la pantalla 06) |
+| 1 | Pantalla de historial de versiones del documento en `web`, y campo de mensaje opcional al guardar en el editor | `docs/history-compaction-v1.md`, sección 5 | aprobado, va dentro de P-1 (botón de historial de la pantalla 06) |
 | 2 | CSP de la ruta pública `/p/docs/*`: sumar a `img-src` el origen del storage configurado. En local las imágenes no cargan porque el storage es http | Prueba e2e en navegador | a confirmar |
 | 3 | CORS de la api solo bajo `/api`: hoy `/p/docs/*` responde `Access-Control-Allow-Origin: *` | Prueba e2e por el bus. Era parte del REQ-018 descartado; se pide sin el cambio de tokens | aprobado, va en P-2 |
 | 4 | Log `warn` en core por cada `files.request-upload` de jiku-docs (`resolve-actor.ts`): bajarlo a `debug` para callers de clase conector | Prueba e2e por el bus. Era parte del REQ-018 descartado | aprobado, va en P-2 |
@@ -95,7 +95,7 @@ La casilla "Solo visibles para el cliente" queda aparte del buscador. Hay vistas
 - **jiku-go:** `restricted` en el CLI. `new` sin `--folder`. Revisar `ls` y `mv` como herramientas de ruta interna.
 - **api (jiku):** rutas nuevas para lo anterior y para las sugerencias del buscador. Proyectos, clientes y personas salen de core; los temas, de jiku-docs.
 
-**Card "Documentación" del detalle de proyecto (agregado 2026-10-26).** Referencia: `docs/p1/card-documentacion-detalle-proyecto.png`.
+**Card "Documentación" del detalle de proyecto (agregado 2026-10-26).** Referencia: `docs/p1/project-detail-documentation-card.png`.
 - **Encabezado:** "Documentación" con la cantidad, un "+" (nuevo documento con el proyecto ya elegido) y "Ver todos ›".
 - **"Ver todos":** lleva a la pantalla de Documentación con el filtro de proyecto activado (pantalla 04, con "Volver al proyecto").
 - **Filas:**

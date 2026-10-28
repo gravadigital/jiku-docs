@@ -1,4 +1,4 @@
--- Trash instead of bucket versioning (docs/compactacion-historial-v1.md, section 4): the objects
+-- Trash instead of bucket versioning (docs/history-compaction-v1.md, section 4): the objects
 -- of compacted versions are moved to papelera/ before they are deleted, and the trash copy
 -- carries the metadata of the version row, so `jiku-docs storage restore-from-trash
 -- --version-row` can put the version back in the history. The row is kept here between the

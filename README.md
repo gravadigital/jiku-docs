@@ -10,11 +10,11 @@ del subject (garantizada por el auth-callout) y publica eventos en JetStream. Lo
 `api` de Jiku; personas, agentes y servicios llegan directo al bus (cliente oficial:
 [`jiku-go`](https://github.com/gravadigital/jiku-go)).
 
-- Especificación: [`docs/especificacion-v1.md`](docs/especificacion-v1.md)
-- Decisiones de integración (mandan sobre la especificación): [`docs/decisiones-integracion.md`](docs/decisiones-integracion.md)
+- Especificación: [`docs/specification-v1.md`](docs/specification-v1.md)
+- Decisiones de integración (mandan sobre la especificación): [`docs/integration-decisions.md`](docs/integration-decisions.md)
 - Contratos AsyncAPI 3.0 (fuente de verdad de forma): [`docs/apis/`](docs/apis/)
 - Cambios: [`CHANGELOG.md`](CHANGELOG.md)
-- P-1, documentación sin carpetas (manda sobre la especificación): [`docs/p1/servicio.md`](docs/p1/servicio.md)
+- P-1, documentación sin carpetas (manda sobre la especificación): [`docs/p1/service.md`](docs/p1/service.md)
 
 **Permisos (P-1, contrato 1.3.0).** Deciden la clase del caller y la visibilidad del documento, no las
 carpetas: `admin` y `user` leen y escriben todo lo `internal` y `public`; un externo lee lo `public`
@@ -177,7 +177,7 @@ minuto, con el cursor en `service_state`; el contenido huérfano va a `papelera/
 de relaciones contra core (`DOCS_RELATION_REVIEW_HOUR_UTC`), que quita relaciones a entidades
 inexistentes reescribiendo el frontmatter en una versión nueva firmada por el servicio.
 
-**Compactación del historial** ([`docs/compactacion-historial-v1.md`](docs/compactacion-historial-v1.md)):
+**Compactación del historial** ([`docs/history-compaction-v1.md`](docs/history-compaction-v1.md)):
 cada guardado sigue creando una versión, y una vez por día, a partir de `DOCS_HISTORY_COMPACTION_HOUR` en
 `DOCS_HISTORY_TIMEZONE`, se borran las versiones intermedias viejas: menos de 24 h, todas; hasta 30 días, la
 última de cada bloque de edición (mismo autor, mismo `via`, pausas de menos de 30 min); más viejas, la última

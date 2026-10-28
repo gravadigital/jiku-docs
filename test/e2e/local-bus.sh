@@ -614,7 +614,7 @@ ls "$SYNC$PP/" | grep -q 'aduana.remoto-v' && ok "conflicto → .remoto-vN.md" |
 # ---- 8b. compactación del historial ---------------------------------------------------------------
 
 # Documento con siete guardados seguidos (uno con mensaje); se envejecen en la base todos menos el
-# actual y se compacta a demanda dentro del contenedor (docs/compactacion-historial-v1.md).
+# actual y se compacta a demanda dentro del contenedor (docs/history-compaction-v1.md).
 section "8b. compactación del historial"
 if docsdb "SELECT 1" >/dev/null 2>&1; then
   cp arq.md h.md

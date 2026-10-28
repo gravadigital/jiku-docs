@@ -89,7 +89,7 @@ var documentsSpec = &query.Spec{
 }
 
 // documents.get also returns prunedVersionsCount: how many versions the history compaction
-// removed (docs/compactacion-historial-v1.md). Never to an external person.
+// removed (docs/history-compaction-v1.md). Never to an external person.
 var documentGetFields = append(append([]string{}, documentFields...), "prunedVersionsCount")
 
 // documents.get accepts more includes than the list.

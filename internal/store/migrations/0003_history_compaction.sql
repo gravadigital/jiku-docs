@@ -1,4 +1,4 @@
--- History compaction (docs/compactacion-historial-v1.md, section 4): every save is still a
+-- History compaction (docs/history-compaction-v1.md, section 4): every save is still a
 -- version, and a daily process thins out the old ones. These columns say which versions can
 -- never go, and which documents have new activity since their last compaction.
 

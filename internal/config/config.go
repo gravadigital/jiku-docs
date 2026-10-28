@@ -55,7 +55,7 @@ type Config struct {
 	OutboxEnabled      bool
 	RelationReviewHour int
 
-	// History compaction (docs/compactacion-historial-v1.md, section 6)
+	// History compaction (docs/history-compaction-v1.md, section 6)
 	HistoryCompactionEnabled bool
 	HistoryCompactionHour    int
 	HistoryTimezone          string

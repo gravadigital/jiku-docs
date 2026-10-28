@@ -1,7 +1,7 @@
 # P-1 · Documentación sin carpetas: cambios en el servicio (contrato 1.3.0)
 
-Fecha: 2026-10-26. Origen: decisiones del dueño en `docs/backlog-jiku-web.md` (P-1) y la propuesta de pantallas
-`_research/jiku-documentacion-propuesta-b/`. Este documento **manda sobre `especificacion-v1.md`** donde se
+Fecha: 2026-10-26. Origen: decisiones del dueño en `docs/jiku-web-backlog.md` (P-1) y la propuesta de pantallas
+`_research/jiku-documentacion-propuesta-b/`. Este documento **manda sobre `specification-v1.md`** donde se
 contradicen, y es la referencia común para jiku-docs, jiku-go y la web de Jiku.
 
 ## 1. Permisos: visibilidad en lugar de carpetas
@@ -114,7 +114,7 @@ Al aplicar la migración:
 
 ## 5. Sin cambios
 
-- Historial y compactación (`docs/compactacion-historial-v1.md`).
+- Historial y compactación (`docs/history-compaction-v1.md`).
 - Adjuntos (D-3).
 - Eventos: se agregan campos nuevos a `snapshot` (`visibility` ya existe), sin cambios incompatibles.
 - Daemon de sync: espeja según `path`. Con el modelo nuevo, los archivos de una persona interna dejan de ser de solo

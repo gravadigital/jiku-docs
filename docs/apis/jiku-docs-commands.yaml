@@ -29,7 +29,7 @@ info:
       La firma solo cubre el host: `Content-Type` no forma parte de ella; se recomienda
       `text/markdown; charset=utf-8`, que es lo que manda jiku-go.
 
-    Compactación del historial (1.2.0, docs/compactacion-historial-v1.md):
+    Compactación del historial (1.2.0, docs/history-compaction-v1.md):
     - `documents.{id}.restore` con un `fromVersion` compactado y `shares.new` con `mode: pinned` y una
       `version` compactada responden `version_pruned`, con `errorDetails`
       `{ requestedVersion, previousAvailable, nextAvailable }` (las versiones conservadas más
@@ -38,7 +38,7 @@ info:
     - Guardar con `message` (o como servicio) protege la versión para siempre; las de `via: agent`
       sin mensaje se compactan por bloques como las humanas.
 
-    P-1, documentación sin carpetas (1.3.0, docs/p1/servicio.md):
+    P-1, documentación sin carpetas (1.3.0, docs/p1/service.md):
     - Permisos por clase y visibilidad, no por carpeta. `internal` y `public`: cualquier persona
       interna (`admin`, `user`) lee y escribe. `restricted` (nueva): solo `admin` y servicios; para un
       `user` o un externo no existe (`document_not_found`, `share_not_found`, `attachment_not_found`).

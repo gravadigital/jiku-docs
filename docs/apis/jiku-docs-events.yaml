@@ -29,7 +29,7 @@ info:
       stream se llama siempre `JIKU_DOCS_EVENTS`.
     - `actor.via` es siempre `service` cuando el actor es un servicio.
 
-    P-1 (1.3.0, docs/p1/servicio.md; campos nuevos, sin cambios incompatibles):
+    P-1 (1.3.0, docs/p1/service.md; campos nuevos, sin cambios incompatibles):
     - `snapshot.visibility` admite `restricted`; `snapshot.lock.holderName` es el nombre de quien
       tiene el lock (o `null`).
     - Las notificaciones de un documento `restricted` llegan solo a los admins.

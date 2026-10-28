@@ -173,7 +173,7 @@ func loadLock(ctx context.Context, q store.Querier, docID string, now time.Time)
 
 // ---- who sees what -------------------------------------------------------------------------
 
-// P-1 (docs/p1/servicio.md): the class of the caller and the visibility of the document decide
+// P-1 (docs/p1/service.md): the class of the caller and the visibility of the document decide
 // access; folder ACL rules, externalBlocked and sharingBlocked have no effect.
 //
 //	visibility   admin          user           external-user                         service

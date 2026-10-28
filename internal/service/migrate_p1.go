@@ -14,7 +14,7 @@ import (
 	"github.com/gravadigital/jiku-docs/internal/store"
 )
 
-// P-1 data migration (docs/p1/servicio.md, section 1): moving from the folder ACL to the
+// P-1 data migration (docs/p1/service.md, section 1): moving from the folder ACL to the
 // visibility model never makes anything more visible than it was.
 //
 //  1. Every document a person with role `user` cannot read under the ACL in force becomes

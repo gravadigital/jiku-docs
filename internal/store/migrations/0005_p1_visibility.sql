@@ -1,4 +1,4 @@
--- P-1, documentation without folders (docs/p1/servicio.md): the visibility of a document decides
+-- P-1, documentation without folders (docs/p1/service.md): the visibility of a document decides
 -- who reads it, not the folder ACL.
 --
 -- - `restricted`: only admins and services. The data migration that sets it on the documents a

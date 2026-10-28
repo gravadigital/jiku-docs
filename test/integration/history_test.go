@@ -17,7 +17,7 @@ import (
 	tu "github.com/gravadigital/jiku-docs/internal/testutil"
 )
 
-// The cases of section 7 of docs/compactacion-historial-v1.md. Every test runs the service
+// The cases of section 7 of docs/history-compaction-v1.md. Every test runs the service
 // with a fixed clock: versions are written through the bus at chosen moments, and the
 // compaction runs "at" histNow (03:00 in Buenos Aires).
 

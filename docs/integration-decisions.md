@@ -1,6 +1,6 @@
 # jiku-docs: decisiones de integración (addendum a la especificación v1)
 
-Fecha: 2026-10-24. Este documento **manda sobre `especificacion-v1.md`** donde se contradicen. Los
+Fecha: 2026-10-24. Este documento **manda sobre `specification-v1.md`** donde se contradicen. Los
 contratos de `docs/apis/` siguen siendo la fuente de verdad de forma; donde una decisión de acá cambie
 una forma, el repo `jiku-docs` actualiza el contrato y lo anota en su CHANGELOG.
 

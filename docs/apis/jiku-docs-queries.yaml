@@ -35,7 +35,7 @@ info:
       no para verificar el contenido recibido. Los snippets de `documents.search` nunca incluyen
       frontmatter.
 
-    Compactación del historial (1.2.0, docs/compactacion-historial-v1.md):
+    Compactación del historial (1.2.0, docs/history-compaction-v1.md):
     - Un proceso diario borra versiones intermedias viejas: la numeración de
       `documents.versions.list` puede tener huecos. Cada versión trae `kind` (`create`, `update`,
       `restore`; mover no crea versión) y `protected` (protección permanente: creación,
@@ -50,7 +50,7 @@ info:
     - `documents.get` devuelve `prunedVersionsCount` (cuántas versiones se compactaron) como campo
       base; a un externo no se le devuelve.
 
-    P-1, documentación sin carpetas (1.3.0, docs/p1/servicio.md):
+    P-1, documentación sin carpetas (1.3.0, docs/p1/service.md):
     - Visibilidad `restricted`: solo `admin` y servicios la leen. Para un `user` o un externo no existe
       por ninguna vía: `documents.list` (y su `count`), `get` (con y sin `version`), `search` y sus
       fragmentos, `changes`, `versions.list`, `topics.list` (los conteos no lo cuentan),

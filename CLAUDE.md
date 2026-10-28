@@ -2,8 +2,8 @@
 
 - Go 1.25 (`go.mod` en `go 1.25.0`): no subir dependencias que exijan una versión mayor.
 - Los contratos de `docs/apis/` son la fuente de verdad de forma. Un cambio de forma va al contrato, al
-  código y al `CHANGELOG.md` (`[Unreleased]`) en el mismo commit. `docs/decisiones-integracion.md` manda
-  sobre `docs/especificacion-v1.md`.
+  código y al `CHANGELOG.md` (`[Unreleased]`) en el mismo commit. `docs/integration-decisions.md` manda
+  sobre `docs/specification-v1.md`.
 - Las fichas de recursos (`internal/service/specs.go`) alimentan la validación y `meta.describe`;
   `internal/contract` verifica que coincidan con el YAML.
 - Deny-by-default: claves, filtros, campos e includes desconocidos son `invalid_fields`; lo no visible es
@@ -49,7 +49,7 @@ git status --porcelain
 ```
 
 **El corte cae sobre trabajo cerrado.** Nunca en medio de un pedido a medio implementar (un P-x de
-`docs/backlog-jiku-web.md`, una spec de `docs/` en curso) ni con `[Unreleased]` describiendo algo que el
+`docs/jiku-web-backlog.md`, una spec de `docs/` en curso) ni con `[Unreleased]` describiendo algo que el
 código todavía no hace. Si `dev` tiene trabajo abierto, el corte es `main` (o el último commit cerrado de
 `dev`), y **se le dice al usuario**, no se resuelve en silencio. Si `origin/main` está atrás de `main`, se
 informa también, pero **no se pushea** (ver paso 8).
@@ -71,7 +71,7 @@ git diff --stat v<última>..HEAD
 Fuentes, de la más rica a la más pobre:
 
 1. `[Unreleased]` del `CHANGELOG.md`, que cada commit de forma ya alimentó.
-2. `docs/decisiones-integracion.md`, `docs/p1/servicio.md` y las specs de `docs/` (por qué y cómo).
+2. `docs/integration-decisions.md`, `docs/p1/service.md` y las specs de `docs/` (por qué y cómo).
 3. Los cuerpos de los commits.
 
 Y siempre revisar estos diffs, que son los que generan entradas que nadie escribió:

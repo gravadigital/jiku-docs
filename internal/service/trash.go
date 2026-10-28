@@ -16,7 +16,7 @@ import (
 	"github.com/gravadigital/jiku-docs/internal/store"
 )
 
-// The trash (docs/compactacion-historial-v1.md, section 4): every content object the service
+// The trash (docs/history-compaction-v1.md, section 4): every content object the service
 // removes — versions compacted by the history compaction, orphans of the weekly sweep, the
 // versions of a document purged 30 days after its deletion — is first copied to
 // papelera/<original key> and only then deleted. A lifecycle rule expires the trash after

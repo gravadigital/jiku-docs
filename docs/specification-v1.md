@@ -94,7 +94,7 @@ Sigue el mismo patrón que `core`: no tiene HTTP propio, atiende request/reply e
 
 ### Decisiones de diseño
 
-1. **El storage es la fuente de verdad del contenido; Postgres la de los metadatos.** Cada versión es un objeto inmutable en S3 hasta que la compactación la elimina (política de retención del historial: [`compactacion-historial-v1.md`](compactacion-historial-v1.md)). El índice es derivado y se puede regenerar.
+1. **El storage es la fuente de verdad del contenido; Postgres la de los metadatos.** Cada versión es un objeto inmutable en S3 hasta que la compactación la elimina (política de retención del historial: [`history-compaction-v1.md`](history-compaction-v1.md)). El índice es derivado y se puede regenerar.
 2. **El frontmatter es la fuente de verdad de las relaciones, temas y visibilidad.** Se parsea en cada escritura. Así un documento editado localmente puede vincularse a un proyecto sin usar otra herramienta.
 3. **La identidad la pone el subject.** `jiku-docs` no valida tokens; confía en el auth-callout, igual que `core`.
 4. **Los comandos son idempotentes.** Ids generados por el cliente (ULID) y versión base obligatoria en las modificaciones.
@@ -106,7 +106,7 @@ Sigue el mismo patrón que `core`: no tiene HTTP propio, atiende request/reply e
 
 ## 3. Modelo de dominio
 
-> **P-1 (contrato 1.3.0, `docs/p1/servicio.md`):** la carpeta ya no define quién ve un documento: lo define su `visibility` (`internal`, `public`, `restricted`) junto con la clase del caller (sección 4). La ubicación solo ordena los archivos para el CLI y el daemon de sync; si `documents.new` no la trae, el servidor la genera de las relaciones. Donde esta sección habla de carpetas que deciden acceso, manda P-1.
+> **P-1 (contrato 1.3.0, `docs/p1/service.md`):** la carpeta ya no define quién ve un documento: lo define su `visibility` (`internal`, `public`, `restricted`) junto con la clase del caller (sección 4). La ubicación solo ordena los archivos para el CLI y el daemon de sync; si `documents.new` no la trae, el servidor la genera de las relaciones. Donde esta sección habla de carpetas que deciden acceso, manda P-1.
 
 Cada documento tiene una **ubicación** (la carpeta, que ordena los archivos) y **relaciones** (de qué trata, que nunca dan acceso). Esto permite documentos transversales sin duplicarlos.
 
@@ -190,7 +190,7 @@ La `api` resuelve esa ruta verificando permisos y redirige a una URL prefirmada 
 
 `jiku-docs` no valida tokens: el `user-id` del subject es la identidad, y el auth-callout garantiza que nadie publique bajo un id ajeno. Sobre esa identidad, el servicio decide permisos con la clase del caller, la visibilidad del documento y datos que consulta a `core`.
 
-> **P-1 (contrato 1.3.0, `docs/p1/servicio.md`):** la ACL de carpetas quedó **sin efecto** (se conserva en la base y en el contrato como obsoleta), igual que `externalBlocked` y `sharingBlocked`:
+> **P-1 (contrato 1.3.0, `docs/p1/service.md`):** la ACL de carpetas quedó **sin efecto** (se conserva en la base y en el contrato como obsoleta), igual que `externalBlocked` y `sharingBlocked`:
 
 | Visibilidad | `admin` | `user` | `external-user` | servicio |
 | --- | --- | --- | --- | --- |
@@ -331,7 +331,7 @@ Se decide siempre por `errorCode`; `errorMessage` es texto en español para la i
 | `document_not_found` / `folder_not_found` / `attachment_not_found` | No existe o no es visible | No |
 | `permission_denied` | Se puede leer pero no escribir o administrar | No |
 | `version_conflict` | `baseVersion` distinta de la actual. `errorDetails.currentVersion` | Releer, combinar y reintentar |
-| `version_pruned` | Se pide (`documents.get` con `version`), restaura (`restore`) o fija (`shares.new` con `mode: pinned`) una versión que la compactación del historial borró. `errorDetails`: `requestedVersion`, `previousAvailable` y `nextAvailable` (las conservadas más cercanas, o `null`). Un `person-external` nunca lo recibe: para él cualquier versión que no sea la actual es `document_not_found` sin `errorDetails`. Ver [`compactacion-historial-v1.md`](compactacion-historial-v1.md) | Pedir una de las versiones conservadas |
+| `version_pruned` | Se pide (`documents.get` con `version`), restaura (`restore`) o fija (`shares.new` con `mode: pinned`) una versión que la compactación del historial borró. `errorDetails`: `requestedVersion`, `previousAvailable` y `nextAvailable` (las conservadas más cercanas, o `null`). Un `person-external` nunca lo recibe: para él cualquier versión que no sea la actual es `document_not_found` sin `errorDetails`. Ver [`history-compaction-v1.md`](history-compaction-v1.md) | Pedir una de las versiones conservadas |
 | `document_locked` | Otra sesión tiene el lock. `errorDetails`: `holder`, `via`, `expiresAt` | Esperar o pedir liberación |
 | `lock_not_held` | La sesión no tiene el lock que intenta renovar o liberar | Volver a tomarlo |
 | `already_exists` | Un `id` de cliente ya usado con otro contenido, o nombre de archivo repetido en la carpeta | No |
@@ -964,7 +964,7 @@ CREATE INDEX share_accesses_share ON share_accesses (share_id, accessed_at DESC)
 
 Los registros de `share_accesses` se conservan 180 días.
 
-Compactación del historial (migración `0003`, [`compactacion-historial-v1.md`](compactacion-historial-v1.md), sección 4):
+Compactación del historial (migración `0003`, [`history-compaction-v1.md`](history-compaction-v1.md), sección 4):
 
 ```sql
 ALTER TABLE document_versions
@@ -1090,7 +1090,7 @@ Integrar `jiku-docs` requiere cambios de seguridad en el repositorio de Jiku (ro
 | Logs | Estructurados en JSON: método, caller, `correlationId`, duración, `errorCode` |
 | Métricas | Latencia y errores por método; antigüedad del changelog sin publicar; lag del indexador; locks activos; fan-out de notificaciones |
 | Alertas | Changelog sin publicar con más de 60 s; indexador con lag de más de 5 min; tasa de `upstream_unavailable` |
-| Compactación del historial | Log por ejecución (inicio y fin, documentos, versiones borradas, bytes liberados, duración, errores); log por documento solo con `--dry-run` o nivel debug. Métricas `docs_history_versions_pruned_total`, `docs_history_bytes_freed_total`, `docs_history_run_duration_seconds`, `docs_history_pruned_objects_pending`, más `docs_history_runs_total{result}`, `docs_history_last_success_timestamp_seconds` y `docs_history_pruned_objects_oldest_seconds`; `docs_trash_objects_moved_total{source}` cuenta los objetos movidos a la papelera (`compaction`, `orphans`, `deleted-documents`). Alertas: una ejecución que falla o no corre en 48 h; `pruned_objects` con filas de más de 24 h. Ver [`compactacion-historial-v1.md`](compactacion-historial-v1.md), sección 6 |
+| Compactación del historial | Log por ejecución (inicio y fin, documentos, versiones borradas, bytes liberados, duración, errores); log por documento solo con `--dry-run` o nivel debug. Métricas `docs_history_versions_pruned_total`, `docs_history_bytes_freed_total`, `docs_history_run_duration_seconds`, `docs_history_pruned_objects_pending`, más `docs_history_runs_total{result}`, `docs_history_last_success_timestamp_seconds` y `docs_history_pruned_objects_oldest_seconds`; `docs_trash_objects_moved_total{source}` cuenta los objetos movidos a la papelera (`compaction`, `orphans`, `deleted-documents`). Alertas: una ejecución que falla o no corre en 48 h; `pruned_objects` con filas de más de 24 h. Ver [`history-compaction-v1.md`](history-compaction-v1.md), sección 6 |
 | Salud | Endpoints de NATS micro (`nats micro info jiku-docs-commands`) |
 
 ### Respaldo
@@ -1188,7 +1188,7 @@ Se sugiere ubicarlos en `docs/apis/` del repositorio de `jiku-docs` y validarlos
 
 ### Referencias
 
-- [Compactación del historial de versiones](compactacion-historial-v1.md): política de retención del historial; manda sobre este documento donde lo contradice.
+- [Compactación del historial de versiones](history-compaction-v1.md): política de retención del historial; manda sobre este documento donde lo contradice.
 
 - [Guía para construir un conector de Jiku (v1.6.0)](https://github.com/gravadigital/jiku/tree/v1.6.0)
 - [Contratos de core: `docs/apis/`](https://github.com/gravadigital/jiku/tree/v1.6.0/docs/apis)

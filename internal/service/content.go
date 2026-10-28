@@ -256,7 +256,7 @@ func writeMeta(ctx context.Context, tx pgx.Tx, docID string, p *prepared) error 
 	return nil
 }
 
-// Kinds of version (docs/compactacion-historial-v1.md, section 4). documents.move creates no
+// Kinds of version (docs/history-compaction-v1.md, section 4). documents.move creates no
 // version, so there is no kind for it.
 const (
 	KindCreate  = "create"

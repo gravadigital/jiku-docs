@@ -14,7 +14,7 @@ import (
 	"github.com/gravadigital/jiku-docs/internal/store"
 )
 
-// History compaction (docs/compactacion-historial-v1.md): every save is a version, and a daily
+// History compaction (docs/history-compaction-v1.md): every save is a version, and a daily
 // process thins out the old ones. Less than KeepAll old, every version stays; up to KeepBlocks,
 // the last version of each editing block; older, the last of each calendar day. Protected
 // versions and the current one are never removed.
