@@ -51,7 +51,7 @@ func (ix *Indexer) Run(ctx context.Context, js jetstream.JetStream, stream, inst
 func (ix *Indexer) consume(ctx context.Context, js jetstream.JetStream, stream, instance string) error {
 	cons, err := js.CreateOrUpdateConsumer(ctx, stream, jetstream.ConsumerConfig{
 		Durable:       Durable,
-		Description:   "jiku-docs: indexador de búsqueda",
+		Description:   "jiku-docs: search indexer",
 		FilterSubject: instance + ".docs-events.v1.document.>",
 		AckPolicy:     jetstream.AckExplicitPolicy,
 		DeliverPolicy: jetstream.DeliverAllPolicy,

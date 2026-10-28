@@ -218,7 +218,7 @@ func BuildContent(n Note, body string) (string, []string) {
 	if present && ferr == nil {
 		var m map[string]any
 		if err := yaml.Unmarshal([]byte(yamlText), &m); err != nil {
-			warnings = append(warnings, "frontmatter de HedgeDoc inválido: se conserva como bloque de código")
+			warnings = append(warnings, "invalid HedgeDoc frontmatter: kept as a code block")
 			rest = "```yaml\n" + yamlText + "```\n\n" + rest
 		} else {
 			for k, v := range m {
@@ -238,7 +238,7 @@ func BuildContent(n Note, body string) (string, []string) {
 		}
 		body = rest
 	} else if present && ferr != nil {
-		warnings = append(warnings, "frontmatter de HedgeDoc sin cierre: se importa como texto")
+		warnings = append(warnings, "unclosed HedgeDoc frontmatter: imported as text")
 	}
 	var slugs []string
 	seen := map[string]bool{}
@@ -298,12 +298,12 @@ func tagsOf(v any) []string {
 func Message(n Note) string {
 	author := n.Owner
 	if author == "" {
-		author = "anónimo"
+		author = "anonymous"
 	}
-	msg := fmt.Sprintf("Importado de HedgeDoc (nota %s). Autor original: %s. Creada: %s.", n.ID, author,
+	msg := fmt.Sprintf("Imported from HedgeDoc (note %s). Original author: %s. Created: %s.", n.ID, author,
 		n.CreatedAt.UTC().Format("2006-01-02 15:04"))
 	if n.LastEditor != "" {
-		msg += fmt.Sprintf(" Última edición: %s por %s.", n.UpdatedAt.UTC().Format("2006-01-02 15:04"), n.LastEditor)
+		msg += fmt.Sprintf(" Last edited: %s by %s.", n.UpdatedAt.UTC().Format("2006-01-02 15:04"), n.LastEditor)
 	}
 	if r := []rune(msg); len(r) > 500 {
 		msg = string(r[:500])
@@ -436,7 +436,7 @@ func NormalizeTopics(topics []string) ([]string, error) {
 	for _, t := range topics {
 		s := markdown.NormalizeTopic(t)
 		if s == "" {
-			return nil, fmt.Errorf("el tema %q queda vacío al normalizarlo", t)
+			return nil, fmt.Errorf("the topic %q is empty once normalised", t)
 		}
 		if !seen[s] {
 			seen[s] = true
@@ -467,10 +467,19 @@ func WithoutRelation(rel markdown.Relations, entityType string, id int64) (markd
 
 // ReimportMessage is the message of a version written by a later run of the import.
 func ReimportMessage(n Note) string {
-	return fmt.Sprintf("Reimportado de HedgeDoc (nota %s): contenido, relaciones y temas de la planilla actualizados.", n.ID)
+	return fmt.Sprintf("Re-imported from HedgeDoc (note %s): content, relations and topics of the mapping sheet updated.", n.ID)
 }
+
+// importPrefixes are the prefixes of the messages the import writes. The Spanish ones are those of
+// 1.0.0: a note imported by it is still recognised as untouched on a later run.
+var importPrefixes = []string{"Imported from HedgeDoc", "Re-imported from HedgeDoc", "Importado de HedgeDoc", "Reimportado de HedgeDoc"}
 
 // IsImportMessage reports whether a version message was written by the import.
 func IsImportMessage(msg string) bool {
-	return strings.HasPrefix(msg, "Importado de HedgeDoc") || strings.HasPrefix(msg, "Reimportado de HedgeDoc")
+	for _, p := range importPrefixes {
+		if strings.HasPrefix(msg, p) {
+			return true
+		}
+	}
+	return false
 }

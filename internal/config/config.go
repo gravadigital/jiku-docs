@@ -40,7 +40,7 @@ type Config struct {
 	S3AccessKey      string
 	S3SecretKey      string
 	S3PathStyle      bool
-	// TrashRetentionDays: how long papelera/ keeps what the service removes (lifecycle rule set
+	// TrashRetentionDays: how long trash/ keeps what the service removes (lifecycle rule set
 	// by `storage init`).
 	TrashRetentionDays int
 

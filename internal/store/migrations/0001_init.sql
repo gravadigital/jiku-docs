@@ -23,7 +23,7 @@ CREATE TABLE folders (
   id               text PRIMARY KEY,                 -- ULID
   parent_id        text REFERENCES folders(id),
   name             text NOT NULL,
-  path             text NOT NULL,                    -- materialised: '/clientes/acme/pzt/'
+  path             text NOT NULL,                    -- materialised: '/clients/acme/pzt/'
   inherit_acl      boolean NOT NULL DEFAULT true,
   external_blocked boolean NOT NULL DEFAULT false,   -- effective = OR with the ancestors
   sharing_blocked  boolean NOT NULL DEFAULT false,   -- effective = OR with the ancestors

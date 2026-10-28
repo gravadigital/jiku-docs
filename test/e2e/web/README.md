@@ -1,87 +1,93 @@
-# e2e en navegador: web y opus-web
+# Browser e2e: web and opus-web
 
-Recorre con Playwright (Chromium) la integración de jiku-docs en la web interna y en opus-web,
-con usuarios humanos reales del Zitadel hosteado, contra el stack local levantado. Cubre el modelo
-de P-1 (documentación sin carpetas, contrato 1.3.0): buscador con filtros como tokens, alta sin
-carpeta, edición por campos, historial, compartir, "Sin proyecto", cards de proyecto, requisito y
-tarea, y que un `restricted` no existe para un `user` ni para un externo.
+Runs with Playwright (Chromium) through the jiku-docs integration in the internal web and in
+opus-web, with real human users of the hosted Zitadel, against the local stack once it is up. It
+covers the P-1 model (documentation without folders, contract 1.3.0): search box with filters as
+tokens, creation without a folder, editing by fields, history, sharing, "Sin proyecto" (no
+project), project, requirement and task cards, and that a `restricted` document does not exist for
+a `user` or for an external person.
 
-## Correr
+The web UI is in Spanish (it lives in another repo): the selectors and assertions on its texts
+("Ver todos", "Asignar proyecto"…) stay in Spanish on purpose.
+
+## Running
 
 ```sh
 cd test/e2e/web
-npm install                       # playwright; usa el Chromium de ~/.cache/ms-playwright
-npx playwright install chromium   # solo si no está
-E2E_CLI_DOCS="/ruta/a/as.sh docs" node run.mjs --down       # todo, con módulo caído
-node run.mjs --only opus --down                              # solo opus-web, con módulo caído
-node run.mjs --only web --steps W1,W3,W4                      # depurar escenarios sueltos
+npm install                       # playwright; uses the Chromium in ~/.cache/ms-playwright
+npx playwright install chromium   # only if it is missing
+E2E_CLI_DOCS="/path/to/as.sh docs" node run.mjs --down      # everything, with the module down
+node run.mjs --only opus --down                              # opus-web only, with the module down
+node run.mjs --only web --steps W1,W3,W4                      # debug single scenarios
 ```
 
-- `--only opus|public|web`: una suite. `--down`: incluye el escenario de módulo caído (hace
-  `docker stop`/`docker start` de `jiku-docs-local`; siempre lo vuelve a levantar). `--headed`.
-  `--steps`: solo esos ids (los que dependen de otro escenario fallan; W1/O1 hacen el login; W4,
-  W5, W6, W11, W12 y W13 usan el documento que crea W3). `--keep`: no borra los datos de la corrida.
-- Credenciales: `.local/test-users.env` del repo (o `$TEST_USERS_ENV`) con `WEB_USER_LOGIN`,
-  `WEB_USER_PASSWORD` (rol `user`) y `WEB_EXTERNAL_LOGIN`, `WEB_EXTERNAL_PASSWORD`
-  (`external-user`). El script nunca las imprime y las tapa en las capturas.
-- `E2E_CLI_DOCS` (antes `E2E_CLI_ADMIN`, que se sigue aceptando): comando que corre `jiku` como
-  el machine user del **servicio** jiku-docs (`internal-app` + `docs`, clase `service`: lee y
-  escribe todo). Prepara datos, cambia ACL, crea y revoca links y hace de "otra persona" en los
-  conflictos (queda como autor con `via: service`). No hace falta ninguna persona `admin`. Sin él,
-  los pasos que lo necesitan quedan "no probado". Un wrapper mínimo:
+- `--only opus|public|web`: one suite. `--down`: includes the module-down scenario (it does
+  `docker stop`/`docker start` of `jiku-docs-local`; it always brings it back up). `--headed`.
+  `--steps`: only those ids (the ones that depend on another scenario fail; W1/O1 do the login; W4,
+  W5, W6, W11, W12 and W13 use the document W3 creates). `--keep`: does not delete the data of the
+  run.
+- Credentials: `.local/test-users.env` of the repo (or `$TEST_USERS_ENV`) with `WEB_USER_LOGIN`,
+  `WEB_USER_PASSWORD` (role `user`) and `WEB_EXTERNAL_LOGIN`, `WEB_EXTERNAL_PASSWORD`
+  (`external-user`). The script never prints them and masks them in the screenshots.
+- `E2E_CLI_DOCS` (formerly `E2E_CLI_ADMIN`, still accepted): command that runs `jiku` as the
+  machine user of the jiku-docs **service** (`internal-app` + `docs`, class `service`: reads and
+  writes everything). It prepares data, changes ACLs, creates and revokes share links and plays
+  "another person" in the conflicts (recorded as the author with `via: service`). No `admin`
+  person is needed. Without it, the steps that need it end up "not tested". A minimal wrapper:
 
   ```sh
   #!/usr/bin/env bash
-  # as.sh docs <args de jiku...>
+  # as.sh docs <jiku args...>
   export JIKU_SERVERS=nats://localhost:4222 JIKU_INSTANCE=dev JIKU_ISSUER=https://id.grava.io \
     JIKU_CREDS=<jiku>/deploy/nats/creds/sentinel-client.creds JIKU_PROJECT_ID=<zitadel.project_id> \
-    JIKU_CONFIG_DIR=<dir propio> JIKU_KEY_FILE=<jiku-docs>/.local/jiku_docs.service_user.json
+    JIKU_CONFIG_DIR=<own dir> JIKU_KEY_FILE=<jiku-docs>/.local/jiku_docs.service_user.json
   shift; exec <jiku-go>/bin/jiku "$@"
   ```
 
-  Las personas de la web entran con usuario y contraseña (no necesitan token del CLI). Para usar
-  las mismas personas desde el CLI (p. ej. `test/e2e/local-bus.sh`), `device-login.mjs` obtiene su
-  token del device flow; ver `../README.md`.
-- Salida: capturas y `resultados.md` en `.local/e2e-web/<fecha>/` (o `$E2E_OUT`). No guardar
-  capturas fuera de `.local/` o de un directorio temporal.
+  The web persons log in with user and password (they do not need a CLI token). To use the same
+  persons from the CLI (e.g. `test/e2e/local-bus.sh`), `device-login.mjs` obtains their
+  device-flow token; see `../README.md`.
+- Output: screenshots and `results.md` in `.local/e2e-web/<date>/` (or `$E2E_OUT`). Do not keep
+  screenshots outside `.local/` or a temporary directory.
 - URLs: `E2E_WEB_URL` (3000), `E2E_OPUS_URL` (3001), `E2E_PUBLIC_URL` (`http://127.0.0.1:3100`).
-- Código de salida: 0 todo ok, 1 alguna falla, 2 sin fallas pero con escenarios "no probado".
-  Estado "bug jiku": el escenario encontró un bug conocido de Jiku (lista `KNOWN` en `run.mjs`,
-  con el síntoma exacto que se verifica) y probó el resto; no cuenta como falla salvo con
-  `E2E_STRICT=1`. Cuando el bug se arregla, el escenario vuelve a "ok" solo.
-- La web habla con la api por **Server Actions** de Next (POST a la propia página con la cabecera
-  `next-action`), no con `fetch` del navegador: los escenarios miran la UI, el cuerpo de esos POST
-  y el estado en jiku-docs (por el CLI del servicio), no `/api/docs/*` en la red. Solo
-  `/docs/attachments/{id}` y el `unlock` con keepalive son rutas HTTP del navegador.
-- Los enlaces del contenido abren en otra pestaña; un enlace relativo a otro documento
-  (`/docs/{id}`) queda sin `href` (el visor solo deja http(s), mailto y adjuntos).
-- Si Zitadel pide cambiar la contraseña inicial de un usuario, la suite no la cambia: marca su
-  parte como "no probado". Entrar una vez a mano, cambiarla y actualizar el `.env`.
-- O10 quita y devuelve el `project-permissions` del externo sobre el proyecto (SQL en
-  `jiku-local-database`, o `$E2E_JIKU_DB_CONTAINER`). El id (de Zitadel) sale de
-  `user.zitadelId` de la sesión, o de `E2E_EXTERNAL_USER_ID`.
-- Datos de la corrida: al empezar, el servicio (`E2E_CLI_DOCS`) crea sin carpeta un documento
-  `restricted` vinculado al proyecto, a los requisitos 54 y 15 y a la tarea (con tema, palabra y
-  adjunto propios) y dos `internal` sin proyecto (uno nombra el proyecto en el título, para
-  "Asignar sugerido"). Todo lo que crea la suite, también desde la UI, lleva el prefijo `e2e-p1 `
-  y una marca única por corrida, y se borra al terminar (`docs rm`, recuperable) salvo con `--keep`.
-- Los bugs de Jiku conocidos van en `KNOWN` (`JIKU-WEB-1` a `JIKU-WEB-5`); el escenario que los
-  encuentra queda "bug jiku" con el detalle y sigue probando el resto.
-- A 390 px la web tiene scroll horizontal por el layout general (fuera del alcance de P-1): W15 lo
-  informa como observación, sin fallar.
+- Exit code: 0 all ok, 1 some failure, 2 no failures but with "not tested" scenarios.
+  "jiku bug" status: the scenario found a known Jiku bug (`KNOWN` list in `run.mjs`, with the
+  exact symptom that is checked) and tested the rest; it does not count as a failure unless
+  `E2E_STRICT=1`. When the bug is fixed, the scenario goes back to "ok" by itself.
+- The web talks to the api through Next **Server Actions** (POST to the page itself with the
+  `next-action` header), not with browser `fetch`: the scenarios look at the UI, the body of those
+  POSTs and the state in jiku-docs (through the service CLI), not `/api/docs/*` on the network.
+  Only `/docs/attachments/{id}` and the keepalive `unlock` are browser HTTP routes.
+- Links in the content open in another tab; a relative link to another document (`/docs/{id}`)
+  is left without `href` (the viewer only keeps http(s), mailto and attachments).
+- If Zitadel asks to change the initial password of a user, the suite does not change it: it
+  marks its part as "not tested". Log in once by hand, change it and update the `.env`.
+- O10 removes and gives back the external person's `project-permissions` on the project (SQL in
+  `jiku-local-database`, or `$E2E_JIKU_DB_CONTAINER`). The (Zitadel) id comes from
+  `user.zitadelId` of the session, or from `E2E_EXTERNAL_USER_ID`.
+- Data of the run: at the start, the service (`E2E_CLI_DOCS`) creates without a folder a
+  `restricted` document related to the project, to requirements 54 and 15 and to the task (with
+  its own topic, word and attachment) and two `internal` ones without a project (one names the
+  project in its title, for "Asignar sugerido" (assign suggested)). Everything the suite creates,
+  also from the UI, carries the prefix `e2e-p1 ` and a unique mark per run, and is deleted at the
+  end (`docs rm`, recoverable) unless `--keep`.
+- The known Jiku bugs go in `KNOWN` (`JIKU-WEB-1` to `JIKU-WEB-5`); the scenario that finds them
+  ends up "jiku bug" with the detail and keeps testing the rest.
+- At 390 px the web has horizontal scroll because of the general layout (outside the scope of
+  P-1): W15 reports it as an observation, without failing.
 
-## Datos que espera
+## Data it expects
 
-Los que deja `test/e2e/local-bus.sh` con el stack local: proyecto 43 `EXO - Videoconferencia`
-(cliente 1 `EXO`; requisitos 54 internal y 15 public, tarea 2716), los documentos y adjuntos cuyos
-ids están en `D` al principio de `run.mjs` (sobrescribibles por variables `E2E_*`; tras la
-migración de P-1 `Servidor de staging` quedó `internal`), más de 20 documentos "Sin proyecto" (para
-el paginado) y notas importadas de HedgeDoc (W15): la nota con imagen `Opus / Arquitectura del
-sistema` y el enlace `Versión 1` de `Wecerty.md`. Además:
+The data `test/e2e/local-bus.sh` leaves with the local stack: project 43 `EXO - Videoconferencia`
+(client 1 `EXO`; requirements 54 internal and 15 public, task 2716), the documents and attachments
+whose ids are in `D` at the top of `run.mjs` (overridable with `E2E_*` variables; after the P-1
+migration `Servidor de staging` became `internal`), more than 20 "Sin proyecto" (no project)
+documents (for pagination) and notes imported from HedgeDoc (W15): the note with an image
+`Opus / Arquitectura del sistema` and the link `Versión 1` of `Wecerty.md`. Also:
 
-- El externo tiene que tener `project-permissions` sobre el proyecto 43
-  (`user_project_permissions` en la base de Jiku).
-- La fila de cada humano en `users` de core tiene que tener sus roles. Core solo la espeja en el
-  evento del auth-callout (NATS) o cuando la api manda un **comando** en su nombre; un humano que
-  solo navegó la web nunca la actualiza y jiku-docs le responde `caller_not_authorized`. Para
-  forzar el espejo basta con una acción que sea comando (p. ej. suscribirse a un requisito).
+- The external person must have `project-permissions` on project 43
+  (`user_project_permissions` in the Jiku database).
+- The row of each human in core's `users` must have their roles. Core only mirrors it on the
+  auth-callout event (NATS) or when the api sends a **command** on their behalf; a human who only
+  browsed the web never updates it and jiku-docs answers `caller_not_authorized`. To force the
+  mirror, any action that is a command is enough (e.g. subscribing to a requirement).

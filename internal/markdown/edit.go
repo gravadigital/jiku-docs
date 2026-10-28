@@ -2,6 +2,7 @@ package markdown
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
@@ -53,7 +54,7 @@ func topBlocks(yamlText string) (blocks []keyBlock, root *yaml.Node, flow bool, 
 	}
 	root = doc.Content[0]
 	if root.Kind != yaml.MappingNode {
-		return nil, nil, false, fmt.Errorf("el frontmatter tiene que ser un mapa de claves")
+		return nil, nil, false, errors.New("the frontmatter must be a mapping of keys")
 	}
 	if root.Style&yaml.FlowStyle != 0 {
 		return nil, root, true, nil
@@ -148,7 +149,7 @@ func replaceKey(content, key, block string, atStart bool, node func(root *yaml.N
 // document has none. Every other line stays as it is.
 func SetVisibility(content, visibility string) (string, error) {
 	if !ValidVisibility(visibility) {
-		return "", fmt.Errorf("visibilidad desconocida %q", visibility)
+		return "", fmt.Errorf("unknown visibility %q", visibility)
 	}
 	return replaceKey(content, "visibility", "visibility: "+visibility+"\n", true, func(root *yaml.Node) {
 		setMapKey(root, "visibility", &yaml.Node{Kind: yaml.ScalarNode, Value: visibility})

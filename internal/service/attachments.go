@@ -108,7 +108,7 @@ func (s *Service) RequestAttachmentUpload(ctx context.Context, c *Call, in Attac
 		same := existing.DocumentID == in.DocumentID && existing.FileName == in.FileName && existing.MimeType == in.MimeType &&
 			existing.Size == in.Size && existing.Checksum == in.Checksum && existing.UploadedBy == c.Caller.ID
 		if !same || existing.Status != "pending" {
-			return nil, protocol.Ef(protocol.CodeAlreadyExists, "Ya existe un adjunto con ese id")
+			return nil, protocol.Ef(protocol.CodeAlreadyExists, "An attachment with that id already exists")
 		}
 	}
 	ticket, err := s.Core.RequestUpload(ctx, in.FileName, in.MimeType, in.Size, checksumHex(in.Checksum))
@@ -156,7 +156,7 @@ func (s *Service) ConfirmAttachment(ctx context.Context, c *Call, id string) (ma
 		return nil, protocol.E(protocol.CodeAttachmentNotFound)
 	}
 	if a.UploadedBy != c.Caller.ID {
-		return nil, protocol.Ef(protocol.CodePermissionDenied, "Solo quien pidió la subida puede confirmarla")
+		return nil, protocol.Ef(protocol.CodePermissionDenied, "Only whoever requested the upload can confirm it")
 	}
 	ready := map[string]any{"id": id, "status": "ready"}
 	if a.Status == "ready" {
@@ -218,7 +218,7 @@ func (s *Service) hashURL(ctx context.Context, u string, max int64) (string, int
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode == http.StatusNotFound || resp.StatusCode == http.StatusForbidden {
-		return "", 0, protocol.Ef(protocol.CodeUploadNotFound, "El archivo todavía no se subió a la URL")
+		return "", 0, protocol.Ef(protocol.CodeUploadNotFound, "The file has not been uploaded to the URL yet")
 	}
 	if resp.StatusCode != http.StatusOK {
 		return "", 0, fmt.Errorf("%w: storage answered %d", coreapi.ErrUnavailable, resp.StatusCode)

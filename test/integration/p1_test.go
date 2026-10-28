@@ -25,12 +25,12 @@ func newDoc(e *tu.Env, user string, p map[string]any) map[string]any {
 func TestGeneratedLocation(t *testing.T) {
 	e := tu.NewEnv(t)
 	cases := []struct{ content, path string }{
-		{"---\njiku:\n  projects: [12]\n---\n# Minuta de kickoff\n", "/clientes/acme-s-a/exo-videoconferencia/minuta-de-kickoff.md"},
-		{"---\njiku:\n  projects: [12]\n---\n# Minuta de kickoff\n\notra\n", "/clientes/acme-s-a/exo-videoconferencia/minuta-de-kickoff-2.md"},
-		{"---\njiku:\n  clients: [4]\n---\n# Acuerdo marco\n", "/clientes/acme-s-a/general/acuerdo-marco.md"},
-		{"---\njiku:\n  projects: [31, 12]\n  clients: [4]\n---\n# Varios proyectos\n", "/clientes/acme-s-a/portal-zeta/varios-proyectos.md"},
+		{"---\njiku:\n  projects: [12]\n---\n# Minuta de kickoff\n", "/clients/acme-s-a/exo-videoconferencia/minuta-de-kickoff.md"},
+		{"---\njiku:\n  projects: [12]\n---\n# Minuta de kickoff\n\notra\n", "/clients/acme-s-a/exo-videoconferencia/minuta-de-kickoff-2.md"},
+		{"---\njiku:\n  clients: [4]\n---\n# Acuerdo marco\n", "/clients/acme-s-a/general/acuerdo-marco.md"},
+		{"---\njiku:\n  projects: [31, 12]\n  clients: [4]\n---\n# Varios proyectos\n", "/clients/acme-s-a/portal-zeta/varios-proyectos.md"},
 		{"---\ntitle: Guía de estilo\n---\nsin encabezado\n", "/general/guia-de-estilo.md"},
-		{"sin título\n", "/general/documento.md"},
+		{"sin título\n", "/general/document.md"},
 	}
 	for _, c := range cases {
 		r := newDoc(e, tu.User, map[string]any{"content": c.content})
@@ -38,9 +38,9 @@ func TestGeneratedLocation(t *testing.T) {
 			t.Errorf("%q: got %v, want %s", c.content, r, c.path)
 		}
 	}
-	// A project without a client goes under sin-cliente.
+	// A project without a client goes under no-client.
 	r := newDoc(e, tu.User, map[string]any{"content": "---\njiku:\n  projects: [31]\n---\n# Portal\n"})
-	if r["path"] != "/clientes/sin-cliente/portal-zeta/portal.md" {
+	if r["path"] != "/clients/no-client/portal-zeta/portal.md" {
 		t.Fatal(r)
 	}
 	// A given folderId with a generated name, and a given name with a generated folder.
@@ -59,7 +59,7 @@ func TestGeneratedLocation(t *testing.T) {
 	}
 	// The generated folders exist and were announced; a user still cannot create one by hand.
 	e.WaitEvent("folder.created", func(ev tu.Event) bool {
-		return ev.Body["entity"].(map[string]any)["path"] == "/clientes/acme-s-a/exo-videoconferencia/"
+		return ev.Body["entity"].(map[string]any)["path"] == "/clients/acme-s-a/exo-videoconferencia/"
 	})
 	// Changing relations later does not move the document.
 	id := first["id"].(string)
@@ -85,7 +85,7 @@ func TestRelationsUpdate(t *testing.T) {
 		t.Fatalf("frontmatter:\n%s", g["content"])
 	}
 	v := e.Q(tu.User, "documents.versions.list", map[string]any{"filter": map[string]any{"documentId": id}}).Items()
-	if v[0]["kind"] != "update" || v[0]["message"] != "Cliente asignado: Acmé S.A.; Proyecto asignado: EXO - Videoconferencia" || v[0]["authorName"] != "Usuario" || v[0]["via"] != "human" {
+	if v[0]["kind"] != "update" || v[0]["message"] != "Client assigned: Acmé S.A.; Project assigned: EXO - Videoconferencia" || v[0]["authorName"] != "Usuario" || v[0]["via"] != "human" {
 		t.Fatalf("version %v", v[0])
 	}
 	// Idempotent: nothing to change is success with the current version, even with a stale base.
@@ -130,10 +130,10 @@ func TestSuggestRelations(t *testing.T) {
 		t.Fatalf("%v", items)
 	}
 	first, second, third := items[0], items[1], items[2]
-	if first["projectId"].(float64) != 12 || first["clientId"].(float64) != 4 || first["reason"] != "El título menciona «Videoconferencia»" {
+	if first["projectId"].(float64) != 12 || first["clientId"].(float64) != 4 || first["reason"] != "The title mentions “Videoconferencia”" {
 		t.Fatalf("title weighs more: %v", items)
 	}
-	if second["projectId"].(float64) != 31 || second["clientId"] != nil || !strings.Contains(second["reason"].(string), "(2 veces)") || second["score"].(float64) >= first["score"].(float64) {
+	if second["projectId"].(float64) != 31 || second["clientId"] != nil || !strings.Contains(second["reason"].(string), "(2 times)") || second["score"].(float64) >= first["score"].(float64) {
 		t.Fatalf("content: %v", second)
 	}
 	if third["projectId"] != nil || third["clientId"].(float64) != 7 {
@@ -168,13 +168,13 @@ func TestFiltersMatchAndNames(t *testing.T) {
 		return ids(e.Q(tu.User, "documents.list", map[string]any{"filter": filter, "sort": []string{"path"}}), "id")
 	}
 	if got := list(map[string]any{"hasProject": false}); got != none {
-		t.Errorf("Sin proyecto: %s", got)
+		t.Errorf("no project: %s", got)
 	}
 	if got := list(map[string]any{"hasProject": true}); got != direct+","+viaReq {
 		t.Errorf("hasProject: %s", got)
 	}
 	if got := list(map[string]any{"hasClient": false}); got != none+","+viaReq {
-		t.Errorf("Sin cliente: %s", got)
+		t.Errorf("no client: %s", got)
 	}
 	if got := list(map[string]any{"hasTopic": true}); got != direct {
 		t.Errorf("hasTopic: %s", got)
@@ -215,7 +215,7 @@ func TestFiltersMatchAndNames(t *testing.T) {
 		}
 	}
 	if got := ids(e.Q(tu.User, "documents.search", map[string]any{"query": "aduana", "filter": map[string]any{"hasProject": false}}), "documentId"); got != none {
-		t.Errorf("search Sin proyecto: %s", got)
+		t.Errorf("search no project: %s", got)
 	}
 	// Names of the service and of the api.
 	sid := tu.ID()
@@ -247,9 +247,9 @@ func TestMigrationP1(t *testing.T) {
 	ctx := context.Background()
 	open := e.Folder("", "abierta", nil)
 	e.ACL(open, tu.Rule("role", "user", "write"))
-	importado := e.Folder("", "importado", map[string]any{"inheritAcl": false})
-	e.ACL(importado, tu.Rule("role", "admin", "manage"))
-	sub := e.Folder(importado, "sub", nil) // inherits the closed one
+	imported := e.Folder("", "imported", map[string]any{"inheritAcl": false})
+	e.ACL(imported, tu.Rule("role", "admin", "manage"))
+	sub := e.Folder(imported, "sub", nil) // inherits the closed one
 	perUser := e.Folder("", "por-usuario", map[string]any{"inheritAcl": false})
 	e.ACL(perUser, tu.Rule("user", tu.User, "write")) // a rule for one user id does not count
 	infra := e.Folder("", "infra", map[string]any{"inheritAcl": false, "externalBlocked": true})
@@ -257,11 +257,11 @@ func TestMigrationP1(t *testing.T) {
 	srv := e.Folder(infra, "servidores", nil)
 	rootDoc := e.Doc(tu.Admin, protocol.RootFolderID, "raiz.md", "# Raíz\n") // the root is admin-only
 	keep := e.Doc(tu.Admin, open, "abierto.md", "---\nvisibility: public\njiku:\n  projects: [12]\n---\n# Abierto\n")
-	imp := e.Doc(tu.Connector, importado, "nota.md", "---\ntitle: Nota\nhedgedoc:\n  id: x\n---\ncuerpo\n")
+	imp := e.Doc(tu.Connector, imported, "nota.md", "---\ntitle: Nota\nhedgedoc:\n  id: x\n---\ncuerpo\n")
 	deep := e.Doc(tu.Connector, sub, "honda.md", "sin frontmatter\n")
 	pu := e.Doc(tu.Admin, perUser, "pu.md", "# PU\n")
 	blocked := e.Doc(tu.Admin, srv, "srv.md", "---\nvisibility: public\njiku:\n  projects: [12]\n---\n# Srv\n")
-	gone := e.Doc(tu.Admin, importado, "borrado.md", "# Borrado\n")
+	gone := e.Doc(tu.Admin, imported, "borrado.md", "# Borrado\n")
 	e.OK(e.Cmd(tu.Admin, "documents."+gone+".delete", map[string]any{"baseVersion": 1}))
 	exp := time.Now().Add(24 * time.Hour).UTC().Format(time.RFC3339)
 	sh := e.OK(e.Cmd(tu.Admin, "shares.new", map[string]any{"id": tu.ID(), "documentId": imp, "mode": "latest", "expiresAt": exp}))
@@ -301,7 +301,7 @@ func TestMigrationP1(t *testing.T) {
 		t.Fatalf("no frontmatter: %q", d["content"])
 	}
 	v := e.Q(tu.Admin, "documents.versions.list", map[string]any{"filter": map[string]any{"documentId": blocked}}).Items()
-	if v[0]["via"] != "service" || !strings.HasPrefix(v[0]["message"].(string), "Migración P-1") || v[0]["protected"] != true {
+	if v[0]["via"] != "service" || !strings.HasPrefix(v[0]["message"].(string), "P-1 migration") || v[0]["protected"] != true {
 		t.Fatal(v[0])
 	}
 	e.Fail(e.Q(tu.User, "documents.get", map[string]any{"id": imp}), protocol.CodeDocumentNotFound)

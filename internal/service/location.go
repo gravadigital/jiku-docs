@@ -17,12 +17,12 @@ import (
 // document from its relations, creating the folders that are missing. Changing relations later
 // never moves it: the location does not matter to persons, only to the CLI and the sync daemon.
 //
-//	with a project:          /clientes/<client>/<project>/
-//	with a client only:      /clientes/<client>/general/
+//	with a project:          /clients/<client>/<project>/
+//	with a client only:      /clients/<client>/general/
 //	neither:                 /general/
 //
 // The client of a project comes from core (projects.clientId), else from the first of
-// jiku.clients; a project without any client goes to /clientes/sin-cliente/<project>/.
+// jiku.clients; a project without any client goes to /clients/no-client/<project>/.
 
 // maxSlug is the length of a generated folder or file name (folder names allow 120).
 const maxSlug = 100
@@ -48,17 +48,17 @@ func (s *Service) generatedPath(ctx context.Context, fm markdown.Frontmatter) ([
 		}
 		for _, cl := range clients {
 			if cl.ID == id {
-				return slugOr(cl.Name, "cliente-"+strconv.FormatInt(id, 10)), nil
+				return slugOr(cl.Name, "client-"+strconv.FormatInt(id, 10)), nil
 			}
 		}
-		return "cliente-" + strconv.FormatInt(id, 10), nil
+		return "client-" + strconv.FormatInt(id, 10), nil
 	}
 	if projectID == 0 {
 		cs, err := clientName(clientID)
 		if err != nil {
 			return nil, err
 		}
-		return []string{"clientes", cs, "general"}, nil
+		return []string{"clients", cs, "general"}, nil
 	}
 	projects, err := s.Core.Projects(ctx)
 	if err != nil {
@@ -70,20 +70,20 @@ func (s *Service) generatedPath(ctx context.Context, fm markdown.Frontmatter) ([
 			project = &projects[i]
 		}
 	}
-	ps := "proyecto-" + strconv.FormatInt(projectID, 10)
+	ps := "project-" + strconv.FormatInt(projectID, 10)
 	if project != nil {
 		ps = slugOr(project.Name, ps)
 		if project.ClientID != nil && *project.ClientID > 0 {
 			clientID = *project.ClientID
 		}
 	}
-	cs := "sin-cliente"
+	cs := "no-client"
 	if clientID != 0 {
 		if cs, err = clientName(clientID); err != nil {
 			return nil, err
 		}
 	}
-	return []string{"clientes", cs, ps}, nil
+	return []string{"clients", cs, ps}, nil
 }
 
 func slugOr(name, fallback string) string {
@@ -148,7 +148,7 @@ func (s *Service) folderAt(ctx context.Context, c *Call, parentID, name, path st
 
 // freeFileName is `<slug of the title>.md`, or `-2`, `-3`, ... until it is free in the folder.
 func (s *Service) freeFileName(ctx context.Context, folderID, title string) (string, error) {
-	base := slugOr(title, "documento")
+	base := slugOr(title, "document")
 	rows, err := s.DB.Query(ctx, `SELECT lower(file_name) FROM documents WHERE folder_id = $1 AND deleted_at IS NULL
 		AND lower(file_name) LIKE $2 ESCAPE '\'`, folderID, likePrefix(strings.ToLower(base)))
 	if err != nil {

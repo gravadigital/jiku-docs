@@ -106,12 +106,12 @@ func TestResolveNamesCoreDownBacksOff(t *testing.T) {
 func TestFillNames(t *testing.T) {
 	s, core, _ := namesService()
 	items := []map[string]any{
-		{"createdBy": "ana", "createdByName": nil, "updatedBy": "bruno", "updatedByName": "Guardado"},
+		{"createdBy": "ana", "createdByName": nil, "updatedBy": "bruno", "updatedByName": "Stored"},
 		{"createdBy": "nadie", "createdByName": nil, "updatedBy": "ana"}, // updatedByName not projected
 		{"updatedBy": "", "updatedByName": nil},
 	}
 	s.fillNames(context.Background(), items, docNamePairs...)
-	if items[0]["createdByName"] != "Ana Pérez" || items[0]["updatedByName"] != "Guardado" {
+	if items[0]["createdByName"] != "Ana Pérez" || items[0]["updatedByName"] != "Stored" {
 		t.Errorf("item 0: %v", items[0])
 	}
 	if items[1]["createdByName"] != nil {

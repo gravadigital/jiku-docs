@@ -5,8 +5,8 @@ import "testing"
 func tree() *Tree {
 	return NewTree(1, []*Folder{
 		{ID: "root", Path: "/", Rules: []Rule{{"role", "admin", "manage"}}},
-		{ID: "clientes", ParentID: "root", Path: "/clientes/", InheritACL: true, Rules: []Rule{{"role", "user", "read"}}},
-		{ID: "acme", ParentID: "clientes", Path: "/clientes/acme/", InheritACL: true, Rules: []Rule{{"user", "u1", "write"}}},
+		{ID: "clients", ParentID: "root", Path: "/clients/", InheritACL: true, Rules: []Rule{{"role", "user", "read"}}},
+		{ID: "acme", ParentID: "clients", Path: "/clients/acme/", InheritACL: true, Rules: []Rule{{"user", "u1", "write"}}},
 		{ID: "infra", ParentID: "root", Path: "/infra/", InheritACL: false, ExternalBlocked: true, SharingBlocked: true,
 			Rules: []Rule{{"user", "u2", "manage"}}},
 		{ID: "srv", ParentID: "infra", Path: "/infra/srv/", InheritACL: true},
@@ -23,7 +23,7 @@ func TestPermission(t *testing.T) {
 		{Principal{UserID: "a", Roles: []string{"admin"}}, "acme", Manage},
 		{Principal{UserID: "a", Roles: []string{"admin"}}, "infra", None}, // inheritAcl=false cuts the root rule
 		{Principal{UserID: "u1", Roles: []string{"user"}}, "acme", Write},
-		{Principal{UserID: "u1", Roles: []string{"user"}}, "clientes", Read},
+		{Principal{UserID: "u1", Roles: []string{"user"}}, "clients", Read},
 		{Principal{UserID: "u3", Roles: []string{"user"}}, "acme", Read},
 		{Principal{UserID: "u2", Roles: []string{"user"}}, "srv", Manage},
 		{Principal{UserID: "u9"}, "acme", None},
@@ -42,10 +42,10 @@ func TestInheritedFlags(t *testing.T) {
 	if !tr.ExternalBlocked("srv") || !tr.SharingBlocked("srv") || tr.SharingBlocked("acme") {
 		t.Error("flags must be inherited from ancestors")
 	}
-	if !tr.IsSelfOrDescendant("acme", "clientes") || tr.IsSelfOrDescendant("clientes", "acme") {
+	if !tr.IsSelfOrDescendant("acme", "clients") || tr.IsSelfOrDescendant("clients", "acme") {
 		t.Error("descendant check")
 	}
-	if got := tr.Subtree("clientes"); len(got) != 2 {
+	if got := tr.Subtree("clients"); len(got) != 2 {
 		t.Errorf("subtree %v", got)
 	}
 	if f, ok := tr.ByPath("/infra/srv"); !ok || f.ID != "srv" {

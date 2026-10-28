@@ -1,6 +1,6 @@
 // Package hedgedoc imports the notes of a HedgeDoc 1.x database (decision D-9): it reads a MariaDB
 // loaded with the dump, applies a mapping sheet (note -> folder; unmapped notes go to
-// /importado/, readable by administrators only), creates each document as the jiku-docs service
+// /imported/, readable by administrators only), creates each document as the jiku-docs service
 // with its original dates and author, uploads the images as attachments through core's file
 // service (D-3), rewrites links and reports notes that look like they contain secrets.
 //

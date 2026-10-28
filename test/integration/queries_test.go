@@ -24,15 +24,15 @@ func actor(id string, roles ...string) map[string]any {
 
 func TestListFiltersAndPagination(t *testing.T) {
 	e := tu.NewEnv(t)
-	clientes := e.Folder("", "clientes", nil)
-	e.ACL(clientes, tu.Rule("role", "user", "write"), tu.Rule("role", "admin", "manage"))
-	acme := e.Folder(clientes, "acme", nil)
+	clients := e.Folder("", "clients", nil)
+	e.ACL(clients, tu.Rule("role", "user", "write"), tu.Rule("role", "admin", "manage"))
+	acme := e.Folder(clients, "acme", nil)
 	interno := e.Folder("", "interno", map[string]any{"inheritAcl": false})
 	var ids []string
 	for i := 0; i < 7; i++ {
 		ids = append(ids, e.Doc(tu.User, acme, fmt.Sprintf("doc-%d.md", i), fm("12", "internal", "infra")+fmt.Sprintf("# Doc %d\n", i)))
 	}
-	reqDoc := e.Doc(tu.User, clientes, "req.md", "---\njiku:\n  requirements: [812]\n---\n# Requisito\n")
+	reqDoc := e.Doc(tu.User, clients, "req.md", "---\njiku:\n  requirements: [812]\n---\n# Requisito\n")
 	e.Doc(tu.Admin, interno, "secreto.md", fm("12", "restricted", "rrhh")+"# Interno\n")
 
 	// projectId includes documents related to requirements of the project; the restricted one is
@@ -67,11 +67,11 @@ func TestListFiltersAndPagination(t *testing.T) {
 		t.Fatalf("paginated %d documents in %d pages", len(seen), pages)
 	}
 	// Filters: path (exact, case-insensitive), pathPrefix, topic, or, fileName prefix, fields, include.
-	one := e.Q(tu.User, "documents.list", map[string]any{"filter": map[string]any{"path": "/CLIENTES/acme/DOC-3.md"}, "fields": []string{"path", "fileName"}, "include": []string{"topics", "relations", "lock"}}).Items()
+	one := e.Q(tu.User, "documents.list", map[string]any{"filter": map[string]any{"path": "/CLIENTS/acme/DOC-3.md"}, "fields": []string{"path", "fileName"}, "include": []string{"topics", "relations", "lock"}}).Items()
 	if len(one) != 1 || one[0]["id"] != ids[3] || one[0]["fileName"] != "doc-3.md" || one[0]["title"] != nil || one[0]["lock"] != nil {
 		t.Fatalf("path filter: %v", one)
 	}
-	if got := len(e.Q(tu.User, "documents.list", map[string]any{"filter": map[string]any{"pathPrefix": "/clientes/acme/"}}).Items()); got != 7 {
+	if got := len(e.Q(tu.User, "documents.list", map[string]any{"filter": map[string]any{"pathPrefix": "/clients/acme/"}}).Items()); got != 7 {
 		t.Errorf("pathPrefix %d", got)
 	}
 	if got := len(e.Q(tu.User, "documents.list", map[string]any{"filter": map[string]any{"or": []any{map[string]any{"requirementId": 812}, map[string]any{"fileName": "DOC-1"}}}}).Items()); got != 2 {
@@ -100,7 +100,7 @@ func TestListFiltersAndPagination(t *testing.T) {
 	if len(root) != 1 || root[0]["id"] != protocol.RootFolderID || root[0]["path"] != "/" {
 		t.Fatalf("root: %v", root)
 	}
-	if got := e.Q(tu.User, "folders.list", map[string]any{"filter": map[string]any{"path": "/Clientes/ACME"}}).Items(); len(got) != 1 || got[0]["id"] != acme {
+	if got := e.Q(tu.User, "folders.list", map[string]any{"filter": map[string]any{"path": "/Clients/ACME"}}).Items(); len(got) != 1 || got[0]["id"] != acme {
 		t.Fatalf("folder path: %v", got)
 	}
 
@@ -136,16 +136,16 @@ func TestMetaDescribe(t *testing.T) {
 
 func TestExternalVisibility(t *testing.T) {
 	e := tu.NewEnv(t)
-	clientes := e.Folder("", "clientes", nil)
+	clients := e.Folder("", "clients", nil)
 	infra := e.Folder("", "infra", map[string]any{"externalBlocked": true})
 	sub := e.Folder(infra, "servidores", nil)
-	visible := e.Doc(tu.Admin, clientes, "publico.md", fm("12", "public", "")+"# Público\naduana\n")
-	viaReq := e.Doc(tu.Admin, clientes, "req.md", "---\nvisibility: public\njiku:\n  requirements: [812]\n---\n# Req\n")
-	e.Doc(tu.Admin, clientes, "interno.md", fm("12", "internal", "")+"# Interno\n")
-	e.Doc(tu.Admin, clientes, "otro-proyecto.md", fm("31", "public", "")+"# Otro\n")
+	visible := e.Doc(tu.Admin, clients, "publico.md", fm("12", "public", "")+"# Público\naduana\n")
+	viaReq := e.Doc(tu.Admin, clients, "req.md", "---\nvisibility: public\njiku:\n  requirements: [812]\n---\n# Req\n")
+	e.Doc(tu.Admin, clients, "interno.md", fm("12", "internal", "")+"# Interno\n")
+	e.Doc(tu.Admin, clients, "otro-proyecto.md", fm("31", "public", "")+"# Otro\n")
 	// P-1: externalBlocked has no effect any more; the visibility decides.
 	blocked := e.Doc(tu.Admin, sub, "srv.md", fm("12", "public", "")+"# Srv\n")
-	hidden := e.Doc(tu.Admin, clientes, "restringido.md", fm("12", "restricted", "")+"# Restringido\n")
+	hidden := e.Doc(tu.Admin, clients, "restringido.md", fm("12", "restricted", "")+"# Restringido\n")
 
 	items := e.Q(tu.External, "documents.list", map[string]any{"sort": []string{"path"}}).Items()
 	if len(items) != 3 || items[0]["id"] != visible || items[1]["id"] != viaReq || items[2]["id"] != blocked {
@@ -177,8 +177,8 @@ func TestExternalVisibility(t *testing.T) {
 // it was internal: those can hold exactly what was removed before publishing it.
 func TestExternalSeesOnlyTheCurrentVersion(t *testing.T) {
 	e := tu.NewEnv(t)
-	clientes := e.Folder("", "clientes", nil)
-	id := e.Doc(tu.Admin, clientes, "acta.md", fm("12", "internal", "")+"# Acta\nnota interna: margen del 40%\n")
+	clients := e.Folder("", "clients", nil)
+	id := e.Doc(tu.Admin, clients, "acta.md", fm("12", "internal", "")+"# Acta\nnota interna: margen del 40%\n")
 	v2 := fm("12", "public", "") + "# Acta\nresumen para el cliente\n"
 	e.OK(e.Cmd(tu.Admin, "documents."+id+".update", map[string]any{"baseVersion": 1, "content": v2, "checksum": tu.Sum(v2)}))
 
@@ -207,10 +207,10 @@ func TestExternalSeesOnlyTheCurrentVersion(t *testing.T) {
 // gets describe the body it receives. Internal people keep the whole file.
 func TestExternalNeverSeesFrontmatter(t *testing.T) {
 	e := tu.NewEnv(t)
-	clientes := e.Folder("", "clientes", nil)
+	clients := e.Folder("", "clients", nil)
 	head := "---\nvisibility: public\njiku:\n  projects: [12]\n  requirements: [812]\n  tasks: [900]\n---\n"
 	body := "# Minuta\nresumen para el cliente\n"
-	id := e.Doc(tu.Admin, clientes, "minuta.md", head+body)
+	id := e.Doc(tu.Admin, clients, "minuta.md", head+body)
 
 	for name, r := range map[string]tu.Resp{
 		"bus": e.Q(tu.External, "documents.get", map[string]any{"id": id, "include": []string{"content"}}),
@@ -250,7 +250,7 @@ func TestExternalNeverSeesFrontmatter(t *testing.T) {
 	up := e.OK(e.Cmd(tu.Admin, "documents.request-content-upload", map[string]any{"checksum": tu.Sum(big), "size": len(big)}))
 	put(t, up["uploadUrl"].(string), []byte(big))
 	bid := tu.ID()
-	e.OK(e.Cmd(tu.Admin, "documents.new", map[string]any{"id": bid, "folderId": clientes, "fileName": "grande.md", "contentUploadId": up["contentUploadId"], "checksum": tu.Sum(big)}))
+	e.OK(e.Cmd(tu.Admin, "documents.new", map[string]any{"id": bid, "folderId": clients, "fileName": "grande.md", "contentUploadId": up["contentUploadId"], "checksum": tu.Sum(big)}))
 	g := e.OK(e.Q(tu.External, "documents.get", map[string]any{"id": bid, "include": []string{"content"}}))
 	if _, inline := g["content"]; inline {
 		t.Fatal("a big body must come as contentUrl")

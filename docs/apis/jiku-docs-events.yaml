@@ -1,45 +1,45 @@
 asyncapi: 3.0.0
 info:
-  title: jiku-docs — eventos y notificaciones
+  title: jiku-docs — events and notifications
   version: 1.3.0
   description: |
-    Dos canales salen del changelog de jiku-docs (outbox, misma transacción que el comando):
+    Two channels come out of the jiku-docs changelog (outbox, same transaction as the command):
 
-    1. Stream JetStream `JIKU_DOCS_EVENTS` — subjects `{instance}.docs-events.v1.>`.
-       Solo para servicios. Retención limits, max_age 30 días. Entrega at-least-once:
-       deduplicar por `eventId`. Publicado con `Nats-Msg-Id = eventId`.
-    2. Notificaciones por persona — `{instance}.{userId}.docs-notify.v1.{entidad}.{acción}`.
-       NATS core, sin persistencia. A todas las personas con `read` sobre el documento, conectadas o no.
-       No incluyen `snapshot.relations` ni `changes.relations`. Los huecos se cubren con
-       la consulta `documents.changes`.
+    1. JetStream stream `JIKU_DOCS_EVENTS` — subjects `{instance}.docs-events.v1.>`.
+       For services only. Limits retention, max_age 30 days. At-least-once delivery:
+       deduplicate by `eventId`. Published with `Nats-Msg-Id = eventId`.
+    2. Per-person notifications — `{instance}.{userId}.docs-notify.v1.{entity}.{action}`.
+       NATS core, no persistence. To every person with `read` on the document, connected or not.
+       They do not include `snapshot.relations` or `changes.relations`. Gaps are covered with
+       the `documents.changes` query.
 
-    Garantías: un evento siempre describe algo ya confirmado en la base; ningún cambio
-    confirmado queda sin evento (a diferencia de JIKU_EVENTS de core, que es best-effort).
-    Los eventos nunca llevan contenido de documentos ni URLs prefirmadas.
-    Un campo nuevo dentro de v1 no es un cambio incompatible: los consumidores deben tolerarlo.
+    Guarantees: an event always describes something already committed in the database; no committed
+    change is left without an event (unlike core's JIKU_EVENTS, which is best-effort).
+    Events never carry document content or presigned URLs.
+    A new field within v1 is not a breaking change: consumers must tolerate it.
 
-    Notas de implementación (1.1.0):
-    - `folder.updated` (renombrar, mover o cambiar marcas cambia rutas y visibilidad) también se
-      notifica como `access.changed` a las personas internas, igual que `folder.acl.changed`.
-    - `document.unlocked` lleva `changes.reason`: `released` (unlock de la sesión), `forced`
-      (unlock con force) o `expired` (vencimiento; el actor es el servicio jiku-docs).
-    - `document.moved` lleva `changes.path` y, si cambió de carpeta, `changes.folderId`.
-    - Los subjects `docs-events` y `docs-notify` son fijos: NO derivan de `serviceName` del registro
-      de módulos (que solo nombra los servicios micro `{serviceName}-commands` / `-queries`). El
-      stream se llama siempre `JIKU_DOCS_EVENTS`.
-    - `actor.via` es siempre `service` cuando el actor es un servicio.
+    Implementation notes (1.1.0):
+    - `folder.updated` (renaming, moving or changing flags changes paths and visibility) is also
+      notified as `access.changed` to internal persons, like `folder.acl.changed`.
+    - `document.unlocked` carries `changes.reason`: `released` (unlock by the session), `forced`
+      (unlock with force) or `expired` (expiry; the actor is the jiku-docs service).
+    - `document.moved` carries `changes.path` and, if it changed folder, `changes.folderId`.
+    - The `docs-events` and `docs-notify` subjects are fixed: they do NOT derive from the `serviceName` of
+      the module registry (which only names the micro services `{serviceName}-commands` / `-queries`). The
+      stream is always called `JIKU_DOCS_EVENTS`.
+    - `actor.via` is always `service` when the actor is a service.
 
-    P-1 (1.3.0, docs/p1/service.md; campos nuevos, sin cambios incompatibles):
-    - `snapshot.visibility` admite `restricted`; `snapshot.lock.holderName` es el nombre de quien
-      tiene el lock (o `null`).
-    - Las notificaciones de un documento `restricted` llegan solo a los admins.
-    - Cuando un documento pasa a `restricted`, cada persona interna que lo leía y ya no (los `user`)
-      recibe `access.changed`, sin detalle; al pasar de `public` a otra visibilidad, lo mismo para
-      los externos con permiso sobre alguno de sus proyectos. Es la señal para que el daemon de sync
-      reconcilie enseguida.
-    - `share.revoked` puede llevar `changes.reason: restricted` (el documento pasó a restricted).
-    - La migración de datos de P-1 escribe `document.updated` con `actor` el servicio jiku-docs y
-      `changes.message` "Migración P-1: …".
+    P-1 (1.3.0, docs/p1/service.md; new fields, no breaking changes):
+    - `snapshot.visibility` accepts `restricted`; `snapshot.lock.holderName` is the name of whoever
+      holds the lock (or `null`).
+    - Notifications of a `restricted` document reach admins only.
+    - When a document becomes `restricted`, each internal person who read it and no longer does (the `user`s)
+      receives `access.changed`, without detail; when it goes from `public` to another visibility, the same
+      for the external persons with permission on any of its projects. It is the signal for the sync daemon
+      to reconcile right away.
+    - `share.revoked` may carry `changes.reason: restricted` (the document became restricted).
+    - The P-1 data migration writes `document.updated` with `actor` the jiku-docs service and
+      `changes.message` "P-1 migration: …".
 defaultContentType: application/json
 
 servers:
@@ -53,7 +53,7 @@ servers:
 channels:
   docsEvents:
     address: '{instance}.docs-events.v1.{entity}.{action}'
-    description: Stream JIKU_DOCS_EVENTS. El subject termina en el `type` del evento.
+    description: Stream JIKU_DOCS_EVENTS. The subject ends in the event `type`.
     parameters:
       instance: { $ref: '#/components/parameters/instance' }
       entity: { enum: [document, folder, attachment, share] }
@@ -76,10 +76,10 @@ channels:
       shareRevoked:      { $ref: '#/components/messages/ShareEvent' }
   docsNotify:
     address: '{instance}.{userId}.docs-notify.v1.{entity}.{action}'
-    description: Notificación filtrada por permisos para una persona conectada.
+    description: Permission-filtered notification for a connected person.
     parameters:
       instance: { $ref: '#/components/parameters/instance' }
-      userId: { description: '`sub` de Zitadel de la persona destinataria.' }
+      userId: { description: 'Zitadel `sub` of the recipient person.' }
       entity: { enum: [document, attachment, access] }
       action: { description: 'created, updated, moved, deleted, restored, locked, unlocked, changed' }
     messages:
@@ -91,21 +91,21 @@ operations:
   publishDocsEvents:
     action: send
     channel: { $ref: '#/channels/docsEvents' }
-    description: Lo publica el publicador de outbox de jiku-docs.
+    description: Published by the jiku-docs outbox publisher.
   consumeDocsEvents:
     action: receive
     channel: { $ref: '#/channels/docsEvents' }
     description: |
-      Servicios consumidores (indexador, Jiku, conectores). Durable propio con nombre único,
-      ack explícito, filter_subject con versión, deduplicación persistida por eventId,
-      ignorar eventos propios (actor.id).
+      Consumer services (indexer, Jiku, connectors). Own durable with a unique name,
+      explicit ack, filter_subject with version, persisted deduplication by eventId,
+      ignore own events (actor.id).
   publishDocsNotify:
     action: send
     channel: { $ref: '#/channels/docsNotify' }
   receiveDocsNotify:
     action: receive
     channel: { $ref: '#/channels/docsNotify' }
-    description: Daemon de sincronización y frontends, suscriptos a su propio userId.
+    description: Sync daemon and frontends, subscribed to their own userId.
 
 components:
   parameters:
@@ -119,7 +119,7 @@ components:
     AttachmentEvent:
       payload: { $ref: '#/components/schemas/AttachmentEventEnvelope' }
     ShareEvent:
-      description: Solo en el stream; nunca se notifica a personas. Nunca lleva el token.
+      description: Stream only; never notified to persons. Never carries the token.
       payload: { $ref: '#/components/schemas/ShareEventEnvelope' }
     DocumentNotification:
       payload: { $ref: '#/components/schemas/DocumentNotificationEnvelope' }
@@ -133,7 +133,7 @@ components:
       additionalProperties: false
       required: [id, via]
       properties:
-        id: { type: string, description: '`sub` de Zitadel.' }
+        id: { type: string, description: 'Zitadel `sub`.' }
         name: { type: [string, 'null'] }
         via: { type: string, enum: [human, agent, service] }
     Relations:
@@ -149,8 +149,8 @@ components:
       required: [eventId, seq, type, version, occurredAt, correlationId, actor, entity]
       properties:
         eventId: { $ref: '#/components/schemas/Ulid' }
-        seq: { type: integer, description: Posición en el changelog. Monotónico. }
-        type: { type: string, description: Igual a la cola del subject (p. ej. document.updated). }
+        seq: { type: integer, description: Position in the changelog. Monotonic. }
+        type: { type: string, description: Equal to the tail of the subject (e.g. document.updated). }
         version: { const: v1 }
         occurredAt: { type: string, format: date-time }
         correlationId: { type: string }
@@ -198,7 +198,7 @@ components:
             snapshot: { $ref: '#/components/schemas/DocumentSnapshot' }
             changes:
               type: object
-              description: Qué cambió. Las claves presentes dependen del tipo de evento.
+              description: What changed. The keys present depend on the event type.
               properties:
                 version: { type: object, properties: { from: { type: integer }, to: { type: integer } } }
                 path: { type: object, properties: { from: { type: string }, to: { type: string } } }
@@ -217,8 +217,8 @@ components:
                 restoredFrom: { type: integer }
                 message: { type: [string, 'null'] }
                 folderId: { type: object, properties: { from: { type: string }, to: { type: string } } }
-                reason: { type: string, enum: [released, forced, expired], description: Solo en document.unlocked. }
-                lock: { type: object, description: 'En document.unlocked: el lock que terminó ({ from: lock, to: null }).' }
+                reason: { type: string, enum: [released, forced, expired], description: Only in document.unlocked. }
+                lock: { type: object, description: 'In document.unlocked: the lock that ended ({ from: lock, to: null }).' }
 
     FolderEventEnvelope:
       allOf:
@@ -299,10 +299,10 @@ components:
             changes:
               type: object
               properties:
-                reason: { type: string, enum: [manual, document_deleted, restricted], description: Solo en share.revoked. }
+                reason: { type: string, enum: [manual, document_deleted, restricted], description: Only in share.revoked. }
 
     DocumentNotificationEnvelope:
-      description: Igual a DocumentEventEnvelope sin snapshot.relations ni changes.relations.
+      description: Same as DocumentEventEnvelope without snapshot.relations or changes.relations.
       allOf:
         - $ref: '#/components/schemas/DocumentEventEnvelope'
         - type: object
@@ -314,8 +314,8 @@ components:
 
     AccessChangedEnvelope:
       description: |
-        Se envía a todas las personas internas cuando cambia una ACL. No lleva detalle:
-        es la señal para que el cliente haga una reconciliación completa.
+        Sent to every internal person when an ACL changes. It carries no detail:
+        it is the signal for the client to run a full reconciliation.
       type: object
       additionalProperties: false
       required: [eventId, seq, type, version, occurredAt]

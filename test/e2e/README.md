@@ -1,39 +1,40 @@
-# e2e local
+# Local e2e
 
-Dos recorridos contra el stack local levantado (Jiku con `deploy/local.sh up` y jiku-docs con
+Two runs against the local stack once it is up (Jiku with `deploy/local.sh up` and jiku-docs with
 `docker compose -f docker-compose.local.yml up -d`):
 
-- `local-bus.sh`: jiku-docs **por el bus**, con el CLI `jiku` de jiku-go.
-- `web/`: la integración en la web interna y en opus-web, con Playwright (ver `web/README.md`).
+- `local-bus.sh`: jiku-docs **over the bus**, with the `jiku` CLI from jiku-go.
+- `web/`: the integration in the internal web and in opus-web, with Playwright (see `web/README.md`).
 
-Los dos usan las mismas tres identidades, y ninguna es un machine user de prueba:
+Both use the same three identities, and none of them is a test machine user:
 
-| identidad  | quién                                               | cómo se autentica                          |
+| identity   | who                                                 | how it authenticates                       |
 | ---------- | --------------------------------------------------- | ------------------------------------------ |
-| `docs`     | el machine user del servicio jiku-docs (`internal-app` + `docs`; clase `service`: lee y escribe todo) | key file `.local/jiku_docs.service_user.json` |
-| `user`     | una persona con rol `user` (`WEB_USER_*`)           | device flow, token en su `JIKU_CONFIG_DIR` |
-| `external` | una persona con rol `external-user` (`WEB_EXTERNAL_*`) | device flow, token en su `JIKU_CONFIG_DIR` |
+| `docs`     | the machine user of the jiku-docs service (`internal-app` + `docs`; class `service`: reads and writes everything) | key file `.local/jiku_docs.service_user.json` |
+| `user`     | a person with the `user` role (`WEB_USER_*`)        | device flow, token in its `JIKU_CONFIG_DIR` |
+| `external` | a person with the `external-user` role (`WEB_EXTERNAL_*`) | device flow, token in its `JIKU_CONFIG_DIR` |
 
-Modelo de P-1 (contrato 1.3.0): los permisos los decide la visibilidad, no las carpetas. `docs`
-hace el bootstrap y lo que es solo de admin (`folders.*`, `unlock --force`, crear `restricted`,
-links de prueba). No hay una persona `admin`: lo prueba el servicio, que lee y escribe `restricted`
-como un admin y queda como autor con `via: service`. `local-bus.sh` verifica que un `restricted`
-no existe para `human-user` ni `human-external` por ninguna vía que alcanza el CLI (get con y sin
-versión, history, list y el filtro `visibility`, search, topics, adjuntos, links, suggest, changes,
-sync), que un link anterior a la restricción da 404, y la ubicación generada, `relate`, `suggest`,
-`hasProject`/`hasClient`/`hasTopic` y `projectMatch`.
+P-1 model (contract 1.3.0): permissions are decided by the visibility, not by the folders. `docs`
+does the bootstrap and what is admin-only (`folders.*`, `unlock --force`, creating `restricted`,
+test share links). There is no `admin` person: the service tests it, since it reads and writes
+`restricted` like an admin and is recorded as the author with `via: service`. `local-bus.sh` checks
+that a `restricted` document does not exist for `human-user` or `human-external` through any path
+the CLI reaches (get with and without a version, history, list and the `visibility` filter, search,
+topics, attachments, share links, suggest, changes, sync), that a share link created before the
+restriction gives 404, and the generated location, `relate`, `suggest`,
+`hasProject`/`hasClient`/`hasTopic` and `projectMatch`.
 
-## Preparar las personas (device flow, una vez)
+## Preparing the persons (device flow, once)
 
-Las credenciales de las personas van en `.local/test-users.env` (nunca versionado):
-`WEB_USER_LOGIN`, `WEB_USER_PASSWORD`, `WEB_EXTERNAL_LOGIN`, `WEB_EXTERNAL_PASSWORD`. La
-contraseña inicial de Zitadel tiene que estar cambiada (entrar una vez a mano).
+The credentials of the persons go in `.local/test-users.env` (never versioned):
+`WEB_USER_LOGIN`, `WEB_USER_PASSWORD`, `WEB_EXTERNAL_LOGIN`, `WEB_EXTERNAL_PASSWORD`. The initial
+Zitadel password must have been changed (log in once by hand).
 
-Cada persona necesita su propio `JIKU_CONFIG_DIR` con un token del device flow. No usar la
-config ni los tokens de `~/.config/jiku/` de quien corre la prueba: de ahí solo se **leen**
-`zitadel.client_id` (la app nativa con Device Code) y `zitadel.project_id`.
+Each person needs its own `JIKU_CONFIG_DIR` with a device-flow token. Do not use the config or the
+tokens in `~/.config/jiku/` of whoever runs the test: from there only `zitadel.client_id` (the
+native app with Device Code) and `zitadel.project_id` are **read**.
 
-Automático (Playwright completa la aprobación con las credenciales del `.env`):
+Automatic (Playwright completes the approval with the credentials of the `.env`):
 
 ```sh
 cd test/e2e/web && npm install
@@ -41,40 +42,40 @@ node device-login.mjs USER     ../../../.local/cli/human-user
 node device-login.mjs EXTERNAL ../../../.local/cli/human-external
 ```
 
-A mano, para cada persona:
+By hand, for each person:
 
 ```sh
 JIKU_CONFIG_DIR=.local/cli/human-user JIKU_SERVERS=nats://localhost:4222 JIKU_INSTANCE=dev \
 JIKU_CREDS=../../jiku/deploy/nats/creds/sentinel-client.creds JIKU_ISSUER=https://id.grava.io \
 JIKU_CLIENT_ID=<zitadel.client_id> JIKU_PROJECT_ID=<zitadel.project_id> \
-  ../../jiku-go/bin/jiku login          # imprime una URL y un código en stderr: aprobar como esa persona
+  ../../jiku-go/bin/jiku login          # prints a URL and a code on stderr: approve as that person
 ```
 
-y verificar con `jiku whoami` y `jiku doctor` en el mismo entorno. La primera request de una
-persona puede perder la carrera con su propio evento de autenticación (core todavía no tiene su
-fila de `users`): reintentar. El token dura ~20 h y el CLI lo refresca solo con el refresh token.
+and verify with `jiku whoami` and `jiku doctor` in the same environment. The first request of a
+person may lose the race with its own authentication event (core does not have its `users` row
+yet): retry. The token lasts ~20 h and the CLI refreshes it by itself with the refresh token.
 
 ## local-bus.sh
 
 ```sh
-test/e2e/local-bus.sh                       # recorrido completo
-E2E_DISRUPTIVE=1 test/e2e/local-bus.sh      # además: docker stop/start y deregister del módulo
+test/e2e/local-bus.sh                       # full run
+E2E_DISRUPTIVE=1 test/e2e/local-bus.sh      # also: docker stop/start and deregister of the module
 ```
 
-Por defecto toma la key del servicio de `.local/jiku_docs.service_user.json` y los config dirs de
-las personas de `.local/cli/human-user` y `.local/cli/human-external`
-(`E2E_DOCS_KEY`, `E2E_USER_CONFIG_DIR`, `E2E_EXTERNAL_CONFIG_DIR`; el resto de las variables está
-en la cabecera del script). Los user-id salen de `jiku whoami`.
+By default it takes the service key from `.local/jiku_docs.service_user.json` and the config dirs
+of the persons from `.local/cli/human-user` and `.local/cli/human-external`
+(`E2E_DOCS_KEY`, `E2E_USER_CONFIG_DIR`, `E2E_EXTERNAL_CONFIG_DIR`; the rest of the variables are in
+the header of the script). The user ids come from `jiku whoami`.
 
-- Todo lo que crea vive bajo `/e2e-<timestamp>/`, salvo un documento con ubicación generada (bajo
-  `/clientes/<cliente>/<proyecto>/`). Como las carpetas ya no ocultan nada, al terminar el servicio
-  borra (lógicamente) los documentos de la corrida (`E2E_KEEP_VISIBLE=1` los deja). jiku-docs no
-  borra carpetas.
-- El externo es una persona real que puede tener ya `project-permissions` sobre el proyecto que
-  elige el script: si lo tiene, se le quita durante la corrida y se le devuelve al terminar
-  (también si el script se corta).
-- El escenario `8b` (compactación del historial) compacta a demanda dentro del contenedor y
-  verifica que los objetos compactados quedaron en `papelera/` del bucket (con el `mc` del MinIO
-  de Jiku, `E2E_STORAGE_CONTAINER`, default `jiku-local-storage`) y que `jiku-docs storage
-  restore-from-trash --version-row` devuelve una versión.
-- Sale con 0 si todo pasó.
+- Everything it creates lives under `/e2e-<timestamp>/`, except one document with a generated
+  location (under `/clients/<client>/<project>/`). Since folders no longer hide anything, at the end
+  the service deletes (logically) the documents of the run (`E2E_KEEP_VISIBLE=1` keeps them).
+  jiku-docs does not delete folders.
+- The external person is a real person who may already have `project-permissions` on the project
+  the script picks: if so, they are removed during the run and given back at the end (also if the
+  script is interrupted).
+- Scenario `8b` (history compaction) compacts on demand inside the container and checks that the
+  pruned objects ended up in `trash/` of the bucket (with the `mc` of Jiku's MinIO,
+  `E2E_STORAGE_CONTAINER`, default `jiku-local-storage`) and that `jiku-docs storage
+  restore-from-trash --version-row` brings a version back.
+- Exits with 0 if everything passed.

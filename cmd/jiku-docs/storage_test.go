@@ -59,7 +59,7 @@ func checkRules(t *testing.T, bs *blob.S3, trashDays int) {
 }
 
 // `jiku-docs storage init` on a new bucket: created without versioning, with the rules of
-// uploads/ (1 day) and papelera/ (DOCS_TRASH_RETENTION_DAYS). Running it twice changes nothing.
+// uploads/ (1 day) and trash/ (DOCS_TRASH_RETENTION_DAYS). Running it twice changes nothing.
 func TestStorageInitNewBucket(t *testing.T) {
 	bs := newBucket(t)
 	ctx := context.Background()

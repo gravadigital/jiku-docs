@@ -56,7 +56,7 @@ func TestReply(t *testing.T) {
 		t.Errorf("%s", b)
 	}
 	b = Failure(errors.New("database password leaked here")).Encode()
-	if string(b) != `{"status":"failure","errorCode":"internal_error","errorMessage":"Error interno"}` {
+	if string(b) != `{"status":"failure","errorCode":"internal_error","errorMessage":"Internal error"}` {
 		t.Errorf("foreign errors must not leak: %s", b)
 	}
 	if !IsULID(NewULID()) || IsULID("01jbx7q2m4n8p6r3t5v9w1y0za") {

@@ -33,7 +33,7 @@ func (s *Service) metaDescribe(ctx context.Context, c *Call) (any, error) {
 			return nil, err
 		}
 		if ok && len(list) == 0 {
-			return nil, protocol.InvalidField("resources", []any{}, names, "resources no acepta una lista vacía: omitilo para describir todos")
+			return nil, protocol.InvalidField("resources", []any{}, names, "resources does not accept an empty list: omit it to describe all")
 		}
 		selected = nil
 		for _, n := range list {
@@ -255,7 +255,7 @@ func (s *Service) foldersGet(ctx context.Context, c *Call) (any, error) {
 			out["effectivePermission"] = permOrNil(perm)
 		case "acl":
 			if perm < acl.Manage {
-				return nil, protocol.Ef(protocol.CodePermissionDenied, "Las reglas de carpeta (obsoletas) las ven solo los administradores")
+				return nil, protocol.Ef(protocol.CodePermissionDenied, "Folder rules (obsolete) are visible only to administrators")
 			}
 			rules := f.Rules
 			if rules == nil {

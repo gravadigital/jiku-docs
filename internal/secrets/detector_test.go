@@ -4,7 +4,7 @@ import "testing"
 
 func TestScan(t *testing.T) {
 	// Synthetic values only: none of these is a real credential.
-	text := "línea limpia\n" +
+	text := "clean line\n" +
 		"-----BEGIN OPENSSH PRIVATE KEY-----\n" +
 		"aws: AKIAABCDEFGHIJKLMNOP\n" +
 		"contraseña: Sup3rS3cret!\n" +

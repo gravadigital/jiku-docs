@@ -55,8 +55,8 @@ var documentFilterSpecs = map[string]query.FilterSpec{
 	"updatedAt":     {Kind: query.KindDate, Range: true},
 	"fileName":      {Kind: query.KindString, Prefix: true},
 	"deleted":       {Kind: query.KindBoolean},
-	// P-1: false is "Sin proyecto" (neither direct nor through a requirement or a task), "Sin
-	// cliente" (no jiku.clients) and "Sin tema".
+	// P-1: false is "Sin proyecto" (no project: neither direct nor through a requirement or a
+	// task), "Sin cliente" (no client: no jiku.clients) and "Sin tema" (no topic).
 	"hasProject": {Kind: query.KindBoolean},
 	"hasClient":  {Kind: query.KindBoolean},
 	"hasTopic":   {Kind: query.KindBoolean},

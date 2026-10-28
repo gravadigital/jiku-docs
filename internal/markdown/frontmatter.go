@@ -125,7 +125,7 @@ type FrontmatterError struct {
 }
 
 func (e *FrontmatterError) Error() string {
-	return fmt.Sprintf("frontmatter inválido (línea %d, %s): %s", e.Line, e.Field, e.Reason)
+	return fmt.Sprintf("invalid frontmatter (line %d, %s): %s", e.Line, e.Field, e.Reason)
 }
 
 // Split separates the frontmatter block from the body. yamlText is the YAML without the
@@ -145,7 +145,7 @@ func Split(content string) (yamlText, body string, present bool, err *Frontmatte
 		return "", content, false, nil
 	}
 	if firstEnd < 0 {
-		return "", "", true, &FrontmatterError{Line: 1, Field: "frontmatter", Reason: "el bloque no tiene cierre (---)"}
+		return "", "", true, &FrontmatterError{Line: 1, Field: "frontmatter", Reason: "the block is not closed (---)"}
 	}
 	rest := c[firstEnd+1:]
 	offset := 0
@@ -168,7 +168,7 @@ func Split(content string) (yamlText, body string, present bool, err *Frontmatte
 			return yamlText, body, true, nil
 		}
 		if nl < 0 {
-			return "", "", true, &FrontmatterError{Line: 1, Field: "frontmatter", Reason: "el bloque no tiene cierre (---)"}
+			return "", "", true, &FrontmatterError{Line: 1, Field: "frontmatter", Reason: "the block is not closed (---)"}
 		}
 		offset += nl + 1
 	}
@@ -198,14 +198,14 @@ func Parse(content string) (Frontmatter, string, *FrontmatterError) {
 			line = n + 1
 		}
 		reason := strings.TrimPrefix(err.Error(), "yaml: ")
-		return fm, "", &FrontmatterError{Line: line, Field: "frontmatter", Reason: "YAML mal formado: " + reason}
+		return fm, "", &FrontmatterError{Line: line, Field: "frontmatter", Reason: "malformed YAML: " + reason}
 	}
 	if len(doc.Content) == 0 {
 		return fm, body, nil
 	}
 	root := doc.Content[0]
 	if root.Kind != yaml.MappingNode {
-		return fm, "", &FrontmatterError{Line: root.Line + 1, Field: "frontmatter", Reason: "el frontmatter tiene que ser un mapa de claves"}
+		return fm, "", &FrontmatterError{Line: root.Line + 1, Field: "frontmatter", Reason: "the frontmatter must be a mapping of keys"}
 	}
 	for i := 0; i+1 < len(root.Content); i += 2 {
 		key, val := root.Content[i], root.Content[i+1]
@@ -213,12 +213,12 @@ func Parse(content string) (Frontmatter, string, *FrontmatterError) {
 		switch key.Value {
 		case "title":
 			if val.Kind != yaml.ScalarNode {
-				return fm, "", &FrontmatterError{Line: line, Field: "title", Reason: "tiene que ser un texto"}
+				return fm, "", &FrontmatterError{Line: line, Field: "title", Reason: "must be a string"}
 			}
 			fm.Title = strings.TrimSpace(val.Value)
 		case "visibility":
 			if val.Kind != yaml.ScalarNode || !ValidVisibility(val.Value) {
-				return fm, "", &FrontmatterError{Line: line, Field: "visibility", Reason: "tiene que ser internal, public o restricted"}
+				return fm, "", &FrontmatterError{Line: line, Field: "visibility", Reason: "must be internal, public or restricted"}
 			}
 			fm.Visibility = val.Value
 		case "topics":
@@ -251,17 +251,17 @@ func parseTopics(val *yaml.Node) ([]string, *FrontmatterError) {
 		return []string{}, nil
 	}
 	if val.Kind != yaml.SequenceNode {
-		return nil, &FrontmatterError{Field: "topics", Reason: "tiene que ser una lista de textos"}
+		return nil, &FrontmatterError{Field: "topics", Reason: "must be a list of strings"}
 	}
 	seen := map[string]bool{}
 	out := []string{}
 	for _, item := range val.Content {
 		if item.Kind != yaml.ScalarNode || item.Tag == "!!null" {
-			return nil, &FrontmatterError{Line: item.Line + 1, Field: "topics", Reason: "cada tema tiene que ser un texto"}
+			return nil, &FrontmatterError{Line: item.Line + 1, Field: "topics", Reason: "each topic must be a string"}
 		}
 		slug := NormalizeTopic(item.Value)
 		if slug == "" {
-			return nil, &FrontmatterError{Line: item.Line + 1, Field: "topics", Reason: fmt.Sprintf("el tema %q queda vacío al normalizarlo", item.Value)}
+			return nil, &FrontmatterError{Line: item.Line + 1, Field: "topics", Reason: fmt.Sprintf("the topic %q is empty once normalised", item.Value)}
 		}
 		if !seen[slug] {
 			seen[slug] = true
@@ -278,7 +278,7 @@ func parseJiku(val *yaml.Node) (Relations, *FrontmatterError) {
 		return rel, nil
 	}
 	if val.Kind != yaml.MappingNode {
-		return rel, &FrontmatterError{Line: val.Line + 1, Field: "jiku", Reason: "tiene que ser un mapa con clients, projects, requirements y tasks"}
+		return rel, &FrontmatterError{Line: val.Line + 1, Field: "jiku", Reason: "must be a mapping with clients, projects, requirements and tasks"}
 	}
 	for i := 0; i+1 < len(val.Content); i += 2 {
 		key, list := val.Content[i], val.Content[i+1]
@@ -290,19 +290,19 @@ func parseJiku(val *yaml.Node) (Relations, *FrontmatterError) {
 			}
 		}
 		if !known {
-			return rel, &FrontmatterError{Line: key.Line + 1, Field: field, Reason: "clave desconocida: solo se aceptan clients, projects, requirements y tasks"}
+			return rel, &FrontmatterError{Line: key.Line + 1, Field: field, Reason: "unknown key: only clients, projects, requirements and tasks are accepted"}
 		}
 		if list.Kind == yaml.ScalarNode && list.Tag == "!!null" {
 			continue
 		}
 		if list.Kind != yaml.SequenceNode {
-			return rel, &FrontmatterError{Line: list.Line + 1, Field: field, Reason: "tiene que ser una lista de ids numéricos"}
+			return rel, &FrontmatterError{Line: list.Line + 1, Field: field, Reason: "must be a list of numeric ids"}
 		}
 		ids := make([]int64, 0, len(list.Content))
 		for _, item := range list.Content {
 			n, err := strconv.ParseInt(item.Value, 10, 64)
 			if item.Kind != yaml.ScalarNode || item.Tag != "!!int" || err != nil || n <= 0 {
-				return rel, &FrontmatterError{Line: item.Line + 1, Field: field, Reason: fmt.Sprintf("%q no es un id numérico válido", item.Value)}
+				return rel, &FrontmatterError{Line: item.Line + 1, Field: field, Reason: fmt.Sprintf("%q is not a valid numeric id", item.Value)}
 			}
 			ids = append(ids, n)
 		}

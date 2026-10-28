@@ -34,12 +34,12 @@ func ParseObject(raw json.RawMessage, path string, allowed ...string) *Object {
 		return o
 	}
 	if trimmed[0] != '{' {
-		o.err = protocol.InvalidField(orPayload(path), nil, nil, "Se esperaba un objeto JSON")
+		o.err = protocol.InvalidField(orPayload(path), nil, nil, "A JSON object was expected")
 		return o
 	}
 	var m map[string]json.RawMessage
 	if err := json.Unmarshal(trimmed, &m); err != nil {
-		o.err = protocol.InvalidField(orPayload(path), nil, nil, "JSON mal formado")
+		o.err = protocol.InvalidField(orPayload(path), nil, nil, "Malformed JSON")
 		return o
 	}
 	o.fields = m
@@ -51,7 +51,7 @@ func ParseObject(raw json.RawMessage, path string, allowed ...string) *Object {
 	for _, k := range keys {
 		if !contains(allowed, k) {
 			o.err = protocol.InvalidField(orPayload(path), k, allowed,
-				"El campo %q no existe en este pedido", join(path, k))
+				"The field %q does not exist in this request", join(path, k))
 			return o
 		}
 	}
@@ -134,7 +134,7 @@ func (o *Object) present(key string, required bool) (json.RawMessage, bool) {
 	v, ok := o.fields[key]
 	if !ok || bytes.Equal(bytes.TrimSpace(v), []byte("null")) {
 		if required {
-			o.err = protocol.InvalidField(join(o.path, key), nil, nil, "Falta el campo obligatorio %q", join(o.path, key))
+			o.err = protocol.InvalidField(join(o.path, key), nil, nil, "The required field %q is missing", join(o.path, key))
 		}
 		return nil, false
 	}
@@ -143,7 +143,7 @@ func (o *Object) present(key string, required bool) (json.RawMessage, bool) {
 
 func (o *Object) typeErr(key string, raw json.RawMessage, want string) {
 	o.Fail(protocol.InvalidField(join(o.path, key), rawValue(raw), nil,
-		"El campo %q tiene que ser %s", join(o.path, key), want))
+		"The field %q must be %s", join(o.path, key), want))
 }
 
 func rawValue(raw json.RawMessage) any {
@@ -164,7 +164,7 @@ type StringRule func(s string) string
 func MinLen(n int) StringRule {
 	return func(s string) string {
 		if utf8.RuneCountInString(s) < n {
-			return fmt.Sprintf("tiene que tener al menos %d caracteres", n)
+			return fmt.Sprintf("must have at least %d characters", n)
 		}
 		return ""
 	}
@@ -174,7 +174,7 @@ func MinLen(n int) StringRule {
 func MaxLen(n int) StringRule {
 	return func(s string) string {
 		if utf8.RuneCountInString(s) > n {
-			return fmt.Sprintf("admite como máximo %d caracteres", n)
+			return fmt.Sprintf("allows at most %d characters", n)
 		}
 		return ""
 	}
@@ -184,7 +184,7 @@ func MaxLen(n int) StringRule {
 func Pattern(re *regexp.Regexp) StringRule {
 	return func(s string) string {
 		if !re.MatchString(s) {
-			return "no tiene el formato esperado"
+			return "does not have the expected format"
 		}
 		return ""
 	}
@@ -194,7 +194,7 @@ func Pattern(re *regexp.Regexp) StringRule {
 func OneOf(values ...string) StringRule {
 	return func(s string) string {
 		if !contains(values, s) {
-			return "no es un valor permitido"
+			return "is not an allowed value"
 		}
 		return ""
 	}
@@ -208,12 +208,12 @@ func (o *Object) String(key string, required bool, rules ...StringRule) (string,
 	}
 	var s string
 	if err := json.Unmarshal(raw, &s); err != nil {
-		o.typeErr(key, raw, "un texto")
+		o.typeErr(key, raw, "a string")
 		return "", false
 	}
 	for _, r := range rules {
 		if msg := r(s); msg != "" {
-			e := protocol.InvalidField(join(o.path, key), rawValue(raw), nil, "El campo %q %s", join(o.path, key), msg)
+			e := protocol.InvalidField(join(o.path, key), rawValue(raw), nil, "The field %q %s", join(o.path, key), msg)
 			o.Fail(e)
 			return "", false
 		}
@@ -230,7 +230,7 @@ func (o *Object) Enum(key string, required bool, values ...string) (string, bool
 	var s string
 	if err := json.Unmarshal(raw, &s); err != nil || !contains(values, s) {
 		o.Fail(protocol.InvalidField(join(o.path, key), rawValue(raw), values,
-			"El campo %q no es un valor permitido", join(o.path, key)))
+			"The field %q is not an allowed value", join(o.path, key)))
 		return "", false
 	}
 	return s, true
@@ -251,7 +251,7 @@ func (o *Object) Bool(key string, def bool) bool {
 	}
 	var b bool
 	if err := json.Unmarshal(raw, &b); err != nil {
-		o.typeErr(key, raw, "booleano")
+		o.typeErr(key, raw, "a boolean")
 		return def
 	}
 	return b
@@ -265,7 +265,7 @@ func (o *Object) OptBool(key string) *bool {
 	}
 	var b bool
 	if err := json.Unmarshal(raw, &b); err != nil {
-		o.typeErr(key, raw, "booleano")
+		o.typeErr(key, raw, "a boolean")
 		return nil
 	}
 	return &b
@@ -279,12 +279,12 @@ func (o *Object) Int(key string, required bool, min, max int64) (int64, bool) {
 	}
 	n, ok := parseInt(raw)
 	if !ok {
-		o.typeErr(key, raw, "un entero")
+		o.typeErr(key, raw, "an integer")
 		return 0, false
 	}
 	if n < min || n > max {
 		o.Fail(protocol.InvalidField(join(o.path, key), n, nil,
-			"El campo %q tiene que estar entre %d y %d", join(o.path, key), min, max))
+			"The field %q must be between %d and %d", join(o.path, key), min, max))
 		return 0, false
 	}
 	return n, true
@@ -319,12 +319,12 @@ func (o *Object) Time(key string, required bool) (time.Time, bool) {
 	}
 	var s string
 	if err := json.Unmarshal(raw, &s); err != nil {
-		o.typeErr(key, raw, "una fecha ISO 8601")
+		o.typeErr(key, raw, "an ISO 8601 date")
 		return time.Time{}, false
 	}
 	t, err := time.Parse(time.RFC3339Nano, s)
 	if err != nil {
-		o.typeErr(key, raw, "una fecha ISO 8601")
+		o.typeErr(key, raw, "an ISO 8601 date")
 		return time.Time{}, false
 	}
 	return t.UTC(), true
@@ -337,7 +337,7 @@ func (o *Object) Object(key string, required bool, allowed ...string) (*Object, 
 		return nil, false
 	}
 	if t := bytes.TrimSpace(raw); len(t) == 0 || t[0] != '{' {
-		o.typeErr(key, raw, "un objeto")
+		o.typeErr(key, raw, "an object")
 		return nil, false
 	}
 	child := ParseObject(raw, join(o.path, key), allowed...)
@@ -356,16 +356,16 @@ func (o *Object) Array(key string, required bool, maxItems int) ([]json.RawMessa
 	}
 	var arr []json.RawMessage
 	if t := bytes.TrimSpace(raw); len(t) == 0 || t[0] != '[' {
-		o.typeErr(key, raw, "una lista")
+		o.typeErr(key, raw, "a list")
 		return nil, false
 	}
 	if err := json.Unmarshal(raw, &arr); err != nil {
-		o.typeErr(key, raw, "una lista")
+		o.typeErr(key, raw, "a list")
 		return nil, false
 	}
 	if maxItems > 0 && len(arr) > maxItems {
 		o.Fail(protocol.InvalidField(join(o.path, key), nil, nil,
-			"El campo %q admite como máximo %d elementos", join(o.path, key), maxItems))
+			"The field %q allows at most %d items", join(o.path, key), maxItems))
 		return nil, false
 	}
 	return arr, true
@@ -382,12 +382,12 @@ func (o *Object) StringList(key string, allowed []string, maxItems int) ([]strin
 		var s string
 		if err := json.Unmarshal(el, &s); err != nil {
 			o.Fail(protocol.InvalidField(join(o.path, key), rawValue(el), allowed,
-				"El campo %q tiene que ser una lista de textos", join(o.path, key)))
+				"The field %q must be a list of strings", join(o.path, key)))
 			return nil, false
 		}
 		if allowed != nil && !contains(allowed, s) {
 			o.Fail(protocol.InvalidField(join(o.path, key), s, allowed,
-				"%q no es un valor permitido en %q", s, join(o.path, key)))
+				"%q is not an allowed value in %q", s, join(o.path, key)))
 			return nil, false
 		}
 		out = append(out, s)

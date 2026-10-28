@@ -186,10 +186,10 @@ func (s *Service) sharesNew(ctx context.Context, c *Call) (any, error) {
 		return nil, err
 	}
 	if mode == "pinned" && !hasVersion {
-		return nil, protocol.InvalidField("version", nil, nil, "version es obligatorio con mode pinned")
+		return nil, protocol.InvalidField("version", nil, nil, "version is required with mode pinned")
 	}
 	if mode == "latest" && hasVersion {
-		return nil, protocol.InvalidField("version", version, nil, "version solo se acepta con mode pinned")
+		return nil, protocol.InvalidField("version", version, nil, "version is accepted only with mode pinned")
 	}
 	expiresAt = expiresAt.Truncate(time.Millisecond)
 	reqHash := func() []byte {
@@ -223,7 +223,7 @@ func (s *Service) sharesNew(ctx context.Context, c *Call) (any, error) {
 					return nil
 				}
 			}
-			return protocol.Ef(protocol.CodeAlreadyExists, "Ya existe un link con ese id: si se perdió, revocalo y creá otro")
+			return protocol.Ef(protocol.CodeAlreadyExists, "A share link with that id already exists: if it was lost, revoke it and create another")
 		}
 		if d.Visibility == markdown.VisibilityRestricted {
 			return protocol.E(protocol.CodeSharingBlocked)

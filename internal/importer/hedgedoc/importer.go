@@ -30,7 +30,7 @@ import (
 
 // DefaultFolder receives the notes without a mapping. They are imported with visibility
 // restricted (P-1): only administrators read them.
-const DefaultFolder = "/importado/"
+const DefaultFolder = "/imported/"
 
 // DefaultAssetPrefixes are where HedgeDoc stored images (scheme-less URL prefixes).
 var DefaultAssetPrefixes = []string{
@@ -79,19 +79,19 @@ func ParseFlags(args []string) (Options, error) {
 	var o Options
 	var prefixes listFlag
 	fs.StringVar(&o.DSN, "mysql-dsn", envOr("HEDGEDOC_MYSQL_DSN", "root:hedgedoc@tcp(127.0.0.1:33306)/codimd?parseTime=true&charset=utf8mb4"),
-		"DSN de la base MariaDB cargada con el dump (go-sql-driver/mysql, con parseTime=true)")
-	fs.StringVar(&o.Mapping, "mapping", "", "planilla CSV nota -> carpeta (columnas: note, folder[, fileName][, skip]"+
-		"[, clients, projects, requirements, tasks: ids separados por ; o ,][, topics: separados por ;])")
-	fs.StringVar(&o.Report, "report", ".local/hedgedoc-import-report.csv", "informe CSV de la corrida (estado y posibles secretos por nota)")
-	fs.StringVar(&o.ExportMapping, "export-mapping", "", "escribe una planilla de mapeo a completar con todas las notas y sale")
-	fs.BoolVar(&o.DryRun, "dry-run", false, "calcula el plan y el informe sin escribir nada ni descargar imágenes")
-	fs.BoolVar(&o.OnlyMapped, "only-mapped", false, "importa solo las notas que figuran en la planilla")
-	fs.BoolVar(&o.IncludeAnonymous, "include-anonymous", false, "incluye las notas sin dueño (creadas sin sesión; en el dump real son casi todas spam)")
-	fs.BoolVar(&o.CheckRelations, "check-relations", false, "con --dry-run: valida las relaciones contra core por el bus (solo lectura) e informa las que se descartarían")
-	fs.IntVar(&o.Limit, "limit", 0, "importa como máximo N notas (para probar)")
-	fs.StringVar(&o.HedgeDocURL, "hedgedoc-url", "https://docs.grava.io", "URL base de HedgeDoc, para reescribir enlaces entre notas")
-	fs.Var(&prefixes, "asset-prefix", "prefijo de URL (sin esquema) de las imágenes a migrar como adjuntos; repetible")
-	fs.Int64Var(&o.MaxAssetBytes, "max-asset-bytes", 50<<20, "tamaño máximo de un adjunto")
+		"DSN of the MariaDB database loaded with the dump (go-sql-driver/mysql, with parseTime=true)")
+	fs.StringVar(&o.Mapping, "mapping", "", "CSV mapping sheet note -> folder (columns: note, folder[, fileName][, skip]"+
+		"[, clients, projects, requirements, tasks: ids separated by ; or ,][, topics: separated by ;])")
+	fs.StringVar(&o.Report, "report", ".local/hedgedoc-import-report.csv", "CSV report of the run (status and possible secrets per note)")
+	fs.StringVar(&o.ExportMapping, "export-mapping", "", "writes a mapping sheet to fill in with every note and exits")
+	fs.BoolVar(&o.DryRun, "dry-run", false, "computes the plan and the report without writing anything or downloading images")
+	fs.BoolVar(&o.OnlyMapped, "only-mapped", false, "imports only the notes listed in the mapping sheet")
+	fs.BoolVar(&o.IncludeAnonymous, "include-anonymous", false, "includes the notes without an owner (created without a session; in the real dump almost all are spam)")
+	fs.BoolVar(&o.CheckRelations, "check-relations", false, "with --dry-run: validates the relations against core over the bus (read only) and reports the ones that would be dropped")
+	fs.IntVar(&o.Limit, "limit", 0, "imports at most N notes (for testing)")
+	fs.StringVar(&o.HedgeDocURL, "hedgedoc-url", "https://docs.grava.io", "base URL of HedgeDoc, to rewrite links between notes")
+	fs.Var(&prefixes, "asset-prefix", "URL prefix (without scheme) of the images to migrate as attachments; repeatable")
+	fs.Int64Var(&o.MaxAssetBytes, "max-asset-bytes", 50<<20, "maximum size of an attachment")
 	if err := fs.Parse(args); err != nil {
 		return o, err
 	}
@@ -131,7 +131,7 @@ func parseIDs(s string) ([]int64, error) {
 		}
 		n, err := strconv.ParseInt(f, 10, 64)
 		if err != nil || n <= 0 {
-			return nil, fmt.Errorf("%q no es un id numérico válido", f)
+			return nil, fmt.Errorf("%q is not a valid numeric id", f)
 		}
 		out = append(out, n)
 	}
@@ -185,11 +185,11 @@ func readMapping(file string, r *Resolver) (map[string]mapping, error) {
 	}
 	noteCol, ok := col["note"]
 	if !ok {
-		return nil, errors.New("mapping: falta la columna note")
+		return nil, errors.New("mapping: the note column is missing")
 	}
 	folderCol, ok := col["folder"]
 	if !ok {
-		return nil, errors.New("mapping: falta la columna folder")
+		return nil, errors.New("mapping: the folder column is missing")
 	}
 	get := func(rec []string, name string) string {
 		if i, ok := col[name]; ok && i < len(rec) {
@@ -205,14 +205,14 @@ func readMapping(file string, r *Resolver) (map[string]mapping, error) {
 		}
 		line++
 		if err != nil {
-			return nil, fmt.Errorf("mapping línea %d: %w", line, err)
+			return nil, fmt.Errorf("mapping line %d: %w", line, err)
 		}
 		if noteCol >= len(rec) || strings.TrimSpace(rec[noteCol]) == "" {
 			continue
 		}
 		n := r.Find(strings.TrimSpace(rec[noteCol]))
 		if n == nil {
-			return nil, fmt.Errorf("mapping línea %d: la nota %q no existe", line, rec[noteCol])
+			return nil, fmt.Errorf("mapping line %d: the note %q does not exist", line, rec[noteCol])
 		}
 		m := mapping{FileName: get(rec, "filename")}
 		if folderCol < len(rec) {
@@ -223,18 +223,18 @@ func readMapping(file string, r *Resolver) (map[string]mapping, error) {
 			m.Skip = true
 		}
 		if m.FileName != "" && !service.ValidFileName(m.FileName) {
-			return nil, fmt.Errorf("mapping línea %d: fileName %q inválido (tiene que terminar en .md)", line, m.FileName)
+			return nil, fmt.Errorf("mapping line %d: invalid fileName %q (it must end in .md)", line, m.FileName)
 		}
 		for _, k := range markdown.RelationKinds {
 			ids, err := parseIDs(get(rec, k.Key))
 			if err != nil {
-				return nil, fmt.Errorf("mapping línea %d: columna %s: %w", line, k.Key, err)
+				return nil, fmt.Errorf("mapping line %d: column %s: %w", line, k.Key, err)
 			}
 			m.Relations.Set(k.Key, ids)
 		}
 		m.Relations = m.Relations.Normalize()
 		if m.Topics, err = NormalizeTopics(parseTopics(get(rec, "topics"))); err != nil {
-			return nil, fmt.Errorf("mapping línea %d: columna topics: %w", line, err)
+			return nil, fmt.Errorf("mapping line %d: column topics: %w", line, err)
 		}
 		// A row left blank (as --export-mapping writes every note) is not a decision: it must not
 		// count as mapped, or the ~10.000 anonymous spam notes of the exported sheet would be imported.
@@ -349,16 +349,16 @@ func Run(ctx context.Context, o Options, svc *service.Service, log *slog.Logger)
 		switch {
 		case strings.TrimSpace(n.Content) == "":
 			p.status = "skipped"
-			p.detail = "vacía"
+			p.detail = "empty"
 		case m.Skip:
 			p.status = "skipped"
-			p.detail = "marcada skip en la planilla"
+			p.detail = "marked skip in the mapping sheet"
 		case o.OnlyMapped && !mapped:
 			p.status = "skipped"
-			p.detail = "sin mapeo (--only-mapped)"
+			p.detail = "not mapped (--only-mapped)"
 		case !o.IncludeAnonymous && n.Owner == "" && !mapped:
 			p.status = "skipped"
-			p.detail = "anónima (usar --include-anonymous o mapearla)"
+			p.detail = "anonymous (use --include-anonymous or map it)"
 		}
 		p.folder = m.Folder
 		if p.folder == "" {
@@ -373,7 +373,7 @@ func Run(ctx context.Context, o Options, svc *service.Service, log *slog.Logger)
 		if p.status == "pending" {
 			selected++
 			if o.Limit > 0 && selected > o.Limit {
-				p.status, p.detail = "skipped", "fuera del --limit"
+				p.status, p.detail = "skipped", "beyond --limit"
 			}
 		}
 	}
@@ -411,7 +411,7 @@ func Run(ctx context.Context, o Options, svc *service.Service, log *slog.Logger)
 			p.fileName = name
 		} else {
 			if p.fileName == "" {
-				p.fileName = FileName(p.note.Title, "sin-titulo-"+p.note.ShortID)
+				p.fileName = FileName(p.note.Title, "untitled-"+p.note.ShortID)
 			}
 			p.fileName = UniqueName(p.fileName, taken[p.folder])
 		}
@@ -426,14 +426,14 @@ func Run(ctx context.Context, o Options, svc *service.Service, log *slog.Logger)
 		}
 		if p.folder == DefaultFolder {
 			// P-1: the folder no longer hides anything; the notes nobody classified stay readable
-			// only by admins, as /importado/ was.
+			// only by admins, as /imported/ was.
 			if c, err := markdown.SetVisibility(content, markdown.VisibilityRestricted); err == nil {
 				content = c
 			}
 		}
 		p.base = content
 		if err := p.render(); err != nil {
-			p.warnings = append(p.warnings, "relaciones y temas de la planilla no aplicados: "+err.Error())
+			p.warnings = append(p.warnings, "relations and topics of the mapping sheet not applied: "+err.Error())
 			p.rel, p.topics, p.content = markdown.Relations{}, nil, content
 		}
 		p.findings = secrets.Scan(p.note.Content)
@@ -446,10 +446,10 @@ func Run(ctx context.Context, o Options, svc *service.Service, log *slog.Logger)
 		}
 		if o.CheckRelations {
 			if checker == nil {
-				return errors.New("--check-relations necesita conexión con core")
+				return errors.New("--check-relations needs a connection to core")
 			}
 			if err := checkRelations(ctx, checker, plan); err != nil {
-				return fmt.Errorf("validando relaciones contra core: %w", err)
+				return fmt.Errorf("validating relations against core: %w", err)
 			}
 		}
 		for _, p := range plan {
@@ -517,7 +517,7 @@ func execute(ctx context.Context, o Options, svc *service.Service, plan []*plann
 				continue
 			}
 			if err := migrateAsset(ctx, svc, call, hc, o.MaxAssetBytes, p, u); err != nil {
-				p.warnings = append(p.warnings, "adjunto no migrado: "+AssetName(u)+": "+err.Error())
+				p.warnings = append(p.warnings, "attachment not migrated: "+AssetName(u)+": "+err.Error())
 				log.Warn("import: asset not migrated", "note", p.note.ID, "asset", AssetName(u), "err", err.Error())
 			}
 		}
@@ -529,7 +529,7 @@ func execute(ctx context.Context, o Options, svc *service.Service, plan []*plann
 }
 
 // relationReason is what the report says about a relation core rejected.
-const relationReason = "invalid_relation: no existe en Jiku o jiku-docs no la ve"
+const relationReason = "invalid_relation: it does not exist in Jiku or jiku-docs cannot see it"
 
 // writeNote creates the document (or updates a previous import of it) and, when core rejects a
 // relation (invalid_relation), retries without it: the note is imported with the rest and the
@@ -560,7 +560,7 @@ func writeNote(ctx context.Context, svc *service.Service, call *service.Call, p 
 			}
 		}
 		if code == protocol.CodeAlreadyExists && !already {
-			p.status, p.detail = "exists", "ya existe con otro contenido (creada durante la corrida o nombre repetido)"
+			p.status, p.detail = "exists", "already exists with other content (created during the run or repeated name)"
 			return
 		}
 		p.status, p.detail = "failed", code
@@ -608,19 +608,19 @@ func reimport(ctx context.Context, svc *service.Service, call *service.Call, p *
 	}
 	switch {
 	case deleted:
-		p.status, p.detail = "exists", "borrada en jiku-docs después de importar: no se restaura"
+		p.status, p.detail = "exists", "deleted in jiku-docs after the import: not restored"
 	case curFolder != folderID || !strings.EqualFold(curName, p.fileName):
-		p.status, p.detail = "exists", "movida o renombrada en jiku-docs después de importar: no se pisa"
+		p.status, p.detail = "exists", "moved or renamed in jiku-docs after the import: not overwritten"
 	case checksum == service.Checksum([]byte(p.content)):
-		p.status, p.detail = "unchanged", "ya importada en una corrida anterior"
+		p.status, p.detail = "unchanged", "already imported in a previous run"
 	case via != "service" || !IsImportMessage(message):
-		p.status, p.detail = "exists", "editada en jiku-docs después de importar: no se pisa"
+		p.status, p.detail = "exists", "edited in jiku-docs after the import: not overwritten"
 	default:
 		out, err := svc.UpdateDocumentContent(ctx, call, p.docID, version, []byte(p.content), "service", ReimportMessage(*p.note))
 		if err != nil {
 			return err
 		}
-		p.status, p.detail = "updated", fmt.Sprintf("versión %v: reimportada con otro contenido", out["version"])
+		p.status, p.detail = "updated", fmt.Sprintf("version %v: reimported with other content", out["version"])
 	}
 	return nil
 }
@@ -678,7 +678,7 @@ func attachmentReady(ctx context.Context, svc *service.Service, id string) (bool
 	return ready, err
 }
 
-// ensureFolder creates the folders of a path (as the service). /importado/ is created closed:
+// ensureFolder creates the folders of a path (as the service). /imported/ is created closed:
 // no inheritance and a single rule, manage for the admin role.
 func ensureFolder(ctx context.Context, svc *service.Service, call *service.Call, cache map[string]string, p string) (string, error) {
 	if id, ok := cache[p]; ok {
@@ -723,7 +723,7 @@ func migrateAsset(ctx context.Context, svc *service.Service, call *service.Call,
 	}
 	resp, err := hc.Do(req)
 	if err != nil {
-		return fmt.Errorf("descarga: %w", err)
+		return fmt.Errorf("download: %w", err)
 	}
 	data, err := readAll(resp.Body, max)
 	_ = resp.Body.Close()
@@ -731,7 +731,7 @@ func migrateAsset(ctx context.Context, svc *service.Service, call *service.Call,
 		return err
 	}
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("descarga: HTTP %d", resp.StatusCode)
+		return fmt.Errorf("download: HTTP %d", resp.StatusCode)
 	}
 	name := AssetName(u)
 	mimeType, _, _ := mime.ParseMediaType(resp.Header.Get("Content-Type"))
@@ -761,15 +761,15 @@ func migrateAsset(ctx context.Context, svc *service.Service, call *service.Call,
 	put.Header.Set("Content-Type", mimeType)
 	presp, err := hc.Do(put)
 	if err != nil {
-		return fmt.Errorf("subida: %w", err)
+		return fmt.Errorf("upload: %w", err)
 	}
 	_, _ = io.Copy(io.Discard, presp.Body)
 	_ = presp.Body.Close()
 	if presp.StatusCode/100 != 2 {
-		return fmt.Errorf("subida: HTTP %d", presp.StatusCode)
+		return fmt.Errorf("upload: HTTP %d", presp.StatusCode)
 	}
 	if _, err := svc.ConfirmAttachment(ctx, call, attID); err != nil {
-		return fmt.Errorf("confirmación: %s", protocol.CodeOf(err))
+		return fmt.Errorf("confirmation: %s", protocol.CodeOf(err))
 	}
 	return nil
 }

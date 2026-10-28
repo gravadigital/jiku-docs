@@ -34,7 +34,7 @@ const (
 func StreamConfig(instance string) jetstream.StreamConfig {
 	return jetstream.StreamConfig{
 		Name:        StreamName,
-		Description: "jiku-docs: eventos de documentación (outbox)",
+		Description: "jiku-docs: documentation events (outbox)",
 		Subjects:    []string{protocol.EventsWildcard(instance)},
 		Retention:   jetstream.LimitsPolicy,
 		MaxAge:      StreamMaxAge,

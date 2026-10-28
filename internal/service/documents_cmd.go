@@ -113,7 +113,7 @@ func (s *Service) CreateDocument(ctx context.Context, c *Call, in NewDocument) (
 			(in.FolderID == "" || d.FolderID == in.FolderID) && (in.FileName == "" || strings.EqualFold(d.FileName, in.FileName)) {
 			return map[string]any{"id": d.ID, "version": 1, "path": d.Path, "folderId": d.FolderID, "fileName": d.FileName}, nil
 		}
-		return nil, protocol.Ef(protocol.CodeAlreadyExists, "Ya existe un documento con ese id y otro contenido")
+		return nil, protocol.Ef(protocol.CodeAlreadyExists, "A document with that id and other content already exists")
 	}
 	tree, err := s.Tree(ctx)
 	if err != nil {
@@ -135,7 +135,7 @@ func (s *Service) CreateDocument(ctx context.Context, c *Call, in NewDocument) (
 	}
 	title := p.title
 	if in.FileName == "" && title == "" {
-		title = "documento"
+		title = "document"
 		p.title = title
 	}
 	key := storageKey(in.ID, 1, p.checksum)
@@ -157,7 +157,7 @@ func (s *Service) CreateDocument(ctx context.Context, c *Call, in NewDocument) (
 			if in.FileName == "" && attempt < 10 {
 				continue // a concurrent creation took the generated name: pick the next one
 			}
-			return nil, protocol.Ef(protocol.CodeAlreadyExists, "Ya existe un documento con ese nombre en la carpeta").With("fileName", fileName)
+			return nil, protocol.Ef(protocol.CodeAlreadyExists, "A document with that name already exists in the folder").With("fileName", fileName)
 		}
 		return out, err
 	}
@@ -403,7 +403,7 @@ func (s *Service) documentsMove(ctx context.Context, c *Call) (any, error) {
 		return nil, err
 	}
 	if !hasFolder && fileName == "" {
-		return nil, protocol.InvalidField("payload", nil, []string{"folderId", "fileName"}, "Indicá folderId, fileName o los dos")
+		return nil, protocol.InvalidField("payload", nil, []string{"folderId", "fileName"}, "Give folderId, fileName or both")
 	}
 	var out map[string]any
 	err = store.InTx(ctx, s.DB, func(tx pgx.Tx) error {
@@ -456,7 +456,7 @@ func (s *Service) documentsMove(ctx context.Context, c *Call) (any, error) {
 		}
 		_, err = tx.Exec(ctx, `UPDATE documents SET folder_id = $2, file_name = $3, path = $4 WHERE id = $1`, id, target, name, path)
 		if store.IsUniqueViolation(err, "") {
-			return protocol.Ef(protocol.CodeAlreadyExists, "Ya existe un documento con ese nombre en la carpeta destino")
+			return protocol.Ef(protocol.CodeAlreadyExists, "A document with that name already exists in the destination folder")
 		}
 		if err != nil {
 			return err
@@ -579,7 +579,7 @@ func (s *Service) documentsRestore(ctx context.Context, c *Call) (any, error) {
 	}
 	newVersion := int(base) + 1
 	key := storageKey(id, newVersion, p.checksum)
-	message := "Restaurado desde la versión " + itoa(int(from))
+	message := "Restored from version " + itoa(int(from))
 	if err := s.Blob.Put(ctx, key, p.content, "text/markdown; charset=utf-8"); err != nil {
 		return nil, err
 	}
@@ -619,7 +619,7 @@ func (s *Service) documentsRestore(ctx context.Context, c *Call) (any, error) {
 		if wasDeleted {
 			if ok, err := lockFolderShared(ctx, tx, d.FolderID); err != nil || !ok {
 				if err == nil {
-					err = protocol.Ef(protocol.CodeFolderNotFound, "La carpeta del documento ya no existe")
+					err = protocol.Ef(protocol.CodeFolderNotFound, "The folder of the document no longer exists")
 				}
 				return err
 			}
@@ -639,7 +639,7 @@ func (s *Service) documentsRestore(ctx context.Context, c *Call) (any, error) {
 			updated_by_name = $10 WHERE id = $1`,
 			id, p.title, p.fm.Visibility, newVersion, p.checksum, p.size, len(p.findings) > 0, c.Caller.ID, now, name)
 		if store.IsUniqueViolation(err, "") {
-			return protocol.Ef(protocol.CodeAlreadyExists, "Ya existe otro documento con ese nombre en la carpeta")
+			return protocol.Ef(protocol.CodeAlreadyExists, "Another document with that name already exists in the folder")
 		}
 		if err != nil {
 			return err
@@ -767,7 +767,7 @@ func (s *Service) documentsUnlock(ctx context.Context, c *Call) (any, error) {
 			return err
 		}
 		if force && !c.Caller.SeesRestricted() {
-			return protocol.Ef(protocol.CodePermissionDenied, "Forzar el desbloqueo es solo para administradores")
+			return protocol.Ef(protocol.CodePermissionDenied, "Forcing the unlock is for administrators only")
 		}
 		lock, err := loadLock(ctx, tx, id, s.now())
 		if err != nil {

@@ -220,7 +220,7 @@ func checkVisibilityChange(c *caller.Caller, from, to string) error {
 		return nil
 	}
 	if (from == markdown.VisibilityRestricted || to == markdown.VisibilityRestricted) && !c.SeesRestricted() {
-		return protocol.Ef(protocol.CodePermissionDenied, "Solo un administrador puede poner o quitar la visibilidad restricted")
+		return protocol.Ef(protocol.CodePermissionDenied, "Only an administrator can set or remove the restricted visibility")
 	}
 	return nil
 }

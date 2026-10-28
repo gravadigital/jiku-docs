@@ -69,13 +69,13 @@ func ParseFilter(spec *Spec, o *validate.Object, key string) (*Filter, error) {
 		for _, name := range spec.Filterable {
 			if spec.FilterableSpecs[name].Required {
 				return nil, protocol.InvalidField(validate.Join(o.Path(), key)+"."+name, nil, nil,
-					"Falta el filtro obligatorio %q", key+"."+name)
+					"The required filter %q is missing", key+"."+name)
 			}
 		}
 		return f, nil
 	}
 	if !validate.IsObject(raw) {
-		return nil, protocol.InvalidField(validate.Join(o.Path(), key), validate.Value(raw), nil, "El filtro tiene que ser un objeto")
+		return nil, protocol.InvalidField(validate.Join(o.Path(), key), validate.Value(raw), nil, "The filter must be an object")
 	}
 	allowed := spec.Filterable
 	if spec.AllowOr {
@@ -90,21 +90,21 @@ func ParseFilter(spec *Spec, o *validate.Object, key string) (*Filter, error) {
 	if orRaw != nil {
 		var items []json.RawMessage
 		if !validate.IsArray(orRaw) || json.Unmarshal(orRaw, &items) != nil {
-			return nil, protocol.InvalidField(path+".or", validate.Value(orRaw), nil, "filter.or tiene que ser una lista de filtros")
+			return nil, protocol.InvalidField(path+".or", validate.Value(orRaw), nil, "filter.or must be a list of filters")
 		}
 		if len(items) > 10 {
-			return nil, protocol.InvalidField(path+".or", nil, nil, "filter.or admite como máximo 10 elementos")
+			return nil, protocol.InvalidField(path+".or", nil, nil, "filter.or allows at most 10 items")
 		}
 		for i, item := range items {
 			if !validate.IsObject(item) {
-				return nil, protocol.InvalidField(path+".or", validate.Value(item), nil, "Cada elemento de filter.or tiene que ser un objeto")
+				return nil, protocol.InvalidField(path+".or", validate.Value(item), nil, "Each item of filter.or must be an object")
 			}
 			c, nested, err := parseConds(spec, item, path+".or["+itoa(i)+"]", spec.Filterable)
 			if err != nil {
 				return nil, err
 			}
 			if nested != nil {
-				return nil, protocol.InvalidField(path+".or", "or", spec.Filterable, "filter.or admite un solo nivel")
+				return nil, protocol.InvalidField(path+".or", "or", spec.Filterable, "filter.or allows a single level")
 			}
 			f.Or = append(f.Or, c)
 		}
@@ -112,7 +112,7 @@ func ParseFilter(spec *Spec, o *validate.Object, key string) (*Filter, error) {
 	for _, name := range spec.Filterable {
 		if spec.FilterableSpecs[name].Required {
 			if _, ok := conds[name]; !ok {
-				return nil, protocol.InvalidField(path+"."+name, nil, nil, "Falta el filtro obligatorio %q", key+"."+name)
+				return nil, protocol.InvalidField(path+"."+name, nil, nil, "The required filter %q is missing", key+"."+name)
 			}
 		}
 	}
@@ -154,14 +154,14 @@ func parseCond(spec *Spec, fs FilterSpec, name, path string, v json.RawMessage) 
 		if fs.Enum != "" {
 			allowed = spec.Enums[fs.Enum]
 		}
-		return protocol.InvalidField(path, validate.Value(v), allowed, "El filtro %q %s", path, msg)
+		return protocol.InvalidField(path, validate.Value(v), allowed, "The filter %q %s", path, msg)
 	}
 	if bytes.Equal(bytes.TrimSpace(v), []byte("null")) {
-		return c, bad("no acepta null")
+		return c, bad("does not accept null")
 	}
 	if fs.Range {
 		if !validate.IsObject(v) {
-			return c, bad("tiene que ser un rango { gte, lte }")
+			return c, bad("must be a range { gte, lte }")
 		}
 		o := validate.ParseObject(v, path, "gte", "lte")
 		if gte, ok := o.Time("gte", false); ok {
@@ -174,14 +174,14 @@ func parseCond(spec *Spec, fs FilterSpec, name, path string, v json.RawMessage) 
 			return c, err
 		}
 		if c.Gte == nil && c.Lte == nil {
-			return c, bad("tiene que tener gte o lte")
+			return c, bad("must have gte or lte")
 		}
 		return c, nil
 	}
 	if fs.Kind == KindBoolean {
 		var b bool
 		if err := json.Unmarshal(v, &b); err != nil {
-			return c, bad("tiene que ser booleano")
+			return c, bad("must be a boolean")
 		}
 		c.Bool = &b
 		return c, nil
@@ -189,20 +189,20 @@ func parseCond(spec *Spec, fs FilterSpec, name, path string, v json.RawMessage) 
 	var elems []json.RawMessage
 	if validate.IsArray(v) {
 		if !fs.List {
-			return c, bad("no acepta una lista")
+			return c, bad("does not accept a list")
 		}
 		if err := json.Unmarshal(v, &elems); err != nil {
-			return c, bad("es una lista mal formada")
+			return c, bad("is a malformed list")
 		}
 		max := fs.MaxItems
 		if max == 0 {
 			max = 200
 		}
 		if len(elems) == 0 {
-			return c, bad("no acepta una lista vacía")
+			return c, bad("does not accept an empty list")
 		}
 		if len(elems) > max {
-			return c, bad("admite como máximo 200 valores")
+			return c, bad("allows at most 200 values")
 		}
 	} else {
 		elems = []json.RawMessage{v}
@@ -212,19 +212,19 @@ func parseCond(spec *Spec, fs FilterSpec, name, path string, v json.RawMessage) 
 		case KindInteger:
 			n, ok := validate.ElemInt(el)
 			if !ok {
-				return c, bad("tiene que ser un entero o una lista de enteros")
+				return c, bad("must be an integer or a list of integers")
 			}
 			c.Ints = append(c.Ints, n)
 		default:
 			s, ok := validate.ElemString(el)
 			if !ok {
-				return c, bad("tiene que ser un texto o una lista de textos")
+				return c, bad("must be a string or a list of strings")
 			}
 			if fs.ULID && !protocol.IsULID(s) {
-				return c, bad("tiene que ser un ULID")
+				return c, bad("must be a ULID")
 			}
 			if fs.Enum != "" && !contains(spec.Enums[fs.Enum], s) {
-				return c, bad("no es un valor permitido")
+				return c, bad("is not an allowed value")
 			}
 			c.Strings = append(c.Strings, s)
 		}
@@ -243,12 +243,12 @@ func ParseSort(spec *Spec, o *validate.Object) ([]SortKey, []string, error) {
 	if ok && !o.IsNull("sort") {
 		var list []json.RawMessage
 		if !validate.IsArray(raw) || json.Unmarshal(raw, &list) != nil {
-			return nil, nil, protocol.InvalidField(path, validate.Value(raw), sortAllowed(spec), "sort tiene que ser una lista")
+			return nil, nil, protocol.InvalidField(path, validate.Value(raw), sortAllowed(spec), "sort must be a list")
 		}
 		for _, el := range list {
 			s, ok := validate.ElemString(el)
 			if !ok || !contains(sortAllowed(spec), s) {
-				return nil, nil, protocol.InvalidField(path, validate.Value(el), sortAllowed(spec), "%v no es un orden permitido", validate.Value(el))
+				return nil, nil, protocol.InvalidField(path, validate.Value(el), sortAllowed(spec), "%v is not an allowed sort", validate.Value(el))
 			}
 			names = append(names, s)
 		}
@@ -261,7 +261,7 @@ func ParseSort(spec *Spec, o *validate.Object) ([]SortKey, []string, error) {
 	for _, n := range names {
 		k := SortKey{Name: strings.TrimPrefix(n, "-"), Desc: strings.HasPrefix(n, "-")}
 		if seen[k.Name] {
-			return nil, nil, protocol.InvalidField(path, n, sortAllowed(spec), "El orden %q está repetido", k.Name)
+			return nil, nil, protocol.InvalidField(path, n, sortAllowed(spec), "The sort %q is repeated", k.Name)
 		}
 		seen[k.Name] = true
 		keys = append(keys, k)
@@ -352,7 +352,7 @@ func ParseList(spec *Spec, raw json.RawMessage, extra ...string) (*List, *valida
 		case json.Unmarshal(v, &s) == nil && s == "only":
 			q.Count = "only"
 		default:
-			return nil, nil, protocol.InvalidField("count", validate.Value(v), []string{"true", "false", "only"}, "count acepta true, false u \"only\"")
+			return nil, nil, protocol.InvalidField("count", validate.Value(v), []string{"true", "false", "only"}, "count accepts true, false or \"only\"")
 		}
 	}
 	if spec.Has("page") {

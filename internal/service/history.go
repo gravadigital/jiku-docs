@@ -194,7 +194,7 @@ type HistoryReport struct {
 	Documents      int
 	VersionsPruned int
 	BytesFreed     int64
-	// ObjectsTrashed: objects of compacted versions moved to papelera/ in this run.
+	// ObjectsTrashed: objects of compacted versions moved to trash/ in this run.
 	ObjectsTrashed int
 	ObjectsPending int
 	Errors         int
@@ -207,7 +207,7 @@ var ErrCompactionBusy = errors.New("history compaction already running")
 
 // CompactHistory runs the compaction: the pending documents in batches ordered by id (or one
 // document), each in its own short transaction, and then the deletion of the pruned objects in
-// S3 (moved to papelera/, see trash.go). Only one process runs it at a time: if the advisory lock is taken, it returns a report
+// S3 (moved to trash/, see trash.go). Only one process runs it at a time: if the advisory lock is taken, it returns a report
 // with Skipped set.
 func (s *Service) CompactHistory(ctx context.Context, opts HistoryOptions) (*HistoryReport, error) {
 	start := time.Now()
@@ -430,7 +430,7 @@ func pinnedVersions(ctx context.Context, q store.Querier, docID string, now time
 	return out, rows.Err()
 }
 
-// DrainPrunedObjects moves to papelera/ the objects of compacted versions, in batches of
+// DrainPrunedObjects moves to trash/ the objects of compacted versions, in batches of
 // DeleteBatch keys (parallel copies, then one DeleteObjects of the originals), each trash copy
 // carrying its version row. A row of pruned_objects goes away only once its object is in the
 // trash and the original is gone (or the original no longer existed). A row whose key is still
@@ -507,14 +507,14 @@ func (s *Service) PrunedObjectsPending(ctx context.Context) (int, time.Duration,
 // document_not_found without details.
 func missingVersion(ctx context.Context, q store.Querier, docID string, current, version int) error {
 	if version > current {
-		return protocol.Ef(protocol.CodeDocumentNotFound, "La versión %d no existe", version).With("version", version)
+		return protocol.Ef(protocol.CodeDocumentNotFound, "Version %d does not exist", version).With("version", version)
 	}
 	var prev, next *int
 	if err := q.QueryRow(ctx, `SELECT max(version) FILTER (WHERE version < $2), min(version) FILTER (WHERE version > $2)
 		FROM document_versions WHERE document_id = $1`, docID, version).Scan(&prev, &next); err != nil {
 		return err
 	}
-	return protocol.Ef(protocol.CodeVersionPruned, "La versión %d fue compactada: elegí una de las versiones conservadas más cercanas", version).
+	return protocol.Ef(protocol.CodeVersionPruned, "Version %d was pruned: choose one of the nearest kept versions", version).
 		With("requestedVersion", version).With("previousAvailable", intOrNil(prev)).With("nextAvailable", intOrNil(next))
 }
 

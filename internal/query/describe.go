@@ -35,13 +35,13 @@ type Defaults struct {
 
 // Labels of enum values shown by the interfaces.
 var enumLabels = map[string]string{
-	"internal": "Interno", "public": "Visible para el cliente", "restricted": "Restringido",
-	"human": "Persona", "agent": "Agente", "service": "Servicio",
-	"read": "Lectura", "write": "Escritura", "manage": "Administración",
-	"latest": "Última versión", "pinned": "Versión fija",
-	"active": "Activo", "revoked": "Revocado", "expired": "Vencido",
-	"role": "Rol", "user": "Usuario",
-	"create": "Creación", "update": "Edición", "restore": "Restauración",
+	"internal": "Internal", "public": "Visible to the client", "restricted": "Restricted",
+	"human": "Person", "agent": "Agent", "service": "Service",
+	"read": "Read", "write": "Write", "manage": "Manage",
+	"latest": "Latest version", "pinned": "Pinned version",
+	"active": "Active", "revoked": "Revoked", "expired": "Expired",
+	"role": "Role", "user": "User",
+	"create": "Creation", "update": "Edit", "restore": "Restore",
 }
 
 // Describe projects a spec. It reads the very structures the validator reads.

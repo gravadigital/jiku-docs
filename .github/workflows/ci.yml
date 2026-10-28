@@ -8,10 +8,12 @@ on:
     paths-ignore:
       - '**.md'
       - 'LICENSE'
+      - 'NOTICE'
   pull_request:
     paths-ignore:
       - '**.md'
       - 'LICENSE'
+      - 'NOTICE'
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}

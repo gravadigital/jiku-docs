@@ -102,7 +102,7 @@ func docConds(conds map[string]query.Cond, a *args) []string {
 				out = append(out, "d.deleted_at IS NULL")
 			}
 		case "hasProject", "hasClient", "hasTopic":
-			// "Sin proyecto" (hasProject false) means no project at all: neither direct nor
+			// "Sin proyecto" (no project; hasProject false) means no project at all: neither direct nor
 			// through a requirement or a task. hasClient looks at jiku.clients only.
 			exists := map[string]string{
 				"hasProject": "EXISTS (SELECT 1 FROM document_relations hr WHERE hr.document_id = d.id AND hr.entity_type IN ('project','requirement','task'))",
@@ -807,7 +807,7 @@ func (s *Service) documentsChanges(ctx context.Context, c *Call) (any, error) {
 			return nil, err
 		}
 		if since < purged {
-			return nil, protocol.Ef(protocol.CodeInvalidCursor, "sinceSeq es más viejo que la retención del feed (30 días): hacé una reconciliación completa").
+			return nil, protocol.Ef(protocol.CodeInvalidCursor, "sinceSeq is older than the retention of the feed (30 days): run a full reconciliation").
 				With("oldestSeq", purged+1)
 		}
 	}

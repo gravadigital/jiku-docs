@@ -18,7 +18,7 @@ import (
 // visibility model never makes anything more visible than it was.
 //
 //  1. Every document a person with role `user` cannot read under the ACL in force becomes
-//     `restricted` (`/importado/` and any folder without inheritance and without a rule for
+//     `restricted` (`/imported/` and any folder without inheritance and without a rule for
 //     `user`). Rules for a specific user id do not count: that person loses access, which is the
 //     safe side.
 //  2. Every `public` document in a folder with an effective externalBlocked becomes `internal`.
@@ -35,8 +35,8 @@ import (
 const (
 	p1StateKey     = "migration:p1-visibility"
 	p1NamesKey     = "migration:p1-names"
-	p1MsgRestrict  = "Migración P-1: visibilidad restricted (la carpeta no era legible para el rol user)"
-	p1MsgInternal  = "Migración P-1: visibilidad internal (la carpeta bloqueaba a los externos)"
+	p1MsgRestrict  = "P-1 migration: visibility restricted (the folder was not readable by the role user)"
+	p1MsgInternal  = "P-1 migration: visibility internal (the folder blocked external users)"
 	p1MigrationVia = "service"
 )
 

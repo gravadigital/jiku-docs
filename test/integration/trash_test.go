@@ -13,7 +13,7 @@ import (
 )
 
 // `jiku-docs storage restore-from-trash`: a version compacted by mistake comes back, object and
-// row, from papelera/. The row it puts back is protected, so the next compaction leaves it.
+// row, from trash/. The row it puts back is protected, so the next compaction leaves it.
 func TestRestoreFromTrash(t *testing.T) {
 	h := newHist(t)
 	ctx := context.Background()
@@ -37,7 +37,7 @@ func TestRestoreFromTrash(t *testing.T) {
 		t.Fatal("the object of version 3 is in the trash")
 	}
 
-	// The object alone (also accepted with the papelera/ prefix).
+	// The object alone (also accepted with the trash/ prefix).
 	res, err := h.svc.RestoreFromTrash(ctx, blob.TrashKey(before.key), false)
 	if err != nil || !res.ObjectRestored || res.RowRestored || res.Key != before.key {
 		t.Fatalf("%+v %v", res, err)

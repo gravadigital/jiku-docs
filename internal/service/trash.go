@@ -19,7 +19,7 @@ import (
 // The trash (docs/history-compaction-v1.md, section 4): every content object the service
 // removes — versions compacted by the history compaction, orphans of the weekly sweep, the
 // versions of a document purged 30 days after its deletion — is first copied to
-// papelera/<original key> and only then deleted. A lifecycle rule expires the trash after
+// trash/<original key> and only then deleted. A lifecycle rule expires the trash after
 // DOCS_TRASH_RETENTION_DAYS; until then `jiku-docs storage restore-from-trash` brings it back.
 
 // Sources of the objects moved to the trash (label of the metric).
@@ -44,7 +44,7 @@ type trashObject struct {
 	Meta map[string]string // nil: the copy keeps the source's metadata
 }
 
-// moveToTrash moves objects to papelera/: the copies run in parallel, then the originals that
+// moveToTrash moves objects to trash/: the copies run in parallel, then the originals that
 // were copied are deleted with DeleteObjects (MaxDeleteBatch keys per call). It returns the
 // keys that are done — in the trash with the original gone, or the original already missing —
 // and how many objects it moved now. A key that is not done is left as it was (maybe with a
@@ -183,10 +183,10 @@ type TrashRestore struct {
 	RowRestored bool `json:"rowRestored"`
 }
 
-// ErrNotInTrash: the object is not in papelera/ (never was, or the lifecycle expired it).
+// ErrNotInTrash: the object is not in trash/ (never was, or the lifecycle expired it).
 var ErrNotInTrash = errors.New("the object is not in the trash (never removed, or expired after DOCS_TRASH_RETENTION_DAYS)")
 
-// RestoreFromTrash copies papelera/<key> back to key (never over an existing object; the trash
+// RestoreFromTrash copies trash/<key> back to key (never over an existing object; the trash
 // copy stays until it expires). With versionRow it also puts the compacted version back in
 // document_versions, from the row the trash copy carries, marked protected so the next
 // compaction does not remove it again. The document must exist, not be deleted, and the version

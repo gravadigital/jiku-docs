@@ -197,7 +197,7 @@ func TestHistory01RecentVersionsStay(t *testing.T) {
 }
 
 // Case 2: the same, 3 days ago: only the last of the block and the current one stay (and the
-// creation, always protected). The objects go to papelera/ (nothing of them stays under docs/),
+// creation, always protected). The objects go to trash/ (nothing of them stays under docs/),
 // and the count is reported.
 func TestHistory02OldBlockKeepsItsLast(t *testing.T) {
 	h := newHist(t)
@@ -219,7 +219,7 @@ func TestHistory02OldBlockKeepsItsLast(t *testing.T) {
 	}
 	trash := h.list(blob.TrashPrefix + "docs/" + id + "/")
 	if len(trash) != 299 || !h.objectExists(blob.TrashKey(keys[2])) || h.objectExists(blob.TrashKey(keys[last])) {
-		t.Fatalf("the pruned objects are in papelera/: %d", len(trash))
+		t.Fatalf("the pruned objects are in trash/: %d", len(trash))
 	}
 	g := h.e.OK(h.e.Q(tu.User, "documents.get", map[string]any{"id": id}))
 	if g["prunedVersionsCount"] != float64(299) {
@@ -321,7 +321,7 @@ func TestHistory08And09MessageAndRestoreStay(t *testing.T) {
 	day := histNow.AddDate(0, 0, -60)
 	id := h.doc(tu.User, day.Add(-48*time.Hour))
 	a := h.save(id, tu.User, "", "", day)
-	msg := h.save(id, tu.User, "", "Versión enviada al cliente", day.Add(time.Minute))
+	msg := h.save(id, tu.User, "", "Version sent to the client", day.Add(time.Minute))
 	h.save(id, tu.User, "", "", day.Add(2*time.Minute))
 	h.clk.Set(day.Add(3 * time.Minute))
 	r := h.e.OK(h.e.Cmd(tu.User, "documents."+id+".restore", map[string]any{"fromVersion": a, "baseVersion": h.cur[id]}))
@@ -433,14 +433,14 @@ func TestHistory12Idempotent(t *testing.T) {
 	}
 }
 
-// failingBlob cuts the run between the copy to papelera/ and the deletion of the originals.
+// failingBlob cuts the run between the copy to trash/ and the deletion of the originals.
 type failingBlob struct{ blob.Store }
 
 func (failingBlob) DeleteMany(context.Context, []string) ([]string, error) {
 	return nil, errors.New("simulated S3 outage")
 }
 
-// Case 13: the process stops after the commit, with the objects already copied to papelera/
+// Case 13: the process stops after the commit, with the objects already copied to trash/
 // but not deleted: the rows stay in pruned_objects (the originals too, without rows of
 // versions) and the next run finishes the move. An original that disappeared meanwhile counts
 // as done.
@@ -797,6 +797,7 @@ func TestHistoryMigrationBackfill(t *testing.T) {
 		{1, "human", nil, "create", true},
 		{2, "human", nil, "update", false},
 		{3, "agent", nil, "update", false},
+		// The literal the service wrote before 0003: the backfill matches it, not the current English one.
 		{4, "human", "Restaurado desde la versión 2", "restore", true},
 		{5, "agent", "hito", "update", true},
 		{6, "service", nil, "update", true},

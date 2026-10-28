@@ -67,7 +67,7 @@ func TestHedgeDocImport(t *testing.T) {
 		t.Fatal(err)
 	}
 	docs := e.Q(tu.DocsUser, "documents.list", map[string]any{"sort": []string{"path"}, "fields": []string{"path", "createdAt", "createdBy"}}).Items()
-	if len(docs) != 2 || docs[0]["path"] != "/importado/Notas sueltas.md" || docs[1]["path"] != "/infra/servidores/Servidores.md" {
+	if len(docs) != 2 || docs[0]["path"] != "/imported/Notas sueltas.md" || docs[1]["path"] != "/infra/servidores/Servidores.md" {
 		t.Fatalf("%v", docs)
 	}
 	if docs[1]["createdAt"] != "2023-05-02T10:00:00.000Z" || docs[1]["createdBy"] != tu.DocsUser {
@@ -87,19 +87,19 @@ func TestHedgeDocImport(t *testing.T) {
 		t.Fatalf("frontmatter:\n%s", content)
 	}
 	v := e.Q(tu.Admin, "documents.versions.list", map[string]any{"filter": map[string]any{"documentId": srv}}).Items()
-	if len(v) != 1 || !strings.Contains(v[0]["message"].(string), "Autor original: Ana") {
+	if len(v) != 1 || !strings.Contains(v[0]["message"].(string), "Original author: Ana") {
 		t.Fatal(v)
 	}
-	// P-1: the notes of /importado/ are imported restricted (administrators only); a mapped note
+	// P-1: the notes of /imported/ are imported restricted (administrators only); a mapped note
 	// is internal, like any document.
 	if items := e.Q(tu.User, "documents.list", nil).Items(); len(items) != 1 || items[0]["id"] != srv {
 		t.Fatalf("user sees %v", items)
 	}
 	if d := e.OK(e.Q(tu.Admin, "documents.get", map[string]any{"id": docs[0]["id"]})); d["visibility"] != "restricted" {
-		t.Fatalf("/importado/ note visibility %v", d["visibility"])
+		t.Fatalf("/imported/ note visibility %v", d["visibility"])
 	}
-	if n := len(e.Q(tu.Admin, "documents.list", map[string]any{"filter": map[string]any{"pathPrefix": "/importado/"}}).Items()); n != 1 {
-		t.Fatalf("admin sees %d in /importado/", n)
+	if n := len(e.Q(tu.Admin, "documents.list", map[string]any{"filter": map[string]any{"pathPrefix": "/imported/"}}).Items()); n != 1 {
+		t.Fatalf("admin sees %d in /imported/", n)
 	}
 	// The report flags the possible secret, without the secret.
 	rep, _ := os.ReadFile(report)
@@ -157,9 +157,9 @@ func TestHedgeDocImportRelations(t *testing.T) {
 		}
 	}
 	write("note,folder,projects,clients,requirements,topics\n" +
-		"rel01,/clientes/acme/web/reuniones/,12;99,4,812,reuniones;Técnico\n" +
-		"rel02,/clientes/acme/web/tecnico/,,,,\n" +
-		"rel03,/clientes/acme/web/tecnico/,,,,\n")
+		"rel01,/clients/acme/web/reuniones/,12;99,4,812,reuniones;Técnico\n" +
+		"rel02,/clients/acme/web/tecnico/,,,,\n" +
+		"rel03,/clients/acme/web/tecnico/,,,,\n")
 	opts := hedgedoc.Options{Source: notes, Mapping: mapping, Report: report, HedgeDocURL: "https://hd.test", MaxAssetBytes: 1 << 20}
 	ctx := context.Background()
 	svc := e.Inst.Svc
@@ -181,7 +181,7 @@ func TestHedgeDocImportRelations(t *testing.T) {
 		t.Fatal(err)
 	}
 	byProject := e.Q(tu.Admin, "documents.list", map[string]any{"filter": map[string]any{"projectId": 12}, "fields": []string{"path"}}).Items()
-	if len(byProject) != 1 || byProject[0]["path"] != "/clientes/acme/web/reuniones/Reunión kickoff.md" {
+	if len(byProject) != 1 || byProject[0]["path"] != "/clients/acme/web/reuniones/Reunión kickoff.md" {
 		t.Fatalf("documents of project 12: %v", byProject)
 	}
 	id := byProject[0]["id"].(string)
@@ -199,25 +199,25 @@ func TestHedgeDocImportRelations(t *testing.T) {
 	}
 
 	// A person edits rel03 in jiku-docs.
-	edited := e.Q(tu.Admin, "documents.list", map[string]any{"filter": map[string]any{"path": "/clientes/acme/web/tecnico/Editada.md"}}).Items()[0]["id"].(string)
+	edited := e.Q(tu.Admin, "documents.list", map[string]any{"filter": map[string]any{"path": "/clients/acme/web/tecnico/Editada.md"}}).Items()[0]["id"].(string)
 	body := "# Editada a mano\n"
 	e.OK(e.Cmd(tu.Admin, "documents."+edited+".update", map[string]any{"baseVersion": 1, "content": body, "checksum": tu.Sum(body)}))
 
 	// Rerun with new relations: rel02 (only the import wrote it) gets version 2; rel03 is not
 	// overwritten; rel01 stays unchanged.
 	write("note,folder,projects,clients,requirements,topics\n" +
-		"rel01,/clientes/acme/web/reuniones/,12;99,4,812,reuniones;Técnico\n" +
-		"rel02,/clientes/acme/web/tecnico/,31,,,tecnico\n" +
-		"rel03,/clientes/acme/web/tecnico/,31,,,\n")
+		"rel01,/clients/acme/web/reuniones/,12;99,4,812,reuniones;Técnico\n" +
+		"rel02,/clients/acme/web/tecnico/,31,,,tecnico\n" +
+		"rel03,/clients/acme/web/tecnico/,31,,,\n")
 	if err := hedgedoc.Run(ctx, opts, svc, logging.Discard()); err != nil {
 		t.Fatal(err)
 	}
 	byProject = e.Q(tu.Admin, "documents.list", map[string]any{"filter": map[string]any{"projectId": 31}, "fields": []string{"path", "version"}}).Items()
-	if len(byProject) != 1 || byProject[0]["path"] != "/clientes/acme/web/tecnico/Arquitectura.md" || byProject[0]["version"].(float64) != 2 {
+	if len(byProject) != 1 || byProject[0]["path"] != "/clients/acme/web/tecnico/Arquitectura.md" || byProject[0]["version"].(float64) != 2 {
 		t.Fatalf("documents of project 31: %v", byProject)
 	}
 	v := e.Q(tu.Admin, "documents.versions.list", map[string]any{"filter": map[string]any{"documentId": byProject[0]["id"]}}).Items()
-	if len(v) != 2 || !strings.Contains(v[0]["message"].(string)+v[1]["message"].(string), "Reimportado de HedgeDoc") {
+	if len(v) != 2 || !strings.Contains(v[0]["message"].(string)+v[1]["message"].(string), "Re-imported from HedgeDoc") {
 		t.Fatalf("versions %v", v)
 	}
 	rep, _ = os.ReadFile(report)
@@ -228,7 +228,7 @@ func TestHedgeDocImportRelations(t *testing.T) {
 		}
 	}
 	if !strings.Contains(lines[notes[0].ID], ",unchanged,") || !strings.Contains(lines[notes[1].ID], ",updated,") ||
-		!strings.Contains(lines[notes[2].ID], ",exists,editada en jiku-docs") {
+		!strings.Contains(lines[notes[2].ID], ",exists,edited in jiku-docs") {
 		t.Fatalf("rerun report:\n%s", rep)
 	}
 	if g := e.OK(e.Q(tu.Admin, "documents.get", map[string]any{"id": edited, "include": []string{"content"}})); g["content"] != body {

@@ -100,14 +100,14 @@ func TestFileNames(t *testing.T) {
 	if got := FileName("Notas / reunión: 2026", "x"); got != "Notas - reunión: 2026.md" {
 		t.Error(got)
 	}
-	if got := FileName("   ", "sin-titulo-abc"); got != "sin-titulo-abc.md" {
+	if got := FileName("   ", "untitled-abc"); got != "untitled-abc.md" {
 		t.Error(got)
 	}
 	taken := map[string]bool{"a.md": true, "a (2).md": true}
 	if got := UniqueName("A.md", taken); got != "A (3).md" {
 		t.Error(got)
 	}
-	if !strings.Contains(Message(notes()[0]), "Autor original: Ana") {
+	if !strings.Contains(Message(notes()[0]), "Original author: Ana") {
 		t.Error("message")
 	}
 }
@@ -191,5 +191,24 @@ func TestWithoutRelation(t *testing.T) {
 	}
 	if _, ok := WithoutRelation(rel, "task", 1); ok {
 		t.Error("absent relation")
+	}
+}
+
+func TestIsImportMessage(t *testing.T) {
+	n := notes()[0]
+	for _, msg := range []string{
+		Message(n), ReimportMessage(n),
+		// Messages written by 1.0.0, in Spanish: still recognised as the import's own.
+		"Importado de HedgeDoc (nota x). Autor original: Ana. Creada: 2024-01-01 10:00.",
+		"Reimportado de HedgeDoc (nota x): contenido, relaciones y temas de la planilla actualizados.",
+	} {
+		if !IsImportMessage(msg) {
+			t.Errorf("not recognised: %q", msg)
+		}
+	}
+	for _, msg := range []string{"", "v2", "Project assigned: X", "Notes imported from HedgeDoc"} {
+		if IsImportMessage(msg) {
+			t.Errorf("recognised by mistake: %q", msg)
+		}
 	}
 }

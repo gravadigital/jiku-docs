@@ -93,7 +93,7 @@ func (s *Service) readContent(ctx context.Context, c *caller.Caller, o *validate
 	}
 	if hasContent == hasUpload {
 		return nil, protocol.InvalidField("content", nil, []string{"content", "contentUploadId"},
-			"Mandá exactamente uno de content o contentUploadId")
+			"Send exactly one of content or contentUploadId")
 	}
 	in := &contentInput{}
 	if hasContent {
@@ -102,7 +102,7 @@ func (s *Service) readContent(ctx context.Context, c *caller.Caller, o *validate
 			return nil, err
 		}
 		if len(text) > MaxInlineBytes {
-			return nil, protocol.Ef(protocol.CodeContentTooLarge, "El contenido inline admite hasta 256 KiB: usá documents.request-content-upload").
+			return nil, protocol.Ef(protocol.CodeContentTooLarge, "Inline content allows up to 256 KiB: use documents.request-content-upload").
 				With("maxInlineBytes", MaxInlineBytes)
 		}
 		in.raw = []byte(text)
@@ -123,14 +123,14 @@ func (s *Service) readContent(ctx context.Context, c *caller.Caller, o *validate
 		b, err := s.Blob.Get(ctx, key, MaxDocumentBytes)
 		switch {
 		case errors.Is(err, blob.ErrNotFound):
-			return nil, protocol.Ef(protocol.CodeUploadNotFound, "Todavía no se subió el contenido a la URL")
+			return nil, protocol.Ef(protocol.CodeUploadNotFound, "The content has not been uploaded to the URL yet")
 		case errors.Is(err, blob.ErrTooLarge):
 			return nil, protocol.E(protocol.CodeContentTooLarge).With("maxBytes", MaxDocumentBytes)
 		case err != nil:
 			return nil, err
 		}
 		if Checksum(b) != declared {
-			return nil, protocol.Ef(protocol.CodeChecksumMismatch, "El contenido subido no coincide con el checksum declarado al pedir la subida")
+			return nil, protocol.Ef(protocol.CodeChecksumMismatch, "The uploaded content does not match the checksum declared when requesting the upload")
 		}
 		in.raw, in.uploadID = b, id
 	}
@@ -175,7 +175,7 @@ func (s *Service) prepare(ctx context.Context, raw []byte, fileName string, exis
 		return nil, protocol.E(protocol.CodeContentTooLarge).With("maxBytes", MaxDocumentBytes)
 	}
 	if !utf8.Valid(raw) {
-		return nil, protocol.InvalidField("content", nil, nil, "El contenido tiene que ser texto UTF-8")
+		return nil, protocol.InvalidField("content", nil, nil, "The content must be UTF-8 text")
 	}
 	content := bytes.ReplaceAll(raw, []byte("\r\n"), []byte("\n"))
 	text := string(content)
@@ -213,7 +213,7 @@ func (s *Service) prepare(ctx context.Context, raw []byte, fileName string, exis
 		for _, id := range missing {
 			e, ok := found[id]
 			if !ok {
-				return nil, protocol.Ef(protocol.CodeInvalidRelation, "La entidad %s %d no existe o no es visible", k.EntityType, id).
+				return nil, protocol.Ef(protocol.CodeInvalidRelation, "The entity %s %d does not exist or is not visible", k.EntityType, id).
 					With("entityType", k.EntityType).With("entityId", id)
 			}
 			var pid *int64

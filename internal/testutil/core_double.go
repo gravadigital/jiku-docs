@@ -393,11 +393,11 @@ func (d *CoreDouble) command(method string, p map[string]json.RawMessage, caller
 		d.mu.Lock()
 		if !contains(d.AllowedMimes, in.MimeType) {
 			d.mu.Unlock()
-			return fail("file_type_not_allowed", "tipo no permitido")
+			return fail("file_type_not_allowed", "type not allowed")
 		}
 		if in.FileSize > d.MaxFileSize {
 			d.mu.Unlock()
-			return fail("file_too_large", "muy grande")
+			return fail("file_too_large", "too large")
 		}
 		d.nextFile++
 		id := d.nextFile
@@ -422,7 +422,7 @@ func (d *CoreDouble) command(method string, p map[string]json.RawMessage, caller
 		f, ok := d.Files[id]
 		d.mu.Unlock()
 		if !ok {
-			return fail("file_not_found", "no existe")
+			return fail("file_not_found", "does not exist")
 		}
 		u, err := d.Blob.PresignGet(ctx, f.key, 5*time.Minute, "")
 		if err != nil {

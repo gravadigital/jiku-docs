@@ -74,7 +74,7 @@ func New() *Metrics {
 	m.historyPendingAge = prometheus.NewGauge(prometheus.GaugeOpts{
 		Name: "docs_history_pruned_objects_oldest_seconds", Help: "Age of the oldest row in pruned_objects (alert above 86400)."})
 	m.trashMoved = prometheus.NewCounterVec(prometheus.CounterOpts{
-		Name: "docs_trash_objects_moved_total", Help: "Content objects moved to papelera/ by source (compaction, orphans, deleted-documents)."},
+		Name: "docs_trash_objects_moved_total", Help: "Content objects moved to trash/ by source (compaction, orphans, deleted-documents)."},
 		[]string{"source"})
 	for _, src := range []string{"compaction", "orphans", "deleted-documents"} {
 		m.trashMoved.WithLabelValues(src) // exported at 0 from the start, so alerts and dashboards see it
@@ -153,7 +153,7 @@ func (m *Metrics) HistoryPending(n int, oldest time.Duration) {
 	}
 }
 
-// Trashed counts content objects moved to papelera/.
+// Trashed counts content objects moved to trash/.
 func (m *Metrics) Trashed(source string, n int) {
 	if m != nil {
 		m.trashMoved.WithLabelValues(source).Add(float64(n))

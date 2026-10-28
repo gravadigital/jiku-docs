@@ -1,39 +1,39 @@
 asyncapi: 3.0.0
 info:
-  title: Jiku — registro de módulos
+  title: Jiku — module registry
   version: 1.0.0
   description: |
-    Mecanismo mínimo para que Jiku descubra módulos opcionales (el primero es `docs`, servido por jiku-docs).
-    Pertenece al repositorio de Jiku (docs/apis/), no al de cada módulo.
+    Minimal mechanism for Jiku to discover optional modules (the first is `docs`, served by jiku-docs).
+    It belongs to the Jiku repository (docs/apis/), not to each module's.
 
-    Bucket KV de JetStream `JIKU_MODULES` (stream subyacente `KV_JIKU_MODULES`). Lo crea el despliegue
-    base de Jiku de forma idempotente, aunque no haya módulos. Historial: 1 por clave. Sin TTL.
+    JetStream KV bucket `JIKU_MODULES` (underlying stream `KV_JIKU_MODULES`). The base Jiku deployment
+    creates it idempotently, even when there are no modules. History: 1 per key. No TTL.
 
-    Reglas:
-    - Cada módulo escribe su propia clave una vez al arrancar, cuando ya puede atender.
-    - Un apagado normal no borra la clave. Desinstalar es explícito (p. ej. `jiku-docs module deregister`).
-    - Convención: un módulo con `serviceName: X` atiende los servicios NATS micro `X-commands` y `X-queries`.
-    - La api calcula el estado:
-        not_installed  no existe la clave
-        incompatible   `protocol` distinto del que soporta la api (se trata como not_installed + log de error)
-        unavailable    clave presente, `$SRV.PING.{serviceName}-queries` sin respuesta
-        available      clave presente, ping con respuesta
-    - Campos nuevos dentro de v1 son opcionales y no rompen compatibilidad: los lectores deben tolerarlos.
-    - `serviceName` solo nombra los servicios micro (y por lo tanto los subjects de comandos y
-      consultas `{instance}.{userId}.{serviceName}-commands.v1.>` / `-queries.v1.>`). Los subjects de
-      eventos y notificaciones de cada módulo son fijos y los define su propio contrato (para docs:
-      `{instance}.docs-events.v1.>` y `{instance}.{userId}.docs-notify.v1.>`).
+    Rules:
+    - Each module writes its own key once at startup, when it is ready to serve.
+    - A normal shutdown does not delete the key. Uninstalling is explicit (e.g. `jiku-docs module deregister`).
+    - Convention: a module with `serviceName: X` serves the NATS micro services `X-commands` and `X-queries`.
+    - The api computes the status:
+        not_installed  the key does not exist
+        incompatible   `protocol` differs from the one the api supports (treated as not_installed + error log)
+        unavailable    key present, `$SRV.PING.{serviceName}-queries` without a reply
+        available      key present, ping with a reply
+    - New fields within v1 are optional and do not break compatibility: readers must tolerate them.
+    - `serviceName` only names the micro services (and therefore the command and query subjects
+      `{instance}.{userId}.{serviceName}-commands.v1.>` / `-queries.v1.>`). The event and notification
+      subjects of each module are fixed and defined by its own contract (for docs:
+      `{instance}.docs-events.v1.>` and `{instance}.{userId}.docs-notify.v1.>`).
 
-    Permisos del auth-callout para LEER y OBSERVAR el registro (api, conectores, personas), verificados
-    por jiku-go:
+    Auth-callout permissions to READ and WATCH the registry (api, connectors, people), verified
+    by jiku-go:
       sub/pub  $JS.API.STREAM.INFO.KV_JIKU_MODULES
       pub      $JS.API.DIRECT.GET.KV_JIKU_MODULES.$KV.JIKU_MODULES.>
-      pub      $JS.API.CONSUMER.CREATE.KV_JIKU_MODULES y $JS.API.CONSUMER.CREATE.KV_JIKU_MODULES.>
-      pub      $JS.FC.KV_JIKU_MODULES.>   (control de flujo del consumidor efímero del watch)
-      pub      $SRV.PING.{serviceName}-queries   (estado del módulo)
-    más el inbox propio para las respuestas. Para ESCRIBIR (solo el módulo, solo su clave): pub
-    `$KV.JIKU_MODULES.docs` y `$JS.API.STREAM.INFO.KV_JIKU_MODULES` (el cliente consulta el bucket
-    antes de escribir).
+      pub      $JS.API.CONSUMER.CREATE.KV_JIKU_MODULES and $JS.API.CONSUMER.CREATE.KV_JIKU_MODULES.>
+      pub      $JS.FC.KV_JIKU_MODULES.>   (flow control of the watch's ephemeral consumer)
+      pub      $SRV.PING.{serviceName}-queries   (module status)
+    plus its own inbox for the replies. To WRITE (only the module, only its key): pub
+    `$KV.JIKU_MODULES.docs` and `$JS.API.STREAM.INFO.KV_JIKU_MODULES` (the client looks up the bucket
+    before writing).
 defaultContentType: application/json
 
 servers:
@@ -48,12 +48,12 @@ channels:
   moduleRecord:
     address: '$KV.JIKU_MODULES.{module}'
     description: |
-      Escritura de la clave de un módulo (put del KV). Lectura por
-      `$JS.API.DIRECT.GET.KV_JIKU_MODULES.$KV.JIKU_MODULES.{module}` u observación con un consumidor
-      efímero sobre `KV_JIKU_MODULES` (watch). Un borrado de la clave significa desinstalación.
+      Write of a module's key (KV put). Read through
+      `$JS.API.DIRECT.GET.KV_JIKU_MODULES.$KV.JIKU_MODULES.{module}` or watched with an ephemeral
+      consumer on `KV_JIKU_MODULES` (watch). Deleting the key means uninstallation.
     parameters:
       module:
-        description: Nombre corto del módulo, en minúsculas.
+        description: Short name of the module, lowercase.
         enum: [docs]
     messages:
       moduleRecord: { $ref: '#/components/messages/ModuleRecord' }
@@ -62,11 +62,11 @@ operations:
   registerModule:
     action: send
     channel: { $ref: '#/channels/moduleRecord' }
-    description: El módulo escribe su clave al arrancar. Rol `docs`, solo la clave `docs`.
+    description: The module writes its key at startup. Role `docs`, only the `docs` key.
   watchModules:
     action: receive
     channel: { $ref: '#/channels/moduleRecord' }
-    description: api, conectores y personas leen y observan el registro.
+    description: api, connectors and people read and watch the registry.
 
 components:
   messages:
@@ -85,13 +85,13 @@ components:
       type: object
       required: [module, serviceName, protocol, registeredAt]
       properties:
-        module: { type: string, pattern: '^[a-z][a-z0-9-]{1,30}$', description: Igual a la clave del KV. }
-        serviceName: { type: string, pattern: '^[a-z][a-z0-9-]{1,40}$', description: 'Prefijo de los servicios micro {serviceName}-commands y {serviceName}-queries (y de sus subjects). No afecta los subjects de eventos ni notificaciones.' }
-        protocol: { type: string, pattern: '^v[0-9]+$', description: Versión de los contratos del módulo. }
-        registeredAt: { type: string, format: date-time, description: Informativo. }
+        module: { type: string, pattern: '^[a-z][a-z0-9-]{1,30}$', description: Equal to the KV key. }
+        serviceName: { type: string, pattern: '^[a-z][a-z0-9-]{1,40}$', description: 'Prefix of the micro services {serviceName}-commands and {serviceName}-queries (and of their subjects). It does not affect the event or notification subjects.' }
+        protocol: { type: string, pattern: '^v[0-9]+$', description: Version of the module's contracts. }
+        registeredAt: { type: string, format: date-time, description: Informational. }
 
     ModulesHttpResponse:
-      description: Respuesta de `GET /modules` en la api de Jiku (HTTP, autenticado). Referencia para los frontends.
+      description: Response of `GET /modules` in the Jiku api (HTTP, authenticated). Reference for the frontends.
       type: array
       items:
         type: object

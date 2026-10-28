@@ -1,18 +1,18 @@
-// Obtiene el token del device flow de una persona de prueba para el CLI, sin intervención:
-// corre `jiku login --no-browser` en un JIKU_CONFIG_DIR propio y completa la aprobación en
-// Zitadel con Playwright, con el usuario y la contraseña de .local/test-users.env.
+// Obtains the device-flow token of a test person for the CLI, unattended: runs
+// `jiku login --no-browser` in its own JIKU_CONFIG_DIR and completes the approval in Zitadel with
+// Playwright, with the user and password of .local/test-users.env.
 //
 //   node device-login.mjs USER     ../../../.local/cli/human-user
 //   node device-login.mjs EXTERNAL ../../../.local/cli/human-external
 //
-// No imprime credenciales, ni la URL ni el código del device flow, ni tokens. El token queda en
-// <config_dir>/tokens-<instancia>.json (0600) y el CLI lo refresca solo (~20 h de vida, con
-// refresh token). Si Zitadel pide algo que necesita una persona (cambio de contraseña inicial,
-// segundo factor), se detiene y lo dice.
+// It prints no credentials, nor the device-flow URL or code, nor tokens. The token ends up in
+// <config_dir>/tokens-<instance>.json (0600) and the CLI refreshes it by itself (~20 h lifetime,
+// with a refresh token). If Zitadel asks for something that needs a person (initial password
+// change, second factor), it stops and says so.
 //
-// Variables: JIKU_BIN, JIKU_REPO (creds del sentinel), JIKU_SERVERS, JIKU_INSTANCE, JIKU_ISSUER,
-// JIKU_CLIENT_ID y JIKU_PROJECT_ID; los dos últimos salen por defecto, solo lectura, de
-// zitadel.client_id y zitadel.project_id de ~/.config/jiku/config.<instancia>.yaml.
+// Variables: JIKU_BIN, JIKU_REPO (sentinel creds), JIKU_SERVERS, JIKU_INSTANCE, JIKU_ISSUER,
+// JIKU_CLIENT_ID and JIKU_PROJECT_ID; the last two default, read only, to zitadel.client_id and
+// zitadel.project_id of ~/.config/jiku/config.<instance>.yaml.
 import { chromium } from 'playwright';
 import { spawn } from 'node:child_process';
 import fs from 'node:fs';
@@ -22,7 +22,7 @@ import { loadCreds, redact, repoRoot } from './lib.mjs';
 
 const [who, cfgArg] = process.argv.slice(2);
 if (!['USER', 'EXTERNAL'].includes(who) || !cfgArg) {
-  console.error('uso: node device-login.mjs <USER|EXTERNAL> <config_dir>');
+  console.error('usage: node device-login.mjs <USER|EXTERNAL> <config_dir>');
   process.exit(64);
 }
 const cfgDir = path.resolve(cfgArg);
@@ -36,7 +36,7 @@ const fromYaml = (k) => yaml.match(new RegExp(`^\\s*${k}:\\s*"?([^"\\n#]+)"?`, '
 const clientId = process.env.JIKU_CLIENT_ID || fromYaml('client_id');
 const projectId = process.env.JIKU_PROJECT_ID || fromYaml('project_id');
 if (!clientId || !projectId) {
-  console.error(`falta JIKU_CLIENT_ID o JIKU_PROJECT_ID (ni en el entorno ni en ${yamlFile})`);
+  console.error(`missing JIKU_CLIENT_ID or JIKU_PROJECT_ID (neither in the environment nor in ${yamlFile})`);
   process.exit(2);
 }
 const jikuRepo = process.env.JIKU_REPO || path.resolve(repoRoot, '../../jiku');
@@ -53,7 +53,7 @@ const env = {
   JIKU_PROJECT_ID: projectId,
   JIKU_CONFIG_DIR: cfgDir,
 };
-delete env.JIKU_KEY_FILE; // con una key el CLI sería un machine user
+delete env.JIKU_KEY_FILE; // with a key the CLI would be a machine user
 
 const child = spawn(bin, ['login', '--no-browser'], { env });
 let stderr = '';
@@ -65,8 +65,8 @@ const url = await new Promise((res, rej) => {
     if (m && /Code:/.test(stderr)) res(m[1]);
   });
   child.stdout.resume();
-  exited.then((c) => rej(new Error(`jiku login salió con ${c} antes de dar la URL`)));
-  setTimeout(() => rej(new Error('jiku login no dio la URL en 30 s')), 30000);
+  exited.then((c) => rej(new Error(`jiku login exited with ${c} before giving the URL`)));
+  setTimeout(() => rej(new Error('jiku login did not give the URL in 30 s')), 30000);
 }).catch((e) => {
   console.error(e.message);
   child.kill();
@@ -86,7 +86,7 @@ try {
     if (/\/device\/allowed/.test(page.url()) || /Approved/.test(await page.locator('body').innerText().catch(() => ''))) {
       approved = true;
     } else if (await page.locator('#change-old-password').count()) {
-      throw new Error(`Zitadel exige cambiar la contraseña inicial de WEB_${who}: entrar una vez a mano y actualizar el .env`);
+      throw new Error(`Zitadel requires changing the initial password of WEB_${who}: log in once by hand and update the .env`);
     } else if (await visible('#loginName')) {
       await page.fill('#loginName', creds[`WEB_${who}_LOGIN`]);
       await page.click(submit);
@@ -108,7 +108,7 @@ try {
   }
   if (!approved) {
     const body = await page.locator('body').innerText().catch(() => '');
-    throw new Error(`no se llegó a aprobar el código (${page.url().split('?')[0]}): ${R(body)}`);
+    throw new Error(`the code was never approved (${page.url().split('?')[0]}): ${R(body)}`);
   }
 } catch (e) {
   console.error(R(e.message));
@@ -120,5 +120,5 @@ await browser.close();
 const timer = setTimeout(() => child.kill(), 30000);
 const rc = await exited;
 clearTimeout(timer);
-console.log(rc === 0 ? `login de ${who} listo: ${cfgDir}/tokens-${instance}.json` : `jiku login salió con ${rc}`);
+console.log(rc === 0 ? `login of ${who} done: ${cfgDir}/tokens-${instance}.json` : `jiku login exited with ${rc}`);
 process.exit(rc === 0 ? 0 : 1);

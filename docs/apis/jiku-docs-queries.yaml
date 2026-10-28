@@ -1,86 +1,86 @@
 asyncapi: 3.0.0
 info:
-  title: jiku-docs — consultas
+  title: jiku-docs — queries
   version: 1.3.0
   description: |
-    Plano de lectura de jiku-docs (servicio NATS micro `jiku-docs-queries`).
-    Misma gramática que `jiku-queries` de core: filter / sort / page / fields / include / count.
-    Todas las consultas filtran por permisos antes de devolver o paginar.
-    Lo no visible responde `*_not_found` (no se distingue de "no existe").
-    Un nombre no declarado en filter, sort, fields o include es `invalid_fields`.
-    `meta.describe` es la fuente autoritativa de campos, filtros, órdenes y enums.
+    Read plane of jiku-docs (NATS micro service `jiku-docs-queries`).
+    Same grammar as core's `jiku-queries`: filter / sort / page / fields / include / count.
+    Every query filters by permissions before returning or paginating.
+    What is not visible answers `*_not_found` (indistinguishable from "does not exist").
+    A name not declared in filter, sort, fields or include is `invalid_fields`.
+    `meta.describe` is the authoritative source of fields, filters, sorts and enums.
 
-    Notas de implementación (1.1.0):
-    - `page.limit` por encima de 200 se recorta en silencio a 200, igual que core (`meta.describe`
-      lo publica como `defaults.maxLimit`).
-    - Los clientes externos (`person-external`) no ven carpetas: `folders.list` les devuelve
-      `items: []` y `folders.get`, `folder_not_found`. Ven documentos, no el árbol.
-    - `documents.search` devuelve el mejor fragmento de cada documento (un resultado por documento).
-    - Formato de rutas: la `path` de una carpeta empieza y termina con `/` (la raíz es `/`, una
-      subcarpeta `/clientes/acme/`); la de un documento es la ruta de su carpeta más el nombre de
-      archivo (`/clientes/acme/acta.md`). El filtro `path` (exacto, sin distinguir mayúsculas) de
-      `folders.list` acepta la ruta con o sin la `/` final; `filter.path: "/"` trae la raíz.
-    - `documents.get` con `version` devuelve los metadatos de esa versión (`version`, `checksum`,
-      `sizeBytes`, `title`, `updatedAt` y `updatedBy` son los de la versión pedida); relaciones,
-      temas, lock y adjuntos son siempre los actuales.
-    - `actor` (D-11): `{ id, roles, name?, username?, email? }`, el mismo sobre que la api manda a core.
-      La clase de la persona sale de `actor.roles` (no se consulta `users.list`); los
-      `project-permissions` de un externo se siguen pidiendo a core. Un `actor` sin `roles` es
+    Implementation notes (1.1.0):
+    - `page.limit` above 200 is silently clamped to 200, like core (`meta.describe`
+      publishes it as `defaults.maxLimit`).
+    - External clients (`person-external`) do not see folders: `folders.list` returns them
+      `items: []` and `folders.get`, `folder_not_found`. They see documents, not the tree.
+    - `documents.search` returns the best fragment of each document (one result per document).
+    - Path format: the `path` of a folder starts and ends with `/` (the root is `/`, a
+      subfolder `/clients/acme/`); the path of a document is its folder's path plus the file
+      name (`/clients/acme/acta.md`). The `path` filter (exact, case-insensitive) of
+      `folders.list` accepts the path with or without the trailing `/`; `filter.path: "/"` returns the root.
+    - `documents.get` with `version` returns the metadata of that version (`version`, `checksum`,
+      `sizeBytes`, `title`, `updatedAt` and `updatedBy` are those of the requested version); relations,
+      topics, lock and attachments are always the current ones.
+    - `actor` (D-11): `{ id, roles, name?, username?, email? }`, the same envelope the api sends to core.
+      The class of the person comes from `actor.roles` (`users.list` is not queried); the
+      `project-permissions` of an external person are still requested from core. An `actor` without `roles` is
       `invalid_fields`.
-    - Frontmatter oculto a externos (D-11): un `person-external` recibe `documents.get` sin
-      frontmatter, tanto en `content` como en `contentUrl`, y en esa respuesta `checksum` y `sizeBytes`
-      son los del cuerpo que recibe. Lo mismo en `documents.versions.list` (que para un externo solo
-      tiene la versión actual). En `documents.list`, `documents.changes` y los eventos, `checksum`
-      identifica la versión guardada (archivo completo): para un externo sirve para detectar cambios,
-      no para verificar el contenido recibido. Los snippets de `documents.search` nunca incluyen
+    - Frontmatter hidden from external persons (D-11): a `person-external` gets `documents.get` without
+      frontmatter, both in `content` and in `contentUrl`, and in that reply `checksum` and `sizeBytes`
+      are those of the body it receives. The same in `documents.versions.list` (which for an external person only
+      has the current version). In `documents.list`, `documents.changes` and the events, `checksum`
+      identifies the stored version (full file): for an external person it serves to detect changes,
+      not to verify the content received. The snippets of `documents.search` never include
       frontmatter.
 
-    Compactación del historial (1.2.0, docs/history-compaction-v1.md):
-    - Un proceso diario borra versiones intermedias viejas: la numeración de
-      `documents.versions.list` puede tener huecos. Cada versión trae `kind` (`create`, `update`,
-      `restore`; mover no crea versión) y `protected` (protección permanente: creación,
-      restauración, con `message` o de `via: service`). La versión actual y las fijadas por un link
-      `pinned` activo tampoco se borran, aunque `protected` sea `false`. Filtros nuevos: `kind` y
+    History compaction (1.2.0, docs/history-compaction-v1.md):
+    - A daily process deletes old intermediate versions: the numbering of
+      `documents.versions.list` can have gaps. Each version carries `kind` (`create`, `update`,
+      `restore`; moving does not create a version) and `protected` (permanent protection: creation,
+      restore, with `message` or with `via: service`). The current version and those pinned by an active
+      `pinned` share link are not deleted either, even if `protected` is `false`. New filters: `kind` and
       `protected`.
-    - `documents.get` con una `version` compactada responde `version_pruned` con `errorDetails`
-      `{ requestedVersion, previousAvailable, nextAvailable }` (las conservadas más cercanas, o
-      `null`). Una versión mayor que la actual sigue siendo `document_not_found`.
-    - Un `person-external` nunca recibe `version_pruned`: cualquier versión que no sea la actual es
-      `document_not_found`, sin `errorDetails`.
-    - `documents.get` devuelve `prunedVersionsCount` (cuántas versiones se compactaron) como campo
-      base; a un externo no se le devuelve.
+    - `documents.get` with a pruned `version` answers `version_pruned` with `errorDetails`
+      `{ requestedVersion, previousAvailable, nextAvailable }` (the closest kept ones, or
+      `null`). A version greater than the current one is still `document_not_found`.
+    - A `person-external` never receives `version_pruned`: any version other than the current one is
+      `document_not_found`, without `errorDetails`.
+    - `documents.get` returns `prunedVersionsCount` (how many versions were pruned) as a base
+      field; it is not returned to an external person.
 
-    P-1, documentación sin carpetas (1.3.0, docs/p1/service.md):
-    - Visibilidad `restricted`: solo `admin` y servicios la leen. Para un `user` o un externo no existe
-      por ninguna vía: `documents.list` (y su `count`), `get` (con y sin `version`), `search` y sus
-      fragmentos, `changes`, `versions.list`, `topics.list` (los conteos no lo cuentan),
-      `attachments.list`, `shares.*`, `suggest-relations`. Responde `document_not_found` o lo omite.
-    - `filter.visibility: restricted` pedido por quien no lo puede leer devuelve **lista vacía**
-      (nunca `invalid_fields`): no revela nada.
-    - Carpetas: las personas internas ven todas (`effectivePermission`: `write` para `user`, `manage`
-      para `admin` y servicios); `include: [acl]` solo admin y servicios (`permission_denied`). Las
-      reglas ACL, `inheritAcl`, `externalBlocked` y `sharingBlocked` son **obsoletas**: se devuelven
-      pero no tienen efecto.
-    - Filtros nuevos en `documents.list` y `documents.search`: `hasProject`, `hasClient`, `hasTopic`
-      (boolean). `hasProject: false` es "Sin proyecto": sin relación directa con proyecto, ni por
-      requisito ni por tarea. `hasClient` mira `jiku.clients`; `hasTopic`, los temas.
-    - Con `filter.projectId` (también dentro de `or`), cada ítem de `list` y `search` trae
-      `projectMatch`: `direct` (el proyecto está en `jiku.projects`) o `indirect` (llega por un
-      requisito o una tarea del proyecto).
-    - Nombres: `createdByName` y `updatedByName` en `list`, `get` y `search`; `authorName` en
-      `versions.list`; `holderName` en `lock`. Se guardan al escribir; `null` si no se conocen. Si
-      el `actor` de la api llega sin `name` ni `username`, el nombre sale de `users` de core; un
-      nombre `null` guardado se completa al leer desde core cuando lo conoce (sin escribirlo). Si
-      core no responde, el nombre queda `null`: nunca falla la consulta por eso.
-    - `clients` y `projects` (ids de `jiku.clients` y `jiku.projects`) en cada ítem de `list`, `get` y
-      `search`. A un externo solo se le devuelven los proyectos de sus `project-permissions` y ningún
-      cliente; lo mismo en `include: [relations]`.
-    - Consulta nueva `documents.suggest-relations` `{ id }` (requiere leer el documento; un externo
-      recibe `permission_denied`): `{ items: [{ projectId, clientId, score, reason }] }`, hasta 5,
-      por coincidencias de nombres, partes del nombre o código de proyectos y nombres de clientes de
-      core en el título (pesa más) y el contenido. Excluye los proyectos ya vinculados. Un candidato
-      solo de cliente (el texto nombra al cliente y ningún proyecto suyo coincide) trae
-      `projectId: null`; nunca `0`. `score` entre 0 y 1.
+    P-1, documentation without folders (1.3.0, docs/p1/service.md):
+    - Visibility `restricted`: only `admin` and services read it. For a `user` or an external person it does not exist
+      through any path: `documents.list` (and its `count`), `get` (with and without `version`), `search` and its
+      fragments, `changes`, `versions.list`, `topics.list` (the counts do not count it),
+      `attachments.list`, `shares.*`, `suggest-relations`. It answers `document_not_found` or omits it.
+    - `filter.visibility: restricted` requested by someone who cannot read it returns an **empty list**
+      (never `invalid_fields`): it reveals nothing.
+    - Folders: internal persons see all of them (`effectivePermission`: `write` for `user`, `manage`
+      for `admin` and services); `include: [acl]` only admin and services (`permission_denied`). The
+      ACL rules, `inheritAcl`, `externalBlocked` and `sharingBlocked` are **obsolete**: they are returned
+      but have no effect.
+    - New filters in `documents.list` and `documents.search`: `hasProject`, `hasClient`, `hasTopic`
+      (boolean). `hasProject: false` is "Sin proyecto" (no project): no direct relation with a project, nor
+      through a requirement nor through a task. `hasClient` looks at `jiku.clients`; `hasTopic`, the topics.
+    - With `filter.projectId` (also inside `or`), each item of `list` and `search` carries
+      `projectMatch`: `direct` (the project is in `jiku.projects`) or `indirect` (it comes through a
+      requirement or a task of the project).
+    - Names: `createdByName` and `updatedByName` in `list`, `get` and `search`; `authorName` in
+      `versions.list`; `holderName` in `lock`. They are stored on write; `null` if unknown. If
+      the api's `actor` arrives without `name` or `username`, the name comes from core's `users`; a
+      stored `null` name is filled in on read from core when core knows it (without writing it). If
+      core does not answer, the name stays `null`: the query never fails because of that.
+    - `clients` and `projects` (ids of `jiku.clients` and `jiku.projects`) in each item of `list`, `get` and
+      `search`. An external person only gets the projects of their `project-permissions` and no
+      client; the same in `include: [relations]`.
+    - New query `documents.suggest-relations` `{ id }` (requires reading the document; an external person
+      gets `permission_denied`): `{ items: [{ projectId, clientId, score, reason }] }`, up to 5,
+      by matches of names, parts of the name or code of projects and names of clients from
+      core in the title (weighs more) and the content. Excludes projects already related. A
+      client-only candidate (the text names the client and none of its projects matches) carries
+      `projectId: null`; never `0`. `score` between 0 and 1.
 defaultContentType: application/json
 
 servers:
@@ -118,14 +118,14 @@ channels:
       reply: { payload: { $ref: '#/components/schemas/ReplyDocumentPage' } }
   documents.get:
     address: '{instance}.{userId}.jiku-docs-queries.v1.documents.get'
-    description: Un externo solo lee la versión actual; otra `version` responde document_not_found sin errorDetails (puede ser de antes de publicarlo). A un interno, una versión compactada responde version_pruned.
+    description: An external person only reads the current version; another `version` answers document_not_found without errorDetails (it may predate publication). For an internal person, a pruned version answers version_pruned.
     parameters: *p
     messages:
       request: { payload: { $ref: '#/components/schemas/DocumentsGetQuery' } }
       reply: { payload: { $ref: '#/components/schemas/ReplyDocument' } }
   documents.versions.list:
     address: '{instance}.{userId}.jiku-docs-queries.v1.documents.versions.list'
-    description: A un externo solo se le lista la versión actual. La numeración puede tener huecos (versiones compactadas).
+    description: An external person is only listed the current version. The numbering can have gaps (pruned versions).
     parameters: *p
     messages:
       request: { payload: { $ref: '#/components/schemas/VersionsListQuery' } }
@@ -144,7 +144,7 @@ channels:
       reply: { payload: { $ref: '#/components/schemas/ReplyChanges' } }
   documents.suggest-relations:
     address: '{instance}.{userId}.jiku-docs-queries.v1.documents.suggest-relations'
-    description: 'P-1, "Asignar sugerido": candidatos de proyecto (o cliente) por título y contenido.'
+    description: 'P-1, "Asignar sugerido" (assign suggested): project (or client) candidates by title and content.'
     parameters: *p
     messages:
       request: { payload: { $ref: '#/components/schemas/SuggestRelationsQuery' } }
@@ -170,14 +170,14 @@ channels:
       reply: { payload: { $ref: '#/components/schemas/ReplyShares' } }
   shares.resolve:
     address: '{instance}.{userId}.jiku-docs-queries.v1.shares.resolve'
-    description: Solo la api de Jiku, sin actor. Cualquier otro caller recibe caller_not_authorized.
+    description: Only the Jiku api, without actor. Any other caller gets caller_not_authorized.
     parameters: *p
     messages:
       request: { payload: { $ref: '#/components/schemas/ShareResolveQuery' } }
       reply: { payload: { $ref: '#/components/schemas/ReplyShareResolve' } }
   shares.attachment:
     address: '{instance}.{userId}.jiku-docs-queries.v1.shares.attachment'
-    description: Solo la api de Jiku, sin actor.
+    description: Only the Jiku api, without actor.
     parameters: *p
     messages:
       request: { payload: { $ref: '#/components/schemas/ShareAttachmentQuery' } }
@@ -196,25 +196,25 @@ operations:
   topicsList:        { action: receive, channel: { $ref: '#/channels/topics.list' },             reply: { channel: { $ref: '#/channels/topics.list' } },             x-error-codes: [invalid_fields] }
   attachmentsList:   { action: receive, channel: { $ref: '#/channels/attachments.list' },        reply: { channel: { $ref: '#/channels/attachments.list' } },        x-error-codes: [invalid_fields, document_not_found] }
 
-  sharesList:        { action: receive, channel: { $ref: '#/channels/shares.list' },             reply: { channel: { $ref: '#/channels/shares.list' } },             x-permission: persona interna que lee el documento, x-error-codes: [invalid_fields, invalid_cursor, document_not_found, permission_denied] }
-  sharesResolve:     { action: receive, channel: { $ref: '#/channels/shares.resolve' },          reply: { channel: { $ref: '#/channels/shares.resolve' } },          x-permission: solo caller api sin actor, x-error-codes: [share_not_found, caller_not_authorized] }
-  sharesAttachment:  { action: receive, channel: { $ref: '#/channels/shares.attachment' },       reply: { channel: { $ref: '#/channels/shares.attachment' } },       x-permission: solo caller api sin actor, x-error-codes: [share_not_found, caller_not_authorized] }
+  sharesList:        { action: receive, channel: { $ref: '#/channels/shares.list' },             reply: { channel: { $ref: '#/channels/shares.list' } },             x-permission: internal person who reads the document, x-error-codes: [invalid_fields, invalid_cursor, document_not_found, permission_denied] }
+  sharesResolve:     { action: receive, channel: { $ref: '#/channels/shares.resolve' },          reply: { channel: { $ref: '#/channels/shares.resolve' } },          x-permission: only the api caller without actor, x-error-codes: [share_not_found, caller_not_authorized] }
+  sharesAttachment:  { action: receive, channel: { $ref: '#/channels/shares.attachment' },       reply: { channel: { $ref: '#/channels/shares.attachment' } },       x-permission: only the api caller without actor, x-error-codes: [share_not_found, caller_not_authorized] }
 
 components:
   parameters:
     instance: { enum: [dev, prod] }
-    userId: { description: '`sub` de Zitadel del caller.' }
+    userId: { description: 'Zitadel `sub` of the caller.' }
 
   schemas:
     Ulid: { type: string, pattern: '^[0-9A-HJKMNP-TV-Z]{26}$' }
     Actor:
       type: object
-      description: 'Persona en nombre de la cual actúa la `api` (D-11): el mismo `actor` que la api manda a core, armado con el token web ya verificado. Solo se acepta si el caller es la `api`. La clase de la persona sale de `roles` (`admin`/`user` → interna, `external-user` → externa, otro → `caller_not_authorized`); no se consulta `users.list`.'
+      description: 'Person on whose behalf the `api` acts (D-11): the same `actor` the api sends to core, built from the already verified web token. Only accepted if the caller is the `api`. The class of the person comes from `roles` (`admin`/`user` → internal, `external-user` → external, other → `caller_not_authorized`); `users.list` is not queried.'
       additionalProperties: false
       required: [id, roles]
       properties:
-        id: { type: string, minLength: 1, maxLength: 200, description: '`sub` de Zitadel de la persona' }
-        roles: { type: array, maxItems: 50, items: { type: string }, description: 'Roles de producto del token web verificado.' }
+        id: { type: string, minLength: 1, maxLength: 200, description: 'Zitadel `sub` of the person' }
+        roles: { type: array, maxItems: 50, items: { type: string }, description: 'Product roles of the verified web token.' }
         name: { type: string, maxLength: 500 }
         username: { type: string, maxLength: 500 }
         email: { type: string, maxLength: 500 }
@@ -233,7 +233,7 @@ components:
       type: object
       additionalProperties: false
       properties:
-        limit: { type: integer, minimum: 1, default: 50, description: 'Máximo efectivo 200: un valor mayor se recorta en silencio, como en core.' }
+        limit: { type: integer, minimum: 1, default: 50, description: 'Effective maximum 200: a larger value is silently clamped, as in core.' }
         cursor: { type: [string, 'null'] }
     Empty:
       type: object
@@ -242,7 +242,7 @@ components:
     DescribeQuery:
       type: object
       additionalProperties: false
-      description: 'Igual que core: `resources` es opcional; omitido describe todos; una lista vacía o un nombre desconocido es invalid_fields.'
+      description: 'Same as core: `resources` is optional; omitted, it describes all; an empty list or an unknown name is invalid_fields.'
       properties:
         actor: { $ref: '#/components/schemas/Actor' }
         resources:
@@ -252,12 +252,12 @@ components:
     ClientInfo:
       type: object
       additionalProperties: false
-      description: 'Datos del navegador que la api reenvía para auditar el acceso al link. La IP se guarda solo como HMAC; el agente de usuario se trunca a 200 caracteres.'
+      description: 'Browser data the api forwards to audit the access to the share link. The IP is stored only as an HMAC; the user agent is truncated to 200 characters.'
       properties:
         ip: { type: string, maxLength: 100 }
         userAgent: { type: string, maxLength: 2000 }
 
-    # ---------- carpetas ----------
+    # ---------- folders ----------
     FoldersListQuery:
       type: object
       additionalProperties: false
@@ -269,7 +269,7 @@ components:
           properties:
             id: { oneOf: [{ $ref: '#/components/schemas/Ulid' }, { type: array, items: { $ref: '#/components/schemas/Ulid' } }] }
             parentId: { $ref: '#/components/schemas/Ulid' }
-            path: { type: string, description: 'Ruta exacta, sin distinguir mayúsculas; con o sin la / final. "/" es la raíz.' }
+            path: { type: string, description: 'Exact path, case-insensitive; with or without the trailing /. "/" is the root.' }
             pathPrefix: { type: string }
         sort: { type: array, items: { type: string, enum: [path, -path, name, -name, createdAt, -createdAt] } }
         page: { $ref: '#/components/schemas/Page' }
@@ -284,36 +284,36 @@ components:
         actor: { $ref: '#/components/schemas/Actor' }
         id: { $ref: '#/components/schemas/Ulid' }
         fields: { type: array, items: { type: string } }
-        include: { type: array, items: { type: string, enum: [acl, effectivePermission] }, description: '`acl` (obsoleto) solo admin y servicios; si no, permission_denied.' }
+        include: { type: array, items: { type: string, enum: [acl, effectivePermission] }, description: '`acl` (obsolete) only admin and services; otherwise permission_denied.' }
 
-    # ---------- documentos ----------
+    # ---------- documents ----------
     DocumentsFilter:
       type: object
       additionalProperties: false
       properties:
         id: { oneOf: [{ $ref: '#/components/schemas/Ulid' }, { type: array, items: { $ref: '#/components/schemas/Ulid' }, maxItems: 200 }] }
         folderId: { $ref: '#/components/schemas/Ulid' }
-        path: { type: string, description: 'Ruta exacta del documento (carpeta + nombre de archivo), sin distinguir mayúsculas.' }
+        path: { type: string, description: 'Exact path of the document (folder + file name), case-insensitive.' }
         pathPrefix: { type: string }
         clientId: { $ref: '#/components/schemas/IntOrList' }
-        projectId: { $ref: '#/components/schemas/IntOrList', description: Incluye documentos vinculados a requisitos o tareas del proyecto. }
+        projectId: { $ref: '#/components/schemas/IntOrList', description: Includes documents related to requirements or tasks of the project. }
         requirementId: { $ref: '#/components/schemas/IntOrList' }
         taskId: { $ref: '#/components/schemas/IntOrList' }
         topic: { $ref: '#/components/schemas/StrOrList' }
-        visibility: { type: string, enum: [internal, public, restricted], description: 'restricted pedido por quien no lo lee: lista vacía.' }
+        visibility: { type: string, enum: [internal, public, restricted], description: 'restricted requested by someone who does not read it: empty list.' }
         createdBy: { $ref: '#/components/schemas/StrOrList' }
         updatedBy: { $ref: '#/components/schemas/StrOrList' }
         createdAt: { $ref: '#/components/schemas/DateRange' }
         updatedAt: { $ref: '#/components/schemas/DateRange' }
-        fileName: { type: string, description: Prefijo, sin distinguir mayúsculas. }
+        fileName: { type: string, description: Prefix, case-insensitive. }
         deleted: { type: boolean, default: false }
-        hasProject: { type: boolean, description: 'false = "Sin proyecto": ni directo ni por requisito o tarea.' }
-        hasClient: { type: boolean, description: 'false = "Sin cliente" (sin jiku.clients).' }
-        hasTopic: { type: boolean, description: 'false = "Sin tema".' }
+        hasProject: { type: boolean, description: 'false = "Sin proyecto" (no project): neither direct nor through a requirement or task.' }
+        hasClient: { type: boolean, description: 'false = "Sin cliente" (no client: no jiku.clients).' }
+        hasTopic: { type: boolean, description: 'false = "Sin tema" (no topic).' }
         or:
           type: array
           maxItems: 10
-          description: Un solo nivel. Cada elemento acepta los mismos filtros, sin `or`.
+          description: A single level. Each element accepts the same filters, without `or`.
           items: { type: object }
     DocumentsListQuery:
       type: object
@@ -336,7 +336,7 @@ components:
       properties:
         actor: { $ref: '#/components/schemas/Actor' }
         id: { $ref: '#/components/schemas/Ulid' }
-        version: { type: integer, minimum: 1, description: Default la versión actual. }
+        version: { type: integer, minimum: 1, description: Defaults to the current version. }
         fields: { type: array, items: { type: string } }
         include: { type: array, items: { type: string, enum: [content, relations, topics, lock, attachments] } }
     VersionsListQuery:
@@ -355,7 +355,7 @@ components:
             via: { type: string, enum: [human, agent, service] }
             createdAt: { $ref: '#/components/schemas/DateRange' }
             kind: { type: string, enum: [create, update, restore] }
-            protected: { type: boolean, description: 'Protección permanente (columna protected).' }
+            protected: { type: boolean, description: 'Permanent protection (protected column).' }
         sort: { type: array, items: { type: string, enum: [version, -version] } }
         page: { $ref: '#/components/schemas/Page' }
     SearchQuery:
@@ -364,8 +364,8 @@ components:
       required: [query]
       properties:
         actor: { $ref: '#/components/schemas/Actor' }
-        query: { type: string, minLength: 2, maxLength: 1000, description: 'Sintaxis de websearch_to_tsquery: frases entre comillas, OR y -palabra para excluir.' }
-        mode: { type: string, enum: [text, semantic, hybrid], default: text, description: 'En la v1 solo text. semantic e hybrid quedan reservados y responden semantic_search_not_configured.' }
+        query: { type: string, minLength: 2, maxLength: 1000, description: 'websearch_to_tsquery syntax: quoted phrases, OR and -word to exclude.' }
+        mode: { type: string, enum: [text, semantic, hybrid], default: text, description: 'In v1 only text. semantic and hybrid are reserved and answer semantic_search_not_configured.' }
         filter: { $ref: '#/components/schemas/DocumentsFilter' }
         limit: { type: integer, minimum: 1, maximum: 50, default: 20 }
     ChangesQuery:
@@ -374,7 +374,7 @@ components:
       required: [sinceSeq]
       properties:
         actor: { $ref: '#/components/schemas/Actor' }
-        sinceSeq: { type: integer, minimum: 0, description: 'Último seq aplicado. 0 = desde el inicio de la retención y nunca responde invalid_cursor; un valor más viejo que la retención (30 días) sí.' }
+        sinceSeq: { type: integer, minimum: 0, description: 'Last applied seq. 0 = from the start of the retention and never answers invalid_cursor; a value older than the retention (30 days) does.' }
         limit: { type: integer, minimum: 1, maximum: 500, default: 200 }
         filter:
           type: object
@@ -407,7 +407,7 @@ components:
           required: [documentId]
           properties: { documentId: { $ref: '#/components/schemas/Ulid' } }
 
-    # ---------- recursos ----------
+    # ---------- resources ----------
     Relations:
       type: object
       additionalProperties: false
@@ -422,7 +422,7 @@ components:
       properties:
         sessionId: { $ref: '#/components/schemas/Ulid' }
         holder: { type: string }
-        holderName: { type: [string, 'null'], description: 'Nombre de quien tiene el lock (1.3.0).' }
+        holderName: { type: [string, 'null'], description: 'Name of whoever holds the lock (1.3.0).' }
         via: { type: string, enum: [human, agent] }
         expiresAt: { type: string, format: date-time }
     Folder:
@@ -430,11 +430,11 @@ components:
       properties:
         id: { $ref: '#/components/schemas/Ulid' }
         name: { type: string }
-        path: { type: string, description: 'Empieza y termina con /: "/" es la raíz, "/clientes/acme/" una subcarpeta.' }
+        path: { type: string, description: 'Starts and ends with /: "/" is the root, "/clients/acme/" a subfolder.' }
         parentId: { type: [string, 'null'] }
         inheritAcl: { type: boolean, deprecated: true }
-        externalBlocked: { type: boolean, deprecated: true, description: Obsoleto (1.3.0), sin efecto. }
-        sharingBlocked: { type: boolean, deprecated: true, description: Obsoleto (1.3.0), sin efecto. Valor efectivo (incluye herencia). }
+        externalBlocked: { type: boolean, deprecated: true, description: Obsolete (1.3.0), no effect. }
+        sharingBlocked: { type: boolean, deprecated: true, description: Obsolete (1.3.0), no effect. Effective value (includes inheritance). }
         createdAt: { type: string, format: date-time }
         createdBy: { type: string }
         effectivePermission: { type: [string, 'null'], enum: [read, write, manage, null] }
@@ -465,12 +465,12 @@ components:
         updatedBy: { type: string }
         updatedByName: { type: [string, 'null'] }
         deletedAt: { type: [string, 'null'], format: date-time }
-        clients: { type: array, items: { type: integer }, description: 'Ids de jiku.clients (a un externo, vacío).' }
-        projects: { type: array, items: { type: integer }, description: 'Ids de jiku.projects (a un externo, solo los suyos).' }
-        projectMatch: { type: string, enum: [direct, indirect], description: 'Solo con filter.projectId.' }
-        prunedVersionsCount: { type: integer, minimum: 0, description: 'Solo documents.get, campo base (nunca a un externo): cuántas versiones borró la compactación del historial.' }
-        content: { type: string, description: 'Solo con include content y tamaño <= 256 KiB.' }
-        contentUrl: { type: string, format: uri, description: 'En lugar de content si supera 256 KiB. Vence a los 300 s.' }
+        clients: { type: array, items: { type: integer }, description: 'Ids of jiku.clients (empty for an external person).' }
+        projects: { type: array, items: { type: integer }, description: 'Ids of jiku.projects (for an external person, only theirs).' }
+        projectMatch: { type: string, enum: [direct, indirect], description: 'Only with filter.projectId.' }
+        prunedVersionsCount: { type: integer, minimum: 0, description: 'Only documents.get, base field (never to an external person): how many versions the history compaction deleted.' }
+        content: { type: string, description: 'Only with include content and size <= 256 KiB.' }
+        contentUrl: { type: string, format: uri, description: 'Instead of content if it exceeds 256 KiB. Expires after 300 s.' }
         relations: { $ref: '#/components/schemas/Relations' }
         topics: { type: array, items: { type: string } }
         lock: { $ref: '#/components/schemas/Lock' }
@@ -487,8 +487,8 @@ components:
         sessionId: { type: [string, 'null'] }
         message: { type: [string, 'null'] }
         createdAt: { type: string, format: date-time }
-        kind: { type: string, enum: [create, update, restore], description: 'Origen de la versión. Mover un documento no crea versión.' }
-        protected: { type: boolean, description: 'Protección permanente: creación, restauración, con message o via service. La compactación nunca la borra. La versión actual y las fijadas por un link pinned activo tampoco se borran aunque valga false.' }
+        kind: { type: string, enum: [create, update, restore], description: 'Origin of the version. Moving a document does not create a version.' }
+        protected: { type: boolean, description: 'Permanent protection: creation, restore, with message or via service. The compaction never deletes it. The current version and those pinned by an active pinned share link are not deleted either, even if it is false.' }
     SearchHit:
       type: object
       properties:
@@ -512,11 +512,11 @@ components:
       type: object
       properties:
         seq: { type: integer }
-        type: { type: string, description: 'Tipo de evento (document.updated, document.moved, ...).' }
+        type: { type: string, description: 'Event type (document.updated, document.moved, ...).' }
         documentId: { $ref: '#/components/schemas/Ulid' }
         version: { type: [integer, 'null'] }
-        path: { type: string, description: Ruta del documento en el momento del evento. }
-        checksum: { type: [string, 'null'], description: 'Checksum de la versión del evento (sha256:<hex>), para que un cliente sincronizado compare sin pedir el documento.' }
+        path: { type: string, description: Path of the document at the time of the event. }
+        checksum: { type: [string, 'null'], description: 'Checksum of the version of the event (sha256:<hex>), so that a synced client compares without requesting the document.' }
         occurredAt: { type: string, format: date-time }
     Attachment:
       type: object
@@ -530,7 +530,7 @@ components:
         uploadedBy: { type: string }
         createdAt: { type: string, format: date-time }
 
-    # ---------- links compartidos ----------
+    # ---------- share links ----------
     SharesListQuery:
       type: object
       additionalProperties: false
@@ -552,7 +552,7 @@ components:
       additionalProperties: false
       required: [token]
       properties:
-        token: { type: string, maxLength: 200, description: 'Formato jds_ + 43 caracteres base64url. Un token mal formado responde share_not_found, como cualquier link inválido.' }
+        token: { type: string, maxLength: 200, description: 'Format jds_ + 43 base64url characters. A malformed token answers share_not_found, like any invalid share link.' }
         client: { $ref: '#/components/schemas/ClientInfo' }
     ShareAttachmentQuery:
       type: object
@@ -564,7 +564,7 @@ components:
         client: { $ref: '#/components/schemas/ClientInfo' }
     Share:
       type: object
-      description: Nunca incluye el token ni su hash.
+      description: Never includes the token or its hash.
       properties:
         id: { $ref: '#/components/schemas/Ulid' }
         documentId: { $ref: '#/components/schemas/Ulid' }
@@ -582,14 +582,14 @@ components:
         accessCount: { type: integer }
         lastAccessAt: { type: [string, 'null'], format: date-time }
 
-    # ---------- respuestas ----------
+    # ---------- replies ----------
     PageInfo:
       type: object
       properties:
         limit: { type: integer }
         returned: { type: integer }
-        cursor: { type: string, description: 'Su ausencia es la única señal de fin.' }
-        total: { type: integer, description: 'Solo con count: true u "only".' }
+        cursor: { type: string, description: 'Its absence is the only end signal.' }
+        total: { type: integer, description: 'Only with count: true or "only".' }
     Failure:
       type: object
       required: [status, errorCode, errorMessage]
@@ -653,7 +653,7 @@ components:
               required: [items, nextSeq, hasMore]
               properties:
                 items: { type: array, items: { $ref: '#/components/schemas/Change' } }
-                nextSeq: { type: integer, description: 'Último seq examinado (aunque su cambio no fuera visible para el caller); igual a sinceSeq si no hubo nada nuevo. Nunca menor que sinceSeq: es el sinceSeq del próximo pedido.' }
+                nextSeq: { type: integer, description: 'Last examined seq (even if its change was not visible to the caller); equal to sinceSeq if there was nothing new. Never less than sinceSeq: it is the sinceSeq of the next request.' }
                 hasMore: { type: boolean }
         - $ref: '#/components/schemas/Failure'
     ReplySuggestRelations:
@@ -673,10 +673,10 @@ components:
                     type: object
                     required: [projectId, clientId, score, reason]
                     properties:
-                      projectId: { type: [integer, 'null'], description: 'null en un candidato solo de cliente; nunca 0.' }
+                      projectId: { type: [integer, 'null'], description: 'null in a client-only candidate; never 0.' }
                       clientId: { type: [integer, 'null'] }
                       score: { type: number, minimum: 0, maximum: 1 }
-                      reason: { type: string, description: 'Por ejemplo "El título menciona «Videoconferencia»".' }
+                      reason: { type: string, description: 'For example "The title mentions “Videoconferencia”".' }
         - $ref: '#/components/schemas/Failure'
     ReplyTopics:
       oneOf:
@@ -720,11 +720,11 @@ components:
                 documentId: { $ref: '#/components/schemas/Ulid' }
                 title: { type: string }
                 version: { type: integer }
-                html: { type: string, description: 'Cuerpo sanitizado, sin frontmatter, con enlaces a adjuntos reescritos a /p/docs/{token}/attachments/{id}. Hasta 256 KiB.' }
-                htmlUrl: { type: string, format: uri, description: 'En lugar de html si supera 256 KiB. Vence a los 300 s.' }
+                html: { type: string, description: 'Sanitized body, without frontmatter, with links to attachments rewritten to /p/docs/{token}/attachments/{id}. Up to 256 KiB.' }
+                htmlUrl: { type: string, format: uri, description: 'Instead of html if it exceeds 256 KiB. Expires after 300 s.' }
                 attachments:
                   type: array
-                  description: Vacía si el link no incluye adjuntos.
+                  description: Empty if the share link does not include attachments.
                   items:
                     type: object
                     properties:

@@ -110,24 +110,24 @@ func main() {
 	}
 }
 
-const usage = `jiku-docs — módulo de documentación de Jiku
+const usage = `jiku-docs — Jiku documentation module
 
-  jiku-docs [serve]             corre el servicio (default)
-  jiku-docs migrate             aplica las migraciones y sale
-  jiku-docs reindex             regenera el índice de búsqueda completo
-  jiku-docs module deregister   borra la clave docs de JIKU_MODULES (desinstalar)
-  jiku-docs import hedgedoc     importa notas de HedgeDoc (--help para las opciones)
-  jiku-docs history compact     compacta el historial de versiones ahora
+  jiku-docs [serve]             runs the service (default)
+  jiku-docs migrate             applies the migrations and exits
+  jiku-docs reindex             rebuilds the whole search index
+  jiku-docs module deregister   removes the docs key from JIKU_MODULES (uninstall)
+  jiku-docs import hedgedoc     imports HedgeDoc notes (--help for the options)
+  jiku-docs history compact     compacts the version history now
                                 [--document <id>] [--dry-run]
-  jiku-docs storage init        crea el bucket de contenido sin versionado (lo suspende si estaba
-                                activado) y aplica el ciclo de vida de uploads/ y papelera/ (idempotente)
-  jiku-docs storage restore-from-trash --key <clave original> [--version-row]
-                                devuelve un objeto desde papelera/; con --version-row también vuelve
-                                a poner en el historial la versión compactada que guardaba
-  jiku-docs healthcheck          consulta /readyz del proceso local (para el HEALTHCHECK de Docker)
+  jiku-docs storage init        creates the content bucket without versioning (suspends it if it was
+                                enabled) and applies the lifecycle of uploads/ and trash/ (idempotent)
+  jiku-docs storage restore-from-trash --key <original key> [--version-row]
+                                brings an object back from trash/; with --version-row it also puts
+                                the pruned version it held back into the history
+  jiku-docs healthcheck          queries /readyz of the local process (for the Docker HEALTHCHECK)
   jiku-docs version
 
-La configuración se lee del entorno: ver .env.dist.`
+Configuration is read from the environment: see .env.dist.`
 
 func openDB(ctx context.Context, cfg config.Config, log *slog.Logger, migrateNow bool) (*pgxpool.Pool, error) {
 	if err := cfg.ValidateDatabase(); err != nil {
@@ -395,8 +395,8 @@ func historyPolicy(cfg config.Config) (service.HistoryPolicy, error) {
 // If the daily run (or another manual one) holds the lock, it says so and exits with an error.
 func historyCompact(ctx context.Context, cfg config.Config, log *slog.Logger, args []string) error {
 	fs := flag.NewFlagSet("history compact", flag.ContinueOnError)
-	doc := fs.String("document", "", "compactar solo este documento (ULID), tenga o no actividad nueva")
-	dry := fs.Bool("dry-run", false, "informar qué borraría, sin borrar filas ni objetos")
+	doc := fs.String("document", "", "compact only this document (ULID), whether or not it has new activity")
+	dry := fs.Bool("dry-run", false, "report what it would delete, without deleting rows or objects")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -474,9 +474,9 @@ func storageInit(ctx context.Context, cfg config.Config, log *slog.Logger) error
 }
 
 // initStorage is what `storage init` does: the bucket, without versioning (the safety net of
-// what the service removes is papelera/, not the versions of the bucket: DigitalOcean Spaces
+// what the service removes is trash/, not the versions of the bucket: DigitalOcean Spaces
 // does not confirm NoncurrentVersionExpiration), then the lifecycle rules (uploads/ after one
-// day, papelera/ after trashDays), read back to check that the provider kept them.
+// day, trash/ after trashDays), read back to check that the provider kept them.
 func initStorage(ctx context.Context, bs *blob.S3, region, bucket string, trashDays int, log *slog.Logger) error {
 	if err := bs.EnsureBucket(ctx, region); err != nil {
 		return err
@@ -491,14 +491,14 @@ func initStorage(ctx context.Context, bs *blob.S3, region, bucket string, trashD
 			return fmt.Errorf("suspending the versioning of the bucket: %w", err)
 		}
 		log.Warn("bucket versioning suspended: the content bucket no longer keeps versions (the safety net is "+
-			"papelera/). The old versions it already holds are NOT removed by themselves: delete them by hand "+
+			"trash/). The old versions it already holds are NOT removed by themselves: delete them by hand "+
 			"when they are no longer needed (README, section Spaces)", "bucket", bucket)
 		status = "Suspended"
 	case "Suspended":
 		log.Info("bucket versioning already suspended; old versions, if any, stay until deleted by hand", "bucket", bucket)
 	}
 	if err := bs.EnsureLifecycle(ctx, trashDays); err != nil {
-		log.Warn("lifecycle rules not set: the janitor still purges uploads, but papelera/ never expires and "+
+		log.Warn("lifecycle rules not set: the janitor still purges uploads, but trash/ never expires and "+
 			"keeps growing until it is emptied by hand", "err", err.Error())
 	} else if err := bs.CheckLifecycle(ctx, trashDays); err != nil {
 		log.Warn("lifecycle rules not confirmed by the provider", "err", err.Error())
@@ -513,12 +513,12 @@ func initStorage(ctx context.Context, bs *blob.S3, region, bucket string, trashD
 	return nil
 }
 
-// storageRestore brings an object back from papelera/ and, with --version-row, the compacted
+// storageRestore brings an object back from trash/ and, with --version-row, the compacted
 // version it held back into the history. It prints the result as one JSON line.
 func storageRestore(ctx context.Context, cfg config.Config, log *slog.Logger, args []string) error {
 	fs := flag.NewFlagSet("storage restore-from-trash", flag.ContinueOnError)
-	key := fs.String("key", "", "clave original del objeto, por ejemplo docs/<documentId>/<version>-<sha256>.md")
-	row := fs.Bool("version-row", false, "además, volver a poner la versión compactada en el historial (queda protegida)")
+	key := fs.String("key", "", "original key of the object, for example docs/<documentId>/<version>-<sha256>.md")
+	row := fs.Bool("version-row", false, "also put the pruned version back into the history (it becomes protected)")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}

@@ -46,7 +46,7 @@ type Settings struct {
 // Hooks observe the dispatcher, for metrics.
 type Hooks struct {
 	Request func(plane, method, errorCode string, d time.Duration)
-	// Trashed counts the objects moved to papelera/, by source (compaction, orphans,
+	// Trashed counts the objects moved to trash/, by source (compaction, orphans,
 	// deleted-documents).
 	Trashed func(source string, n int)
 }
@@ -164,13 +164,13 @@ func (s *Service) Dispatch(ctx context.Context, req Request) (reply protocol.Rep
 	}
 	if ep == nil {
 		code = "unknown_command"
-		return protocol.Reply{Status: protocol.StatusFailure, ErrorCode: "unknown_command", ErrorMessage: "Método desconocido"}
+		return protocol.Reply{Status: protocol.StatusFailure, ErrorCode: "unknown_command", ErrorMessage: "Unknown method"}
 	}
 	method = ep.Pattern
 	for k, v := range params {
 		if !protocol.IsULID(v) {
 			code = protocol.CodeInvalidFields
-			return protocol.Failure(protocol.InvalidField(k, v, nil, "El id del subject tiene que ser un ULID"))
+			return protocol.Failure(protocol.InvalidField(k, v, nil, "The id of the subject must be a ULID"))
 		}
 	}
 
@@ -256,27 +256,27 @@ func (s *Service) splitActor(data []byte, callerID string) (json.RawMessage, *Ac
 		return json.RawMessage("{}"), nil, nil
 	}
 	if trimmed[0] != '{' {
-		return nil, nil, protocol.InvalidField("payload", nil, nil, "Se esperaba un objeto JSON")
+		return nil, nil, protocol.InvalidField("payload", nil, nil, "A JSON object was expected")
 	}
 	var m map[string]json.RawMessage
 	if err := json.Unmarshal(trimmed, &m); err != nil {
-		return nil, nil, protocol.InvalidField("payload", nil, nil, "JSON mal formado")
+		return nil, nil, protocol.InvalidField("payload", nil, nil, "Malformed JSON")
 	}
 	raw, ok := m["actor"]
 	if !ok {
 		return trimmed, nil, nil
 	}
 	if callerID != s.Set.APIUserID {
-		return nil, nil, protocol.InvalidField("actor", nil, nil, "Solo la api de Jiku puede enviar actor: la identidad sale del subject")
+		return nil, nil, protocol.InvalidField("actor", nil, nil, "Only the Jiku api can send actor: the identity comes from the subject")
 	}
 	if !validate.IsObject(raw) {
-		return nil, nil, protocol.InvalidField("actor", nil, nil, "actor tiene que ser { id, roles, name?, username?, email? }")
+		return nil, nil, protocol.InvalidField("actor", nil, nil, "actor must be { id, roles, name?, username?, email? }")
 	}
 	o := validate.ParseObject(raw, "actor", "id", "roles", "name", "username", "email")
 	a := &Actor{}
 	a.ID, _ = o.String("id", true, validate.MinLen(1), validate.MaxLen(200))
 	if o.Err() == nil && !o.Has("roles") {
-		o.Fail(protocol.InvalidField("actor.roles", nil, nil, "El campo %q es obligatorio", "actor.roles"))
+		o.Fail(protocol.InvalidField("actor.roles", nil, nil, "The field %q is required", "actor.roles"))
 	}
 	a.Roles, _ = o.StringList("roles", nil, 50)
 	a.Name, _ = o.String("name", false, validate.MaxLen(500))
@@ -301,7 +301,7 @@ func (s *Service) ResolveCaller(ctx context.Context, subjectID string, actor *Ac
 		}
 		class, ok := caller.ClassFor(actor.Roles, "person")
 		if !ok || class == caller.Service {
-			return nil, protocol.Ef(protocol.CodeCallerNotAuthorized, "El actor tiene que ser una persona con un rol de producto")
+			return nil, protocol.Ef(protocol.CodeCallerNotAuthorized, "The actor must be a person with a product role")
 		}
 		name := actor.Name
 		if name == "" {

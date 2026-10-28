@@ -81,7 +81,7 @@ func (s *Service) ActiveLocks(ctx context.Context) (int, error) {
 }
 
 // PurgeDeleted removes for good the documents deleted more than 30 days ago, with their
-// versions; their objects go to papelera/ (they expire after DOCS_TRASH_RETENTION_DAYS).
+// versions; their objects go to trash/ (they expire after DOCS_TRASH_RETENTION_DAYS).
 func (s *Service) PurgeDeleted(ctx context.Context) (int, error) {
 	cutoff := s.now().Add(-DeletedRetention)
 	rows, err := s.DB.Query(ctx, `SELECT id FROM documents WHERE deleted_at IS NOT NULL AND deleted_at < $1 LIMIT 500`, cutoff)
@@ -240,9 +240,9 @@ func (s *Service) StartOrphanSweep(ctx context.Context) error {
 
 // PurgeOrphans runs one page of the orphan sweep and reports whether the sweep finished (also
 // when none is in progress). It removes objects no metadata points to: document contents of
-// failed transactions, moved to papelera/ (versions removed by the history compaction go
+// failed transactions, moved to trash/ (versions removed by the history compaction go
 // through pruned_objects instead), and, deleted for good, uploads without a row and rendered
-// pages older than a day. papelera/ itself is never swept: its lifecycle rule expires it. The cursor lives in
+// pages older than a day. trash/ itself is never swept: its lifecycle rule expires it. The cursor lives in
 // service_state, so the sweep survives restarts and one page never takes long.
 func (s *Service) PurgeOrphans(ctx context.Context) (deleted int, done bool, err error) {
 	var raw []byte
@@ -474,7 +474,7 @@ func (s *Service) ReviewRelations(ctx context.Context) (int, error) {
 				parts = append(parts, fmt.Sprintf("%s %d", k.Key, rid))
 			}
 		}
-		msg := "Revisión de relaciones: se quitaron entidades que ya no existen en Jiku (" + strings.Join(parts, ", ") + ")"
+		msg := "Relation review: removed entities that no longer exist in Jiku (" + strings.Join(parts, ", ") + ")"
 		if len(msg) > 500 {
 			msg = msg[:497] + "..."
 		}

@@ -11,8 +11,8 @@ import (
 // any of them; only admins and services manage them; the ACL is stored but has no effect.
 func TestFolders(t *testing.T) {
 	e := tu.NewEnv(t)
-	clientes := e.Folder("", "clientes", nil)
-	acme := e.Folder(clientes, "acme", nil)
+	clients := e.Folder("", "clients", nil)
+	acme := e.Folder(clients, "acme", nil)
 	infra := e.Folder("", "infra", map[string]any{"inheritAcl": false, "externalBlocked": true, "sharingBlocked": true})
 
 	// A user sees every folder, with write, even without any rule and under inheritAcl=false.
@@ -28,20 +28,20 @@ func TestFolders(t *testing.T) {
 		t.Fatal(p)
 	}
 	// The obsolete ACL is only for admins and services.
-	e.Fail(e.Q(tu.User, "folders.get", map[string]any{"id": clientes, "include": []string{"acl"}}), protocol.CodePermissionDenied)
+	e.Fail(e.Q(tu.User, "folders.get", map[string]any{"id": clients, "include": []string{"acl"}}), protocol.CodePermissionDenied)
 	e.OK(e.Q(tu.Admin, "folders.get", map[string]any{"id": infra, "include": []string{"acl"}}))
 	// Externals never see folders.
-	e.Fail(e.Q(tu.External, "folders.get", map[string]any{"id": clientes}), protocol.CodeFolderNotFound)
+	e.Fail(e.Q(tu.External, "folders.get", map[string]any{"id": clients}), protocol.CodeFolderNotFound)
 	if items := e.Q(tu.External, "folders.list", nil).Items(); len(items) != 0 {
 		t.Fatalf("external sees folders: %v", items)
 	}
 
 	// folders.* commands: admins and services only.
-	e.Fail(e.Cmd(tu.User, "folders.new", map[string]any{"id": tu.ID(), "parentId": clientes, "name": "x"}), protocol.CodePermissionDenied)
+	e.Fail(e.Cmd(tu.User, "folders.new", map[string]any{"id": tu.ID(), "parentId": clients, "name": "x"}), protocol.CodePermissionDenied)
 	e.Fail(e.Cmd(tu.User, "folders."+acme+".edit", map[string]any{"name": "y"}), protocol.CodePermissionDenied)
 	e.Fail(e.Cmd(tu.User, "folders."+acme+".delete", nil), protocol.CodePermissionDenied)
 	e.Fail(e.Cmd(tu.User, "folders."+acme+".acl.replace", map[string]any{"rules": []any{}}), protocol.CodePermissionDenied)
-	e.Fail(e.Cmd(tu.External, "folders.new", map[string]any{"id": tu.ID(), "parentId": clientes, "name": "x"}), protocol.CodeCallerNotAuthorized)
+	e.Fail(e.Cmd(tu.External, "folders.new", map[string]any{"id": tu.ID(), "parentId": clients, "name": "x"}), protocol.CodeCallerNotAuthorized)
 	pzt := tu.ID()
 	e.OK(e.Cmd(tu.Connector, "folders.new", map[string]any{"id": pzt, "parentId": acme, "name": "pzt"}))
 	// Idempotent retry; another payload with the same id is already_exists; same name is already_exists.
@@ -61,7 +61,7 @@ func TestFolders(t *testing.T) {
 	doc := e.Doc(tu.User, pzt, "notas.md", "# Notas\n")
 	e.OK(e.Cmd(tu.Admin, "folders."+acme+".edit", map[string]any{"name": "acme-sa"}))
 	d := e.OK(e.Q(tu.User, "documents.get", map[string]any{"id": doc}))
-	if d["path"] != "/clientes/acme-sa/pzt/notas.md" {
+	if d["path"] != "/clients/acme-sa/pzt/notas.md" {
 		t.Fatalf("path not updated: %v", d["path"])
 	}
 	e.Fail(e.Cmd(tu.Admin, "folders."+acme+".edit", map[string]any{"parentId": pzt}), protocol.CodeInvalidFields)

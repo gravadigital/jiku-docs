@@ -58,8 +58,8 @@ func Start(nc *nats.Conn, svc *service.Service, serviceName, instance, version s
 		plane, desc string
 		endpoints   []service.Endpoint
 	}{
-		{protocol.PlaneCommands, "jiku-docs: plano de escritura", svc.Commands()},
-		{protocol.PlaneQueries, "jiku-docs: plano de lectura", svc.Queries()},
+		{protocol.PlaneCommands, "jiku-docs: write plane", svc.Commands()},
+		{protocol.PlaneQueries, "jiku-docs: read plane", svc.Queries()},
 	}
 	for _, p := range planes {
 		name := protocol.ServiceFor(serviceName, p.plane)

@@ -50,7 +50,7 @@ func readRelationSet(o *validate.Object, key string) (markdown.Relations, bool, 
 			n, ok := validate.ElemInt(el)
 			if !ok || n <= 0 {
 				return rel, false, protocol.InvalidField(validate.Join(child.Path(), k.Key), validate.Value(el), nil,
-					"%q tiene que ser una lista de ids positivos", validate.Join(child.Path(), k.Key))
+					"%q must be a list of positive ids", validate.Join(child.Path(), k.Key))
 			}
 			ids = append(ids, n)
 		}
@@ -80,13 +80,13 @@ func (s *Service) documentsRelationsUpdate(ctx context.Context, c *Call) (any, e
 		return nil, err
 	}
 	if (!hasAdd || add.Empty()) && (!hasRemove || remove.Empty()) {
-		return nil, protocol.InvalidField("payload", nil, []string{"add", "remove"}, "Indicá al menos una relación en add o remove")
+		return nil, protocol.InvalidField("payload", nil, []string{"add", "remove"}, "Give at least one relation in add or remove")
 	}
 	for _, k := range markdown.RelationKinds {
 		rm := toSet(remove.Get(k.Key))
 		for _, x := range add.Get(k.Key) {
 			if rm[x] {
-				return nil, protocol.InvalidField("remove."+k.Key, x, nil, "El id %d está en add y en remove", x)
+				return nil, protocol.InvalidField("remove."+k.Key, x, nil, "The id %d is in both add and remove", x)
 			}
 		}
 	}
@@ -159,7 +159,7 @@ func (s *Service) UpdateRelations(ctx context.Context, c *Call, id string, base 
 	}
 	edited, err := markdown.SetRelations(string(raw), next)
 	if err != nil {
-		return nil, protocol.Ef(protocol.CodeFrontmatterInvalid, "El frontmatter no se puede editar: %s", err.Error())
+		return nil, protocol.Ef(protocol.CodeFrontmatterInvalid, "The frontmatter cannot be edited: %s", err.Error())
 	}
 	message := relationsMessage(diff, projects, clients)
 	out, err := s.UpdateDocument(ctx, c, id, base, &contentInput{raw: []byte(edited)}, sessionID, via, message)
@@ -185,12 +185,12 @@ func (s *Service) projectIndex(ctx context.Context) (map[int64]coreapi.Project, 
 	return out, nil
 }
 
-// relationsMessage is the automatic message of the version: "Proyecto asignado: EXO -
-// Videoconferencia; Cliente asignado: EXO".
+// relationsMessage is the automatic message of the version: "Project assigned: EXO -
+// Videoconferencia; Client assigned: EXO".
 func relationsMessage(diff map[string]any, projects map[int64]coreapi.Project, clients map[int64]string) string {
 	labels := map[string][2]string{
-		"clients": {"Cliente asignado", "Cliente quitado"}, "projects": {"Proyecto asignado", "Proyecto quitado"},
-		"requirements": {"Requisito vinculado", "Requisito desvinculado"}, "tasks": {"Tarea vinculada", "Tarea desvinculada"},
+		"clients": {"Client assigned", "Client removed"}, "projects": {"Project assigned", "Project removed"},
+		"requirements": {"Requirement linked", "Requirement unlinked"}, "tasks": {"Task linked", "Task unlinked"},
 	}
 	name := func(kind string, id int64) string {
 		switch kind {
@@ -235,7 +235,8 @@ const (
 	clientBodyBonus   = 0.05
 )
 
-// stopTerms never make a candidate on their own: they are too common in names.
+// stopTerms never make a candidate on their own: they are too common in names. They are Spanish
+// words because the names of clients and projects in Jiku are Spanish.
 var stopTerms = map[string]bool{"proyecto": true, "general": true, "interno": true, "cliente": true, "sistema": true,
 	"app": true, "web": true, "soporte": true, "mantenimiento": true, "desarrollo": true}
 
@@ -319,11 +320,11 @@ func suggest(title, body string, projects []coreapi.Project, clients map[int64]s
 				best = score
 				switch {
 				case inTitle:
-					reason = "El título menciona «" + term + "»"
+					reason = "The title mentions “" + term + "”"
 				case hits == 1:
-					reason = "El contenido menciona «" + term + "» (1 vez)"
+					reason = "The content mentions “" + term + "” (1 time)"
 				default:
-					reason = fmt.Sprintf("El contenido menciona «%s» (%d veces)", term, hits)
+					reason = fmt.Sprintf("The content mentions “%s” (%d times)", term, hits)
 				}
 			}
 		}
@@ -360,9 +361,9 @@ func suggest(title, body string, projects []coreapi.Project, clients map[int64]s
 		score, hits := 0.0, strings.Count(b, needle)
 		reason := ""
 		if strings.Contains(t, needle) {
-			score, reason = titleWeight/2, "El título menciona el cliente «"+name+"»"
+			score, reason = titleWeight/2, "The title mentions the client “"+name+"”"
 		} else if hits > 0 {
-			score, reason = contentWeightEach*float64(min(hits, contentMaxHits)), fmt.Sprintf("El contenido menciona el cliente «%s»", name)
+			score, reason = contentWeightEach*float64(min(hits, contentMaxHits)), fmt.Sprintf("The content mentions the client “%s”", name)
 		}
 		if score == 0 {
 			continue

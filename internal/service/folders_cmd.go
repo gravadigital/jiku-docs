@@ -30,7 +30,7 @@ func validFolderName(o *validate.Object, key string, required bool) (string, boo
 		}
 	}
 	if bad {
-		o.Fail(protocol.InvalidField(key, name, nil, "El nombre de carpeta no puede ser . ni .., ni empezar o terminar con espacios ni tener caracteres de control"))
+		o.Fail(protocol.InvalidField(key, name, nil, "A folder name cannot be . or .., start or end with spaces, or contain control characters"))
 		return "", false
 	}
 	return name, true
@@ -92,7 +92,7 @@ func requireFolderManager(c *caller.Caller) error {
 		return err
 	}
 	if !c.SeesRestricted() {
-		return protocol.Ef(protocol.CodePermissionDenied, "Las carpetas las administran solo los administradores y los servicios")
+		return protocol.Ef(protocol.CodePermissionDenied, "Folders are managed only by administrators and services")
 	}
 	return nil
 }
@@ -135,14 +135,14 @@ func (s *Service) CreateFolder(ctx context.Context, c *Call, id, parentID, name 
 				out = map[string]any{"id": existing.ID, "path": existing.Path}
 				return nil
 			}
-			return protocol.Ef(protocol.CodeAlreadyExists, "Ya existe una carpeta con ese id")
+			return protocol.Ef(protocol.CodeAlreadyExists, "A folder with that id already exists")
 		}
 		parent, _ := tree.Get(parentID)
 		f := &folderRow{ID: id, ParentID: parentID, Name: name, Path: parent.Path + name + "/",
 			InheritACL: inherit, ExternalBlocked: extBlocked, Sharing: sharing}
 		err = s.insertFolder(ctx, tx, c, f)
 		if store.IsUniqueViolation(err, "") {
-			return protocol.Ef(protocol.CodeAlreadyExists, "Ya existe una carpeta con ese nombre en la carpeta padre")
+			return protocol.Ef(protocol.CodeAlreadyExists, "A folder with that name already exists in the parent folder")
 		}
 		if err != nil {
 			return err
@@ -193,7 +193,7 @@ func (s *Service) foldersEdit(ctx context.Context, c *Call) (any, error) {
 	}
 	if len(o.Keys()) == 0 {
 		return nil, protocol.InvalidField("payload", nil, []string{"name", "parentId", "inheritAcl", "externalBlocked", "sharingBlocked"},
-			"Indicá al menos un campo a modificar")
+			"Give at least one field to change")
 	}
 	var out map[string]any
 	err := store.InTx(ctx, s.DB, func(tx pgx.Tx) error {
@@ -211,7 +211,7 @@ func (s *Service) foldersEdit(ctx context.Context, c *Call) (any, error) {
 		next := *cur
 		changes := map[string]any{}
 		if id == protocol.RootFolderID && (hasName || hasParent || (inherit != nil && *inherit)) {
-			return protocol.InvalidField("payload", nil, nil, "La carpeta raíz no se puede renombrar, mover ni heredar permisos")
+			return protocol.InvalidField("payload", nil, nil, "The root folder cannot be renamed, moved or inherit permissions")
 		}
 		if hasName && name != cur.Name {
 			next.Name = name
@@ -222,7 +222,7 @@ func (s *Service) foldersEdit(ctx context.Context, c *Call) (any, error) {
 				return err
 			}
 			if tree.IsSelfOrDescendant(parentID, id) {
-				return protocol.InvalidField("parentId", parentID, nil, "No se puede mover una carpeta dentro de sí misma")
+				return protocol.InvalidField("parentId", parentID, nil, "A folder cannot be moved inside itself")
 			}
 			next.ParentID = parentID
 			changes["parentId"] = fromTo(cur.ParentID, parentID)
@@ -253,7 +253,7 @@ func (s *Service) foldersEdit(ctx context.Context, c *Call) (any, error) {
 			external_blocked = $6, sharing_blocked = $7, updated_at = $8 WHERE id = $1`,
 			id, next.Name, next.ParentID, next.Path, next.InheritACL, next.ExternalBlocked, next.Sharing, now)
 		if store.IsUniqueViolation(err, "") {
-			return protocol.Ef(protocol.CodeAlreadyExists, "Ya existe una carpeta con ese nombre en el destino")
+			return protocol.Ef(protocol.CodeAlreadyExists, "A folder with that name already exists in the destination")
 		}
 		if err != nil {
 			return err
@@ -327,7 +327,7 @@ func (s *Service) foldersDelete(ctx context.Context, c *Call) (any, error) {
 			return err
 		}
 		if id == protocol.RootFolderID {
-			return protocol.InvalidField("folderId", id, nil, "La carpeta raíz no se puede borrar")
+			return protocol.InvalidField("folderId", id, nil, "The root folder cannot be deleted")
 		}
 		var busy bool
 		if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM folders WHERE parent_id = $1 AND deleted_at IS NULL)
@@ -373,11 +373,11 @@ func (s *Service) foldersACLReplace(ctx context.Context, c *Call) (any, error) {
 			return nil, err
 		}
 		if !validate.IsObject(raw) {
-			return nil, protocol.InvalidField("rules", nil, nil, "Cada regla tiene que ser un objeto")
+			return nil, protocol.InvalidField("rules", nil, nil, "Each rule must be an object")
 		}
 		key := pt + "\x00" + pr
 		if seen[key] {
-			return nil, protocol.InvalidField("rules", pr, nil, "La regla para %s %q está repetida", pt, pr)
+			return nil, protocol.InvalidField("rules", pr, nil, "The rule for %s %q is repeated", pt, pr)
 		}
 		seen[key] = true
 		rules = append(rules, acl.Rule{PrincipalType: pt, Principal: pr, Permission: perm})

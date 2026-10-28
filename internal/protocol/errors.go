@@ -45,40 +45,40 @@ const (
 // flags the content.
 const WarningPossibleSecret = "possible_secret_detected"
 
-// messages are the default Spanish texts for the interface. Callers decide by code, never by
+// messages are the default texts for the interface. Callers decide by code, never by
 // message.
 var messages = map[string]string{
-	CodeInvalidFields:               "El pedido tiene campos inválidos o no declarados",
-	CodeInvalidCursor:               "El cursor no es válido para esta consulta: se obtiene de la respuesta anterior y hay que reusarlo con el mismo filtro y el mismo orden",
-	CodeDocumentNotFound:            "El documento no existe o no es visible",
-	CodeFolderNotFound:              "La carpeta no existe o no es visible",
-	CodeAttachmentNotFound:          "El adjunto no existe o no es visible",
-	CodePermissionDenied:            "No tenés permiso para esta operación",
-	CodeVersionConflict:             "La versión base no coincide con la versión actual del documento",
-	CodeVersionPruned:               "La versión pedida fue compactada: usá una de las versiones conservadas más cercanas",
-	CodeDocumentLocked:              "Otra sesión está editando el documento",
-	CodeLockNotHeld:                 "La sesión no tiene el lock del documento",
-	CodeAlreadyExists:               "Ya existe un recurso con ese identificador o nombre",
-	CodeFileNameInvalid:             "El nombre de archivo no es válido: tiene que terminar en .md y no puede contener / ni \\",
-	CodeFrontmatterInvalid:          "El frontmatter del documento no es válido",
-	CodeInvalidRelation:             "El documento referencia una entidad de Jiku inexistente o no visible",
-	CodeContentTooLarge:             "El contenido supera el tamaño permitido",
-	CodeChecksumMismatch:            "El checksum declarado no coincide con el contenido",
-	CodeUploadNotFound:              "La subida no existe, venció o ya fue usada",
-	CodeFolderNotEmpty:              "La carpeta tiene contenido",
-	CodeAttachmentTypeNotAllowed:    "El tipo de archivo no está permitido",
-	CodeAttachmentTooLarge:          "El archivo supera el tamaño permitido",
-	CodeQueryTimeout:                "La consulta tardó demasiado: achicá el filtro",
-	CodeUnknownCaller:               "La identidad no está registrada en Jiku: reconectá",
-	CodeCallerNotAuthorized:         "La identidad no tiene acceso a esta operación",
-	CodeUpstreamUnavailable:         "Jiku no respondió: reintentá en unos segundos",
-	CodeInternalError:               "Error interno",
-	CodeShareNotFound:               "El link no existe o ya no es válido",
-	CodeSharingBlocked:              "Un documento restringido no admite links compartidos",
-	CodeShareExpiryInvalid:          "El vencimiento tiene que ser futuro y como máximo a 180 días",
-	CodeSecretWarningNotAcked:       "El documento puede contener secretos: confirmá antes de compartirlo",
-	CodeSemanticSearchNotConfigured: "La búsqueda semántica no está disponible: usá mode text",
-	CodeAttachmentsNotConfigured:    "Los adjuntos no están configurados",
+	CodeInvalidFields:               "The request has invalid or undeclared fields",
+	CodeInvalidCursor:               "The cursor is not valid for this query: take it from the previous reply and reuse it with the same filter and the same sort",
+	CodeDocumentNotFound:            "The document does not exist or is not visible",
+	CodeFolderNotFound:              "The folder does not exist or is not visible",
+	CodeAttachmentNotFound:          "The attachment does not exist or is not visible",
+	CodePermissionDenied:            "You do not have permission for this operation",
+	CodeVersionConflict:             "The base version does not match the current version of the document",
+	CodeVersionPruned:               "The requested version was pruned: use one of the nearest kept versions",
+	CodeDocumentLocked:              "Another session is editing the document",
+	CodeLockNotHeld:                 "The session does not hold the lock of the document",
+	CodeAlreadyExists:               "A resource with that identifier or name already exists",
+	CodeFileNameInvalid:             "The file name is not valid: it must end in .md and cannot contain / or \\",
+	CodeFrontmatterInvalid:          "The frontmatter of the document is not valid",
+	CodeInvalidRelation:             "The document references a Jiku entity that does not exist or is not visible",
+	CodeContentTooLarge:             "The content exceeds the allowed size",
+	CodeChecksumMismatch:            "The declared checksum does not match the content",
+	CodeUploadNotFound:              "The upload does not exist, expired or was already used",
+	CodeFolderNotEmpty:              "The folder is not empty",
+	CodeAttachmentTypeNotAllowed:    "The file type is not allowed",
+	CodeAttachmentTooLarge:          "The file exceeds the allowed size",
+	CodeQueryTimeout:                "The query took too long: narrow the filter",
+	CodeUnknownCaller:               "The identity is not registered in Jiku: reconnect",
+	CodeCallerNotAuthorized:         "The identity has no access to this operation",
+	CodeUpstreamUnavailable:         "Jiku did not respond: retry in a few seconds",
+	CodeInternalError:               "Internal error",
+	CodeShareNotFound:               "The share link does not exist or is no longer valid",
+	CodeSharingBlocked:              "A restricted document does not allow share links",
+	CodeShareExpiryInvalid:          "The expiry must be in the future and at most 180 days ahead",
+	CodeSecretWarningNotAcked:       "The document may contain secrets: confirm before sharing it",
+	CodeSemanticSearchNotConfigured: "Semantic search is not available: use mode text",
+	CodeAttachmentsNotConfigured:    "Attachments are not configured",
 }
 
 // Error is a failure that travels back to the caller as a `failure` envelope.
@@ -127,5 +127,5 @@ func InvalidField(field string, value any, allowed []string, format string, args
 	return e
 }
 
-// DefaultMessage returns the Spanish text of a code.
+// DefaultMessage returns the default text of a code.
 func DefaultMessage(code string) string { return messages[code] }

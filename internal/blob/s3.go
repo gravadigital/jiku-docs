@@ -29,10 +29,10 @@ type Store interface {
 	Put(ctx context.Context, key string, data []byte, contentType string) error
 	Get(ctx context.Context, key string, maxBytes int64) ([]byte, error)
 	Copy(ctx context.Context, src, dst string) error
-	// CopyToTrash copies key to papelera/<key> (with meta as user metadata, if any); ErrNotFound
+	// CopyToTrash copies key to trash/<key> (with meta as user metadata, if any); ErrNotFound
 	// when key does not exist. Deleting the original is the caller's next step.
 	CopyToTrash(ctx context.Context, key string, meta map[string]string) error
-	// RestoreFromTrash copies papelera/<key> back to key (never over an existing object) and
+	// RestoreFromTrash copies trash/<key> back to key (never over an existing object) and
 	// returns the trash copy's user metadata.
 	RestoreFromTrash(ctx context.Context, key string) (meta map[string]string, restored bool, err error)
 	Delete(ctx context.Context, key string) error
@@ -107,11 +107,11 @@ const MaxDeleteBatch = 1000
 var ErrStopList = errors.New("blob: stop listing")
 
 // TrashPrefix holds every content object the service removes (history compaction, orphan sweep,
-// purge of deleted documents): an object is copied to papelera/<original key> and only then
+// purge of deleted documents): an object is copied to trash/<original key> and only then
 // deleted, and a lifecycle rule expires the trash after DOCS_TRASH_RETENTION_DAYS. It replaces
 // the bucket versioning as the safety net: `jiku-docs storage restore-from-trash` brings an
 // object back while it is there.
-const TrashPrefix = "papelera/"
+const TrashPrefix = "trash/"
 
 // TrashKey is where key lands in the trash.
 func TrashKey(key string) string { return TrashPrefix + key }
@@ -129,7 +129,7 @@ const (
 // (DigitalOcean Spaces included):
 //   - the large uploads in transit (`uploads/`) expire after one day, as a safety net under the
 //     janitor's purge;
-//   - the trash (`papelera/`) expires after trashDays: an object removed by the service can be
+//   - the trash (`trash/`) expires after trashDays: an object removed by the service can be
 //     restored during that time, and its space is really freed afterwards.
 func (s *S3) EnsureLifecycle(ctx context.Context, trashDays int) error {
 	if trashDays < 1 {
@@ -291,7 +291,7 @@ func missingKey(err error) bool {
 	return resp.Code == "NoSuchKey" || (resp.StatusCode == 404 && resp.Code != "NoSuchBucket")
 }
 
-// CopyToTrash copies key to papelera/<key>; the caller deletes the original afterwards (in a
+// CopyToTrash copies key to trash/<key>; the caller deletes the original afterwards (in a
 // DeleteObjects batch). With meta, the copy carries it as user metadata (the source's content
 // type is kept); without, it keeps the source's metadata. ErrNotFound: the original is gone.
 // Copying again over an existing trash copy is harmless: same content.
@@ -314,7 +314,7 @@ func (s *S3) CopyToTrash(ctx context.Context, key string, meta map[string]string
 	return err
 }
 
-// RestoreFromTrash copies papelera/<key> back to key and returns the user metadata of the trash
+// RestoreFromTrash copies trash/<key> back to key and returns the user metadata of the trash
 // copy (keys in lower case, without the x-amz-meta- prefix). The trash copy stays until the
 // lifecycle expires it. If key already exists it is not overwritten (restored = false).
 // ErrNotFound: the object is not in the trash (never was, or expired).
