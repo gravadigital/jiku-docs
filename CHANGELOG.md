@@ -34,6 +34,8 @@ for agents is in [CLAUDE.md](CLAUDE.md#cutting-a-release).
 
 ## [Unreleased]
 
+## [1.1.1] - 2026-10-28
+
 ### Added
 
 - **The bus and identity settings accept the Jiku connector SDK names as fallbacks**, so the image runs
