@@ -209,8 +209,8 @@ lifecycle rule empties it.
 
 **Bucket and lifecycle.** `storage init` leaves the bucket without versioning and with two time-based
 expiration rules: `uploads/` at 1 day and `trash/` at `DOCS_TRASH_RETENTION_DAYS` (default 7). It reads the
-rules back and warns in the log if the provider did not store them. Verified against MinIO (tests
-`TestStorageInit*`).
+rules back and warns in the log if the provider did not store them. Verified against Garage (tests
+`TestStorageInit*`; Garage has no bucket versioning, so the test of the suspension skips there).
 
 **Spaces.** Both rules are time-based expirations under a prefix, which DigitalOcean Spaces supports
 ("Supported for time-based expiration and removing incomplete multipart uploads",
@@ -321,7 +321,7 @@ JIKU_DOCS_SKIP_INTEGRATION=1 go test ./...   # without Docker
 docker build -t gravadigital/jiku-docs:local .
 ```
 
-The integration tests start PostgreSQL 16 and MinIO with testcontainers (containers `jiku-docs-test-*`,
+The integration tests start PostgreSQL 16 and Garage (S3) with testcontainers (containers `jiku-docs-test-*`,
 random ports), an embedded `nats-server` with JetStream and a strict core double, and validate **every**
 request, response, event and notification against `docs/apis/`. The contract tests also check that the
 resource specs (the ones that feed `meta.describe`) match the YAML.

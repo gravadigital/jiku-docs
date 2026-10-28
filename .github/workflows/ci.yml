@@ -40,8 +40,8 @@ jobs:
         with:
           version: v2.13.1
 
-      # Unit, contract and integration tests. The integration suite starts PostgreSQL 16 and MinIO
-      # with testcontainers (Docker is available on the runner) and an embedded nats-server.
+      # Unit, contract and integration tests. The integration suite starts PostgreSQL 16 and Garage
+      # (S3) with testcontainers (Docker is available on the runner) and an embedded nats-server.
       - name: Test
         run: go test -race -count=1 ./...
 

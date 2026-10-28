@@ -12,6 +12,7 @@ import (
 
 	"github.com/gravadigital/jiku-docs/internal/blob"
 	"github.com/gravadigital/jiku-docs/internal/testutil"
+	"github.com/minio/minio-go/v7"
 )
 
 func TestMain(m *testing.M) {
@@ -31,8 +32,8 @@ func newBucket(t *testing.T) *blob.S3 {
 	}
 	b := make([]byte, 6)
 	_, _ = rand.Read(b)
-	bs, err := blob.New(blob.Config{Endpoint: c.MinIOEndpoint, Region: "us-east-1", Bucket: "init-" + hex.EncodeToString(b),
-		AccessKey: c.MinIOUser, SecretKey: c.MinIOPassword, PathStyle: true})
+	bs, err := blob.New(blob.Config{Endpoint: c.S3Endpoint, Region: "us-east-1", Bucket: "init-" + hex.EncodeToString(b),
+		AccessKey: c.S3AccessKey, SecretKey: c.S3SecretKey, PathStyle: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -94,6 +95,10 @@ func TestStorageInitSuspendsVersioning(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := bs.EnableVersioning(ctx); err != nil {
+		// The test S3 (Garage) has no bucket versioning, so this branch cannot be set up there.
+		if minio.ToErrorResponse(err).Code == "NotImplemented" {
+			t.Skip("the test S3 does not implement bucket versioning:", err)
+		}
 		t.Fatal(err)
 	}
 	var out bytes.Buffer

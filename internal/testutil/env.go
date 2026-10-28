@@ -127,8 +127,8 @@ func NewEnv(t *testing.T, opts ...Options) *Env {
 		t.Fatal(err)
 	}
 	bucket := "jd-" + randHex(6)
-	e.Blob, err = blob.New(blob.Config{Endpoint: c.MinIOEndpoint, Region: "us-east-1", Bucket: bucket,
-		AccessKey: c.MinIOUser, SecretKey: c.MinIOPassword, PathStyle: true})
+	e.Blob, err = blob.New(blob.Config{Endpoint: c.S3Endpoint, Region: "us-east-1", Bucket: bucket,
+		AccessKey: c.S3AccessKey, SecretKey: c.S3SecretKey, PathStyle: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -138,8 +138,8 @@ func NewEnv(t *testing.T, opts ...Options) *Env {
 	if err := e.Blob.EnsureLifecycle(ctx, blob.DefaultTrashDays); err != nil { // what `jiku-docs storage init` does
 		t.Fatal(err)
 	}
-	e.CoreBlob, err = blob.New(blob.Config{Endpoint: c.MinIOEndpoint, Region: "us-east-1", Bucket: "core-" + randHex(6),
-		AccessKey: c.MinIOUser, SecretKey: c.MinIOPassword, PathStyle: true})
+	e.CoreBlob, err = blob.New(blob.Config{Endpoint: c.S3Endpoint, Region: "us-east-1", Bucket: "core-" + randHex(6),
+		AccessKey: c.S3AccessKey, SecretKey: c.S3SecretKey, PathStyle: true})
 	if err != nil {
 		t.Fatal(err)
 	}

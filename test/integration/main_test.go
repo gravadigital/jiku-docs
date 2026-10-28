@@ -1,4 +1,4 @@
-// Package integration runs jiku-docs end to end against real PostgreSQL 16 and MinIO
+// Package integration runs jiku-docs end to end against real PostgreSQL 16 and Garage (S3)
 // containers, an embedded nats-server with JetStream and a strict double of core. Every request,
 // reply, event and notification is validated against docs/apis/.
 //

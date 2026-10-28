@@ -88,7 +88,7 @@ over the bus), which projects an external user may see, and whether related enti
   removes. Objects deleted by anyone else with the bucket's credentials are not protected.
 - **DigitalOcean Spaces lifecycle rules are taken on trust.** The two rules (`uploads/` after 1 day,
   `trash/` after the retention days) are time-based expirations under a prefix, which Spaces
-  documents as supported; `storage init` was verified against MinIO. It re-reads the rules and logs
+  documents as supported; `storage init` is tested against Garage. It re-reads the rules and logs
   a warning if the provider did not keep them — and **if they are missing, the trash never empties
   and keeps growing** until it is emptied by hand.
 - **Changing the retention needs `storage init` again**; the variable alone changes nothing.
