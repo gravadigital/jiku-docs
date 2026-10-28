@@ -32,6 +32,12 @@ identity variables.
 
 ## Bus
 
+The bus and identity variables also accept the names of the Jiku connector SDK, which is what the
+connectors deploy (`deploy-de-conectores`) injects: `JIKU_SERVERS` for `NATS_URL`, `JIKU_CREDS` for
+`NATS_CREDS`, `JIKU_INSTANCE` for `NATS_INSTANCE`, `JIKU_KEY_FILE` for `DOCS_SERVICE_USER_KEY_FILE`,
+`JIKU_ISSUER` for `ZITADEL_ISSUER_URL` and `JIKU_PROJECT_ID` for `ZITADEL_PROJECT_ID`. When both are
+set, the name in the tables wins.
+
 | Variable | Default | Required | Meaning |
 |---|---|---|---|
 | `NATS_URL` | `nats://localhost:4222` | no | URL of Jiku's NATS. The local compose sets `nats://nats:4222`. |

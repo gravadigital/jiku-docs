@@ -69,14 +69,14 @@ type Config struct {
 // FromEnv reads the configuration. It does not validate: each subcommand validates what it needs.
 func FromEnv() Config {
 	return Config{
-		NATSURL:        env("NATS_URL", "nats://localhost:4222"),
-		NATSCreds:      env("NATS_CREDS", ""),
-		Instance:       env("NATS_INSTANCE", "dev"),
+		NATSURL:        envAlias("NATS_URL", "JIKU_SERVERS", "nats://localhost:4222"),
+		NATSCreds:      envAlias("NATS_CREDS", "JIKU_CREDS", ""),
+		Instance:       envAlias("NATS_INSTANCE", "JIKU_INSTANCE", "dev"),
 		ServiceName:    env("DOCS_SERVICE_NAME", "jiku-docs"),
 		ServiceKeyB64:  env("DOCS_SERVICE_USER_KEY_B64", ""),
-		ServiceKeyFile: env("DOCS_SERVICE_USER_KEY_FILE", ""),
-		ZitadelIssuer:  env("ZITADEL_ISSUER_URL", "https://id.grava.io"),
-		ZitadelProject: env("ZITADEL_PROJECT_ID", ""),
+		ServiceKeyFile: envAlias("DOCS_SERVICE_USER_KEY_FILE", "JIKU_KEY_FILE", ""),
+		ZitadelIssuer:  envAlias("ZITADEL_ISSUER_URL", "JIKU_ISSUER", "https://id.grava.io"),
+		ZitadelProject: envAlias("ZITADEL_PROJECT_ID", "JIKU_PROJECT_ID", ""),
 		CoreTimeout:    envDuration("CORE_TIMEOUT", 10*time.Second),
 
 		APIUserID: env("JIKU_API_USER_ID", ""),
@@ -183,6 +183,12 @@ func env(key, def string) string {
 	return def
 }
 
+// envAlias reads key and falls back to alias, the name the Jiku connector SDK uses for the same
+// setting (JIKU_SERVERS, JIKU_CREDS...), so the service runs unchanged in the connectors deploy.
+func envAlias(key, alias, def string) string {
+	return env(key, env(alias, def))
+}
+
 func envBool(key string, def bool) bool {
 	v := env(key, "")
 	if v == "" {
@@ -243,7 +249,7 @@ func (c Config) ServiceKey() ([]byte, error) {
 	if c.ServiceKeyFile != "" {
 		return os.ReadFile(c.ServiceKeyFile)
 	}
-	return nil, errors.New("set DOCS_SERVICE_USER_KEY_B64 (or DOCS_SERVICE_USER_KEY_FILE) to the Zitadel JSON key of the jiku_docs machine user")
+	return nil, errors.New("set DOCS_SERVICE_USER_KEY_B64 (or DOCS_SERVICE_USER_KEY_FILE / JIKU_KEY_FILE) to the Zitadel JSON key of the jiku_docs machine user")
 }
 
 // ValidateDatabase checks what any database-touching subcommand needs.
@@ -300,10 +306,10 @@ func (c Config) ValidateServe() error {
 		missing = append(missing, "JIKU_PUBLIC_URL")
 	}
 	if c.NATSCreds == "" {
-		missing = append(missing, "NATS_CREDS")
+		missing = append(missing, "NATS_CREDS (or JIKU_CREDS)")
 	}
 	if c.ZitadelProject == "" {
-		missing = append(missing, "ZITADEL_PROJECT_ID")
+		missing = append(missing, "ZITADEL_PROJECT_ID (or JIKU_PROJECT_ID)")
 	}
 	if len(missing) > 0 {
 		return fmt.Errorf("missing settings: %s", strings.Join(missing, ", "))

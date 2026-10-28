@@ -34,6 +34,14 @@ for agents is in [CLAUDE.md](CLAUDE.md#cutting-a-release).
 
 ## [Unreleased]
 
+### Added
+
+- **The bus and identity settings accept the Jiku connector SDK names as fallbacks**, so the image runs
+  in the connectors deploy without translating variables: `JIKU_SERVERS` (`NATS_URL`), `JIKU_CREDS`
+  (`NATS_CREDS`), `JIKU_INSTANCE` (`NATS_INSTANCE`), `JIKU_KEY_FILE` (`DOCS_SERVICE_USER_KEY_FILE`),
+  `JIKU_ISSUER` (`ZITADEL_ISSUER_URL`) and `JIKU_PROJECT_ID` (`ZITADEL_PROJECT_ID`). The existing names
+  win when both are set, so current installations are unaffected.
+
 ## [1.1.0] - 2026-10-28
 
 ### Changed
