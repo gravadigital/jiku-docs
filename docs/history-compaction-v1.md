@@ -1,153 +1,153 @@
-# jiku-docs: compactación del historial de versiones
+# jiku-docs: version history compaction
 
-Oct 24, 2026 · @Lautaro Alvarez · revisado 2026-10-25 contra la implementación y con las decisiones del dueño (ver sección 8)
+Oct 24, 2026 · @Lautaro Alvarez · reviewed 2026-10-25 against the implementation and with the owner's decisions (see section 8)
 
-## 1. Resumen
+## 1. Summary
 
-Cada guardado de un documento crea una versión nueva, y con autoguardado eso genera miles de versiones por día. Se mantiene ese comportamiento, porque sostiene la actualización en tiempo real, y se agrega un proceso diario que compacta el historial viejo según una política de retención.
+Every save of a document creates a new version, and with autosave that produces thousands of versions per day. That behaviour is kept, because it supports real-time updates, and a daily process is added that compacts the old history according to a retention policy.
 
-Este documento complementa la especificación técnica de `jiku-docs` v1. Donde contradice algo de ella (en particular, la afirmación de que todas las versiones se conservan), manda este documento.
+This document complements the `jiku-docs` v1 technical specification. Where it contradicts something in it (in particular, the statement that all versions are kept), this document prevails.
 
-### Problema
+### Problem
 
-VS Code, Obsidian y el daemon `jiku docs sync` guardan cada pocos segundos mientras alguien escribe. Con 10 personas editando 4 horas por día y un guardado cada 10 segundos, el sistema acumula unas 14.000 versiones diarias (alrededor de 140 MB por día con documentos de 10 KB). El costo de almacenamiento es bajo, pero el historial se vuelve ilegible, la tabla de versiones crece sin techo y restaurar algo significa buscar entre miles de entradas casi idénticas.
+VS Code, Obsidian and the `jiku docs sync` daemon save every few seconds while someone is writing. With 10 people editing 4 hours a day and one save every 10 seconds, the system accumulates about 14,000 versions per day (around 140 MB per day with 10 KB documents). The storage cost is low, but the history becomes unreadable, the versions table grows without a ceiling, and restoring something means searching through thousands of nearly identical entries.
 
-### Decisión
+### Decision
 
-- **Escritura y tiempo real sin cambios.** Cada guardado sigue creando una versión, sigue incrementando `version` y sigue disparando `document.updated`. El control de concurrencia con `baseVersion` no cambia.
-- **Compactación diaria.** Un proceso del servicio borra versiones intermedias según su antigüedad, conservando siempre las que tienen valor (sección 2).
-- **Cambios de contrato mínimos.** El historial puede tener huecos en la numeración y hay un código de error nuevo, `version_pruned`.
+- **Writes and real time unchanged.** Every save still creates a version, still increments `version` and still fires `document.updated`. Concurrency control with `baseVersion` does not change.
+- **Daily compaction.** A process of the service deletes intermediate versions according to their age, always keeping the ones that have value (section 2).
+- **Minimal contract changes.** The history can have gaps in its numbering and there is a new error code, `version_pruned`.
 
-Con el escenario de arriba, de las \~14.000 versiones diarias sobreviven unas pocas decenas después del primer día, y cada entrada del historial viejo corresponde a una sesión de trabajo de alguien.
+With the scenario above, of the \~14,000 daily versions a few dozen survive after the first day, and each entry of the old history corresponds to someone's work session.
 
-## 2. Política de retención
+## 2. Retention policy
 
-Las versiones se adelgazan por tramos de antigüedad; las versiones protegidas y la versión actual no se borran nunca.
+Versions are thinned out by age bands; protected versions and the current version are never deleted.
 
-### Tramos
+### Bands
 
-| Antigüedad de la versión | Qué se conserva |
+| Age of the version | What is kept |
 | --- | --- |
-| Menos de 24 h | Todas |
-| De 24 h a 30 días | La última versión de cada bloque de edición |
-| Más de 30 días | La última versión de cada día calendario |
-| Cualquiera | Las versiones protegidas y la versión actual |
+| Less than 24 h | All |
+| From 24 h to 30 days | The last version of each editing block |
+| More than 30 days | The last version of each calendar day |
+| Any | Protected versions and the current version |
 
-La antigüedad se mide sobre `created_at` de la versión, en el momento en que corre la compactación. Los días calendario se calculan en la zona horaria configurada (default `America/Argentina/Buenos_Aires`).
+Age is measured on the version's `created_at`, at the time the compaction runs. Calendar days are computed in the configured time zone (default `America/Argentina/Buenos_Aires`).
 
-### Bloque de edición
+### Editing block
 
-Un bloque de edición es una secuencia de versiones consecutivas de un documento que cumplen las tres condiciones:
+An editing block is a sequence of consecutive versions of a document that meet all three conditions:
 
-1. Tienen el mismo `author`.
-2. Tienen el mismo `via` (`human`, `agent` o `service`).
-3. Entre cada versión y la siguiente pasaron menos de 30 minutos.
+1. They have the same `author`.
+2. They have the same `via` (`human`, `agent` or `service`).
+3. Less than 30 minutes passed between each version and the next.
 
-El bloque termina cuando cambia el autor, cambia el origen o hay una pausa de 30 minutos o más. De cada bloque se conserva la última versión, que representa el estado del documento al terminar esa sesión de trabajo.
+The block ends when the author changes, the origin changes, or there is a pause of 30 minutes or more. Of each block the last version is kept, which represents the state of the document at the end of that work session.
 
-Ejemplo: Ana guarda 200 versiones entre las 10:00 y las 11:40, Bruno guarda 50 entre las 11:45 y las 12:10, y Ana vuelve a guardar 30 entre las 15:00 y las 15:20. Después del primer día quedan tres versiones: la de Ana a las 11:40, la de Bruno a las 12:10 y la de Ana a las 15:20. Después de 30 días queda solo la de las 15:20 (la última del día), salvo que alguna esté protegida.
+Example: Ana saves 200 versions between 10:00 and 11:40, Bruno saves 50 between 11:45 and 12:10, and Ana saves 30 more between 15:00 and 15:20. After the first day three versions remain: Ana's at 11:40, Bruno's at 12:10 and Ana's at 15:20. After 30 days only the 15:20 one remains (the last of the day), unless one of them is protected.
 
-### Versiones protegidas
+### Protected versions
 
-Una versión protegida no se borra en ningún tramo.
+A protected version is not deleted in any band.
 
-| Versión | Motivo |
+| Version | Reason |
 | --- | --- |
-| La versión actual del documento | Es el estado vigente |
-| La primera versión (`kind = create`) | Registra el origen del documento |
-| Versiones con `message` | Quien escribe un mensaje marca un punto importante ("versión enviada al cliente") |
-| Versiones con `via` `service` | Son cambios automáticos (importación, revisión de relaciones) que conviene poder auditar uno por uno |
-| Restauraciones (`kind = restore`) | Registran que alguien volvió atrás |
-| Versiones fijadas por un link compartido activo (`mode = pinned`, sin revocar ni vencer) | El link tiene que seguir mostrando esa versión |
+| The current version of the document | It is the current state |
+| The first version (`kind = create`) | Records the origin of the document |
+| Versions with `message` | Whoever writes a message marks an important point ("version sent to the client") |
+| Versions with `via` `service` | They are automatic changes (import, relation review) that are worth being able to audit one by one |
+| Restores (`kind = restore`) | Record that someone went back |
+| Versions pinned by an active share link (`mode = pinned`, not revoked or expired) | The link has to keep showing that version |
 
-Las versiones con `via` `agent` **no** están protegidas por su origen: siguen la regla de bloques como las humanas. Como un cambio de `via` cierra el bloque, cada sesión de un agente conserva su última versión y nunca se mezcla con la edición de una persona. Si una versión de agente lleva `message`, queda protegida por esa regla. Así un agente que guarda seguido (por ejemplo con `jiku docs sync` y `JIKU_VIA=agent`) no vuelve a llenar el historial de versiones imborrables.
+Versions with `via` `agent` are **not** protected by their origin: they follow the block rule like human ones. Since a change of `via` closes the block, each agent session keeps its last version and never mixes with a person's editing. If an agent version carries a `message`, it is protected by that rule. This way an agent that saves often (for example with `jiku docs sync` and `JIKU_VIA=agent`) does not fill the history with undeletable versions again.
 
-La protección por link compartido es dinámica: cuando el link vence o se revoca, la versión vuelve a ser candidata en la siguiente compactación. Las demás protecciones son permanentes.
+Protection by share link is dynamic: when the link expires or is revoked, the version becomes a candidate again in the next compaction. The other protections are permanent.
 
-Como las versiones con `message` nunca se compactan, para marcar un punto importante basta con guardar con mensaje, por ejemplo `jiku docs put <id> <archivo> --base-version <n> --message "Versión enviada al cliente"`.
+Since versions with `message` are never compacted, to mark an important point it is enough to save with a message, for example `jiku docs put <id> <file> --base-version <n> --message "Version sent to the client"`.
 
-### Lo que no cambia
+### What does not change
 
-- Los documentos borrados se eliminan definitivamente a los 30 días con todas sus versiones, como antes (sus objetos pasan por la papelera, sección 4). La compactación no los procesa.
-- El índice de búsqueda solo contiene la versión actual, así que no se ve afectado.
-- El changelog y el feed `documents.changes` conservan sus registros; un evento viejo puede mencionar una versión que ya fue compactada.
+- Deleted documents are permanently removed after 30 days with all their versions, as before (their objects go through the trash, section 4). The compaction does not process them.
+- The search index only contains the current version, so it is not affected.
+- The changelog and the `documents.changes` feed keep their records; an old event may mention a version that has already been compacted.
 
-## 3. Proceso de compactación
+## 3. Compaction process
 
-Un proceso del propio servicio `jiku-docs` corre una vez por día, procesa documento por documento en transacciones cortas y mueve los objetos de S3 a la papelera recién después de confirmar el borrado en la base.
+A process of the `jiku-docs` service itself runs once a day, processes document by document in short transactions, and moves the S3 objects to the trash only after the deletion has been committed in the database.
 
-### Ejecución
+### Execution
 
-- Corre una vez por día a partir de la hora configurada (`DOCS_HISTORY_COMPACTION_HOUR`, default 3) en la zona configurada, con el mismo mecanismo que las demás tareas periódicas del servicio (`JobDue` sobre `service_state`). Si hay varias réplicas del servicio, solo una ejecuta: toma un advisory lock de PostgreSQL (`pg_try_advisory_lock`) y las demás lo saltean.
-- Procesa los documentos que cumplen alguna de estas condiciones desde su última compactación (los que nunca se compactaron, siempre):
-  - **Actividad nueva:** `documents.updated_at > documents.last_compacted_at`.
-  - **Link fijado que venció o se revocó:** un link compartido con `mode = pinned` cuyo `expires_at` o `revoked_at` es posterior a `last_compacted_at`.
-  - **Cruce de umbral:** alguna versión no protegida (y que no es la actual) cruzó el umbral de 24 h o el de 30 días entre la última compactación y ahora. Sin esta regla, la sesión de edición del día anterior a la corrida (todas sus versiones tienen menos de 24 h al compactar) quedaría entera para siempre si nadie vuelve a editar el documento; con ella, se compacta en la corrida siguiente al cruce de 24 h (caso 24).
-- Un documento sin actividad nueva cuyas versiones no cruzaron ningún umbral no se procesa (caso 11).
-- Recorre los documentos en lotes (default 100), ordenados por `id`, para poder retomar donde quedó si se corta.
-- También se puede ejecutar a demanda con un comando de mantenimiento: `jiku-docs history compact [--document <id>] [--dry-run]`. Con `--dry-run` informa qué borraría sin borrar nada.
+- It runs once a day from the configured hour (`DOCS_HISTORY_COMPACTION_HOUR`, default 3) in the configured zone, with the same mechanism as the other periodic tasks of the service (`JobDue` on `service_state`). If there are several replicas of the service, only one runs: it takes a PostgreSQL advisory lock (`pg_try_advisory_lock`) and the others skip it.
+- It processes the documents that meet any of these conditions since their last compaction (those never compacted, always):
+  - **New activity:** `documents.updated_at > documents.last_compacted_at`.
+  - **Pinned link that expired or was revoked:** a share link with `mode = pinned` whose `expires_at` or `revoked_at` is later than `last_compacted_at`.
+  - **Threshold crossing:** some unprotected version (that is not the current one) crossed the 24 h or the 30-day threshold between the last compaction and now. Without this rule, the editing session of the day before the run (all its versions are less than 24 h old when compacting) would remain whole forever if nobody edits the document again; with it, it is compacted in the run following the 24 h crossing (case 24).
+- A document without new activity whose versions did not cross any threshold is not processed (case 11).
+- It walks the documents in batches (default 100), ordered by `id`, so it can resume where it left off if interrupted.
+- It can also be run on demand with a maintenance command: `jiku-docs history compact [--document <id>] [--dry-run]`. With `--dry-run` it reports what it would delete without deleting anything.
 
-### Algoritmo por documento
+### Algorithm per document
 
-1. Abrir transacción y bloquear la fila del documento con `SELECT ... FROM documents WHERE id = $1 FOR UPDATE`.
-2. Leer sus versiones ordenadas por `version` y el conjunto de versiones fijadas por links activos.
-3. Marcar como conservadas las versiones protegidas (sección 2).
-4. Agrupar todas las versiones del documento en bloques de edición. Para las versiones del tramo de 24 h a 30 días, conservar la última de cada bloque.
-5. Para las versiones de más de 30 días, partir de las que dejó la regla de bloques, agruparlas por día calendario y conservar la última de cada día.
-6. Marcar como conservadas todas las versiones de menos de 24 h.
-7. Borrar las filas de `document_versions` no conservadas, guardando su `storage_key` y la fila borrada (`version_row`) en `pruned_objects`.
-8. Actualizar `last_compacted_at` y `pruned_versions_count` del documento, y confirmar la transacción.
+1. Open a transaction and lock the document row with `SELECT ... FROM documents WHERE id = $1 FOR UPDATE`.
+2. Read its versions ordered by `version` and the set of versions pinned by active links.
+3. Mark the protected versions as kept (section 2).
+4. Group all the versions of the document into editing blocks. For the versions in the 24 h to 30 days band, keep the last one of each block.
+5. For versions older than 30 days, start from those left by the block rule, group them by calendar day and keep the last one of each day.
+6. Mark all versions younger than 24 h as kept.
+7. Delete the `document_versions` rows not kept, saving their `storage_key` and the deleted row (`version_row`) in `pruned_objects`.
+8. Update the document's `last_compacted_at` and `pruned_versions_count`, and commit the transaction.
 
-Los bloques se calculan sobre todas las versiones del documento, no solo las del tramo, para que un bloque que cruza el límite de 24 h no se parta en dos. La regla diaria se aplica sobre lo que dejó la regla de bloques, así que el resultado es como máximo una versión por día más las protegidas.
+Blocks are computed over all the versions of the document, not only those of the band, so that a block crossing the 24 h boundary is not split in two. The daily rule is applied over what the block rule left, so the result is at most one version per day plus the protected ones.
 
-El proceso es idempotente: correrlo dos veces seguidas no borra nada más, porque las versiones que conserva cumplen las mismas reglas en la segunda pasada.
+The process is idempotent: running it twice in a row deletes nothing more, because the versions it keeps satisfy the same rules on the second pass.
 
-### Borrado en S3: papelera
+### Deletion in S3: trash
 
-Ningún objeto de contenido se borra directamente: pasa primero por la papelera (`papelera/<clave original>`, sección 4). El paso ocurre fuera de la transacción:
+No content object is deleted directly: it first goes through the trash (`trash/<original key>`, section 4). That step happens outside the transaction:
 
-1. Después del commit, el proceso toma las filas de `pruned_objects` en lotes (`DOCS_HISTORY_S3_DELETE_BATCH`, hasta 1.000) y copia cada objeto a `papelera/<clave original>` (`CopyObject`, varias copias en paralelo). La copia lleva como metadata la fila de la versión borrada, para poder devolverla al historial.
-2. Borra los originales copiados con una llamada a `DeleteObjects` por lote.
-3. Cada fila se elimina de `pruned_objects` recién cuando su objeto quedó en la papelera y el original ya no existe. Si el original ya no existía, cuenta como hecho.
+1. After the commit, the process takes the `pruned_objects` rows in batches (`DOCS_HISTORY_S3_DELETE_BATCH`, up to 1,000) and copies each object to `trash/<original key>` (`CopyObject`, several copies in parallel). The copy carries the deleted version's row as metadata, so it can be returned to the history.
+2. It deletes the copied originals with one `DeleteObjects` call per batch.
+3. Each row is removed from `pruned_objects` only when its object is in the trash and the original no longer exists. If the original no longer existed, it counts as done.
 
-Si el proceso se corta entre el commit y la copia, o entre la copia y el borrado del original, las filas quedan en `pruned_objects` y la siguiente ejecución las retoma: volver a copiar sobre una copia existente es inocuo (mismo contenido). Nunca queda una fila de versión apuntando a un objeto borrado; en el peor caso queda un objeto sin fila por un tiempo, o la misma versión en la clave original y en la papelera.
+If the process is interrupted between the commit and the copy, or between the copy and the deletion of the original, the rows remain in `pruned_objects` and the next run picks them up: copying again over an existing copy is harmless (same content). A version row never ends up pointing to a deleted object; in the worst case there is an object without a row for a while, or the same version under the original key and in the trash.
 
-El barrido general de huérfanos (`PurgeOrphans`), que hoy lista todo `docs/` y consulta la base por cada objeto, no escala con este volumen y se superpone con `pruned_objects`. Pasa a ser semanal y paginado con un cursor persistido en `service_state`; el paso a la papelera de versiones compactadas lo hace siempre `pruned_objects`. El contenido huérfano que encuentra el barrido también va a la papelera, igual que las versiones de un documento que se purga a los 30 días de borrado.
+The general orphan sweep (`PurgeOrphans`), which today lists all of `docs/` and queries the database for each object, does not scale with this volume and overlaps with `pruned_objects`. It becomes weekly and paginated with a cursor persisted in `service_state`; moving compacted versions to the trash is always done by `pruned_objects`. Orphan content found by the sweep also goes to the trash, as do the versions of a document purged 30 days after deletion.
 
-### Concurrencia con las escrituras
+### Concurrency with writes
 
-- La compactación nunca borra la versión actual, así que no interfiere con `baseVersion` ni con los locks de edición.
-- El `FOR UPDATE` sobre el documento serializa la compactación con `update`, `restore` y `shares.new` del mismo documento. Esas operaciones esperan unos milisegundos como máximo, porque la transacción de compactación de un documento no hace llamadas externas.
-- Si un `restore` o un `shares.new` con `mode: pinned` pide una versión que la compactación acaba de borrar, responde `version_pruned`.
+- The compaction never deletes the current version, so it does not interfere with `baseVersion` or with editing locks.
+- The `FOR UPDATE` on the document serialises the compaction with `update`, `restore` and `shares.new` of the same document. Those operations wait a few milliseconds at most, because a document's compaction transaction makes no external calls.
+- If a `restore` or a `shares.new` with `mode: pinned` requests a version that the compaction has just deleted, it responds `version_pruned`.
 
-### Eventos
+### Events
 
-La compactación no emite eventos ni notificaciones: no cambia el estado vigente de ningún documento. Queda registrada en logs y métricas (sección 6).
+The compaction emits no events or notifications: it does not change the current state of any document. It is recorded in logs and metrics (section 6).
 
-## 4. Cambios en el modelo de datos y storage
+## 4. Data model and storage changes
 
-Se agregan dos columnas a `document_versions`, dos a `documents` y una tabla para el paso diferido a la papelera.
+Two columns are added to `document_versions`, two to `documents`, and one table for the deferred move to the trash.
 
-### Migración
+### Migration
 
 ```sql
--- Origen de cada versión, para proteger creaciones y restauraciones.
--- `documents.move` no crea versión (solo emite document.moved), así que no hay kind 'move'.
+-- Origin of each version, to protect creations and restores.
+-- `documents.move` does not create a version (it only emits document.moved), so there is no kind 'move'.
 ALTER TABLE document_versions
   ADD COLUMN kind text NOT NULL DEFAULT 'update'
     CHECK (kind IN ('create','update','restore'));
 
--- Protección permanente, calculada al insertar (create, restore, message, via service)
+-- Permanent protection, computed on insert (create, restore, message, via service)
 ALTER TABLE document_versions
   ADD COLUMN protected boolean NOT NULL DEFAULT false;
 
--- Datos existentes
+-- Existing data
 UPDATE document_versions SET kind = 'create' WHERE version = 1;
 UPDATE document_versions SET kind = 'restore' WHERE message LIKE 'Restaurado desde la versión %';
 UPDATE document_versions SET protected = true
   WHERE kind IN ('create','restore') OR message IS NOT NULL OR via = 'service';
 
--- Control de la compactación por documento
+-- Compaction control per document
 ALTER TABLE documents
   ADD COLUMN last_compacted_at timestamptz,
   ADD COLUMN pruned_versions_count integer NOT NULL DEFAULT 0;
@@ -156,7 +156,7 @@ CREATE INDEX documents_pending_compaction
   ON documents (id)
   WHERE deleted_at IS NULL AND (last_compacted_at IS NULL OR updated_at > last_compacted_at);
 
--- Objetos de S3 pendientes de pasar a la papelera después del commit
+-- S3 objects pending the move to the trash after the commit
 CREATE TABLE pruned_objects (
   storage_key text PRIMARY KEY,
   document_id text NOT NULL,
@@ -164,162 +164,162 @@ CREATE TABLE pruned_objects (
   pruned_at   timestamptz NOT NULL DEFAULT now()
 );
 
--- Migración 0004: la fila borrada, que la copia en la papelera lleva como metadata
+-- Migration 0004: the deleted row, which the copy in the trash carries as metadata
 ALTER TABLE pruned_objects ADD COLUMN version_row jsonb;
 ```
 
-Las restauraciones existentes se identifican por el mensaje fijo que escribe el servicio al restaurar (`Restaurado desde la versión N`).
+Existing restores are identified by the fixed message the service wrote when restoring at the time the migration was applied (`Restaurado desde la versión N`, "restored from version N"; the `LIKE` above matches that historical literal).
 
-### Reglas al escribir
+### Rules on write
 
-| Comando | `kind` | `protected` |
+| Command | `kind` | `protected` |
 | --- | --- | --- |
 | `documents.new` | `create` | `true` |
-| `documents.{id}.update` | `update` | `true` si trae `message` o si `via` es `service` |
+| `documents.{id}.update` | `update` | `true` if it carries `message` or if `via` is `service` |
 | `documents.{id}.restore` | `restore` | `true` |
 
-La protección por link compartido fijado no se guarda en la columna: se calcula en cada compactación a partir de `shares` (activos, `mode = 'pinned'`).
+Protection by a pinned share link is not stored in the column: it is computed on each compaction from `shares` (active, `mode = 'pinned'`).
 
 ### Storage
 
-- **Sin versionado.** El bucket `jiku-docs-content` no usa versionado. La red de seguridad es una papelera propia, porque DigitalOcean Spaces no confirma soporte de `NoncurrentVersionExpiration`. `jiku-docs storage init` no activa el versionado; en un bucket que ya lo tiene activado, lo suspende (`Suspended`) y avisa en el log que las versiones viejas que ya existían no se borran solas (hay que borrarlas a mano cuando no hagan falta).
-- **Papelera.** Todo borrado de objetos de contenido que hace el servicio pasa por el prefijo `papelera/`: la compactación (vía `pruned_objects`, sección 3), el barrido de huérfanos (`PurgeOrphans`) y la purga definitiva de documentos borrados a los 30 días. Mover es `CopyObject` a `papelera/<clave original>` y después `DeleteObjects` de los originales, en lotes. Las subidas en tránsito (`uploads/`) y las páginas renderizadas (`renders/`) no son contenido y se borran directo.
-- **Ciclo de vida.** Dos reglas de expiración por tiempo, que Spaces soporta: `uploads/` a 1 día y `papelera/` a `DOCS_TRASH_RETENTION_DAYS` (default 7). `jiku-docs storage init` las aplica, las relee y avisa si el proveedor no las guardó.
-- **Recuperación.** `jiku-docs storage restore-from-trash --key <clave original>` devuelve un objeto desde la papelera (nunca pisa uno existente). Con `--version-row` también vuelve a insertar la fila en `document_versions` con los datos que la copia lleva como metadata, marcada `protected` para que la próxima compactación no la vuelva a borrar, y descuenta `pruned_versions_count`. El procedimiento está en el README ("Recuperar una versión compactada por error").
-- Así, un borrado por error de la compactación se puede recuperar durante `DOCS_TRASH_RETENTION_DAYS`, y el espacio se libera de verdad pasado ese plazo.
-- El respaldo diario de la base no cambia. Restaurar un backup anterior a una compactación deja filas apuntando a objetos que pueden estar en la papelera o haber vencido; el proceso de restauración debe verificar los objetos, devolver los que sigan en la papelera y descartar las filas sin objeto.
+- **No versioning.** The `jiku-docs-content` bucket does not use versioning. The safety net is a trash of our own, because DigitalOcean Spaces does not confirm support for `NoncurrentVersionExpiration`. `jiku-docs storage init` does not enable versioning; on a bucket that already has it enabled, it suspends it (`Suspended`) and warns in the log that the old versions that already existed are not deleted automatically (they have to be deleted by hand when no longer needed).
+- **Trash.** Every deletion of content objects done by the service goes through the `trash/` prefix: the compaction (via `pruned_objects`, section 3), the orphan sweep (`PurgeOrphans`) and the permanent purge of deleted documents after 30 days. Moving is `CopyObject` to `trash/<original key>` and then `DeleteObjects` of the originals, in batches. In-transit uploads (`uploads/`) and rendered pages (`renders/`) are not content and are deleted directly.
+- **Lifecycle.** Two time-based expiration rules, which Spaces supports: `uploads/` at 1 day and `trash/` at `DOCS_TRASH_RETENTION_DAYS` (default 7). `jiku-docs storage init` applies them, reads them back and warns if the provider did not store them.
+- **Recovery.** `jiku-docs storage restore-from-trash --key <original key>` returns an object from the trash (it never overwrites an existing one). With `--version-row` it also reinserts the row in `document_versions` with the data the copy carries as metadata, marked `protected` so the next compaction does not delete it again, and decrements `pruned_versions_count`. The procedure is in the README ("Recovering a version compacted by mistake").
+- This way, a mistaken deletion by the compaction can be recovered during `DOCS_TRASH_RETENTION_DAYS`, and the space is actually freed after that period.
+- The daily database backup does not change. Restoring a backup taken before a compaction leaves rows pointing to objects that may be in the trash or may have expired; the restore procedure must verify the objects, return those still in the trash and discard the rows without an object.
 
-## 5. Cambios en contratos y en jiku-go
+## 5. Changes to contracts and jiku-go
 
-Los cambios son compatibles dentro de `v1`: un campo nuevo en las respuestas y un código de error nuevo, que los clientes ya deben tolerar según las reglas del protocolo.
+The changes are compatible within `v1`: a new field in responses and a new error code, which clients must already tolerate according to the protocol rules.
 
-### Código de error nuevo
+### New error code
 
-| Código | Cuándo | `errorDetails` |
+| Code | When | `errorDetails` |
 | --- | --- | --- |
-| `version_pruned` | Se pide, restaura o fija una versión que fue compactada | `requestedVersion`, `previousAvailable` y `nextAvailable` (las versiones conservadas más cercanas, o `null`) |
+| `version_pruned` | A version that was compacted is requested, restored or pinned | `requestedVersion`, `previousAvailable` and `nextAvailable` (the closest kept versions, or `null`) |
 
-Una versión que nunca existió (mayor que la actual) sigue respondiendo `document_not_found`, como hoy.
+A version that never existed (greater than the current one) still responds `document_not_found`, as today.
 
-Un caller `person-external` **nunca** recibe `version_pruned`: para él cualquier versión que no sea la actual sigue siendo `document_not_found`, sin `errorDetails`, para no revelar el historial.
+A `person-external` caller **never** receives `version_pruned`: for them any version other than the current one is still `document_not_found`, without `errorDetails`, so as not to reveal the history.
 
 ### `jiku-docs-queries.yaml`
 
-| Consulta | Cambio |
+| Query | Change |
 | --- | --- |
-| `documents.get` con `version` | Puede responder `version_pruned` (nunca a externos) |
-| `documents.versions.list` | La numeración puede tener huecos. Se agrega `kind` (`create`, `update`, `move`, `restore`) y `protected` al esquema `Version`, y `kind` y `protected` como filtros |
-| `documents.get` (include) | El documento agrega `prunedVersionsCount`: cuántas versiones se compactaron |
+| `documents.get` with `version` | May respond `version_pruned` (never to external users) |
+| `documents.versions.list` | The numbering may have gaps. `kind` (`create`, `update`, `move`, `restore`) and `protected` are added to the `Version` schema, and `kind` and `protected` as filters |
+| `documents.get` (include) | The document adds `prunedVersionsCount`: how many versions were compacted |
 
 ### `jiku-docs-commands.yaml`
 
-| Comando | Cambio |
+| Command | Change |
 | --- | --- |
-| `documents.{id}.restore` | Si `fromVersion` fue compactada, responde `version_pruned` |
-| `shares.new` con `mode: pinned` | Si `version` fue compactada, responde `version_pruned` |
+| `documents.{id}.restore` | If `fromVersion` was compacted, it responds `version_pruned` |
+| `shares.new` with `mode: pinned` | If `version` was compacted, it responds `version_pruned` |
 
 ### `jiku-docs-events.yaml`
 
-Sin cambios. La compactación no emite eventos.
+No changes. The compaction emits no events.
 
-### Especificación técnica v1
+### Technical specification v1
 
-Actualizar en la especificación:
+Update in the specification:
 
-- Sección 2, decisión 1: "Cada versión es un objeto inmutable en S3" pasa a "Cada versión es un objeto inmutable en S3 hasta que la compactación la elimina".
-- Sección 5, catálogo de errores: agregar `version_pruned`.
-- Sección 11, tablas y storage: agregar la migración de la sección 4 de este documento.
-- Sección 12, observabilidad: agregar las señales de la sección 6.
-- Agregar una referencia a este documento como política de retención del historial.
+- Section 2, decision 1: "Each version is an immutable object in S3" becomes "Each version is an immutable object in S3 until the compaction removes it".
+- Section 5, error catalogue: add `version_pruned`.
+- Section 11, tables and storage: add the migration from section 4 of this document.
+- Section 12, observability: add the signals from section 6.
+- Add a reference to this document as the history retention policy.
 
 ### jiku-go
 
-| Elemento | Cambio |
+| Element | Change |
 | --- | --- |
-| Constante de error | `CodeVersionPruned` |
-| `jiku docs history <id>` | Muestra `kind` y una marca en las versiones protegidas. Al final, una línea con la cantidad de versiones compactadas. Flag `--protected` para listar solo las protegidas |
-| `jiku docs get <id> --version N` | Ante `version_pruned`, informa las versiones conservadas más cercanas y sale con código distinto de cero |
-| `jiku docs restore` | Mismo manejo de `version_pruned` |
-| `jiku docs put --message` | Sin cambios de comportamiento; la ayuda del comando explica que guardar con mensaje protege la versión para siempre |
-| Skill de agentes | Agregar la regla: al terminar un trabajo importante, guardar con `--message` para que la versión quede protegida (las versiones de agente sin mensaje se compactan por bloques) |
+| Error constant | `CodeVersionPruned` |
+| `jiku docs history <id>` | Shows `kind` and a mark on protected versions. At the end, a line with the number of compacted versions. `--protected` flag to list only the protected ones |
+| `jiku docs get <id> --version N` | On `version_pruned`, reports the closest kept versions and exits with a non-zero code |
+| `jiku docs restore` | Same handling of `version_pruned` |
+| `jiku docs put --message` | No behaviour changes; the command help explains that saving with a message protects the version forever |
+| Agent skill | Add the rule: when finishing an important piece of work, save with `--message` so the version is protected (agent versions without a message are compacted by blocks) |
 
-### Interfaz web (pendiente, fuera de esta etapa)
+### Web interface (pending, outside this stage)
 
-Se implementa después, como REQ de jiku por grava-workflow. Esta etapa cubre solo el servicio y jiku-go. Hoy la web no tiene pantalla de historial.
+It is implemented later, as a jiku REQ through grava-workflow. This stage covers only the service and jiku-go. Today the web has no history screen.
 
-El historial de un documento muestra las versiones conservadas con su autor, fecha y tipo, distingue las protegidas e indica cuántas versiones intermedias se compactaron. Al guardar, ofrece un campo opcional de mensaje con la aclaración de que esa versión queda protegida.
+A document's history shows the kept versions with their author, date and type, distinguishes the protected ones and indicates how many intermediate versions were compacted. When saving, it offers an optional message field with the note that that version will be protected.
 
-## 6. Configuración y observabilidad
+## 6. Configuration and observability
 
-Todos los umbrales de la política son parámetros del servicio, con los valores de este documento como default.
+All thresholds of the policy are service parameters, with the values of this document as defaults.
 
-### Parámetros
+### Parameters
 
-| Variable | Default | Descripción |
+| Variable | Default | Description |
 | --- | --- | --- |
-| `DOCS_HISTORY_COMPACTION_ENABLED` | `true` | Activa el proceso diario |
-| `DOCS_HISTORY_COMPACTION_HOUR` | `3` | Hora del día (en `DOCS_HISTORY_TIMEZONE`) a partir de la cual corre la ejecución diaria |
-| `DOCS_HISTORY_TIMEZONE` | `America/Argentina/Buenos_Aires` | Zona para la hora de ejecución y los días calendario |
-| `DOCS_HISTORY_KEEP_ALL` | `24h` | Ventana en la que se conservan todas las versiones |
-| `DOCS_HISTORY_KEEP_BLOCKS` | `30d` | Hasta qué antigüedad se conserva una versión por bloque de edición |
-| `DOCS_HISTORY_BLOCK_GAP` | `30m` | Pausa que cierra un bloque de edición |
-| `DOCS_HISTORY_BATCH_SIZE` | `100` | Documentos por lote |
-| `DOCS_HISTORY_S3_DELETE_BATCH` | `1000` | Objetos por lote al pasar a la papelera (copias en paralelo y una llamada a `DeleteObjects` de los originales) |
-| `DOCS_TRASH_RETENTION_DAYS` | `7` | Días que `papelera/` guarda lo que borra el servicio (regla de ciclo de vida de `storage init`) |
+| `DOCS_HISTORY_COMPACTION_ENABLED` | `true` | Enables the daily process |
+| `DOCS_HISTORY_COMPACTION_HOUR` | `3` | Hour of the day (in `DOCS_HISTORY_TIMEZONE`) from which the daily run starts |
+| `DOCS_HISTORY_TIMEZONE` | `America/Argentina/Buenos_Aires` | Zone for the run hour and the calendar days |
+| `DOCS_HISTORY_KEEP_ALL` | `24h` | Window in which all versions are kept |
+| `DOCS_HISTORY_KEEP_BLOCKS` | `30d` | Up to what age one version per editing block is kept |
+| `DOCS_HISTORY_BLOCK_GAP` | `30m` | Pause that closes an editing block |
+| `DOCS_HISTORY_BATCH_SIZE` | `100` | Documents per batch |
+| `DOCS_HISTORY_S3_DELETE_BATCH` | `1000` | Objects per batch when moving to the trash (parallel copies and one `DeleteObjects` call for the originals) |
+| `DOCS_TRASH_RETENTION_DAYS` | `7` | Days that `trash/` keeps what the service deletes (lifecycle rule of `storage init`) |
 
-### Observabilidad
+### Observability
 
-| Señal | Detalle |
+| Signal | Detail |
 | --- | --- |
-| Log por ejecución | Inicio y fin, documentos procesados, versiones borradas, bytes liberados, objetos movidos a la papelera, duración, errores |
-| Log por documento | Solo con `--dry-run` o nivel debug: versiones conservadas y borradas con el motivo |
-| Métricas | `docs_history_versions_pruned_total`, `docs_history_bytes_freed_total`, `docs_history_run_duration_seconds`, `docs_history_pruned_objects_pending` (filas en `pruned_objects`), `docs_trash_objects_moved_total{source}` (objetos movidos a la papelera por la compactación, el barrido de huérfanos y la purga de borrados) |
-| Alertas | Una ejecución que falla o no corre en 48 h; `pruned_objects` con filas de más de 24 h (el paso a la papelera no avanza) |
+| Log per run | Start and end, documents processed, versions deleted, bytes freed, objects moved to the trash, duration, errors |
+| Log per document | Only with `--dry-run` or debug level: versions kept and deleted with the reason |
+| Metrics | `docs_history_versions_pruned_total`, `docs_history_bytes_freed_total`, `docs_history_run_duration_seconds`, `docs_history_pruned_objects_pending` (rows in `pruned_objects`), `docs_trash_objects_moved_total{source}` (objects moved to the trash by the compaction, the orphan sweep and the purge of deleted documents) |
+| Alerts | A run that fails or does not run in 48 h; `pruned_objects` with rows older than 24 h (the move to the trash is not progressing) |
 
-## 7. Casos de prueba
+## 7. Test cases
 
-Los casos cubren cada regla de la política, los bordes entre tramos y la seguridad del borrado. Todos se pueden escribir con fechas de versión fijadas a mano y el proceso ejecutado a demanda.
+The cases cover each rule of the policy, the edges between bands and the safety of the deletion. All of them can be written with version dates set by hand and the process run on demand.
 
-| # | Escenario | Resultado esperado |
+| # | Scenario | Expected result |
 | --- | --- | --- |
-| 1 | 300 versiones de un mismo autor en 2 horas, todas de hace menos de 24 h | No se borra ninguna |
-| 2 | El mismo caso, con las versiones de hace 3 días | Queda solo la última del bloque y la actual |
-| 3 | Ana edita, Bruno edita, Ana vuelve a editar el mismo día, hace 3 días | Quedan tres versiones, la última de cada bloque |
-| 4 | Un autor con una pausa de 31 minutos entre dos tandas, hace 3 días | Quedan dos versiones, una por bloque |
-| 5 | El mismo autor alterna `via: human` y `via: agent` sin pausas, hace 3 días | Cada cambio de `via` cierra el bloque; queda la última versión de cada bloque, humano o agente |
-| 6 | Varios bloques en un mismo día, hace 40 días | Queda la última versión de ese día |
-| 7 | Un bloque que empieza hace 25 h y termina hace 23 h | El bloque se evalúa completo; no se borra ninguna versión del bloque que tenga menos de 24 h |
-| 8 | Versión intermedia con `message`, hace 60 días | Se conserva |
-| 9 | Restauración hace 60 días | Se conserva |
-| 10 | Versión fijada por un link activo, hace 60 días | Se conserva; tras revocar el link, la siguiente compactación la borra si no está protegida por otro motivo |
-| 11 | Documento sin cambios desde la última compactación | No se procesa |
-| 12 | Ejecutar la compactación dos veces seguidas | La segunda no borra nada |
-| 13 | El proceso se corta después del commit, entre la copia a la papelera y el borrado del original | Las filas quedan en `pruned_objects`; la siguiente ejecución termina de mover los objetos. Un original que ya no existe cuenta como hecho |
-| 14 | Dos réplicas inician la compactación a la vez | Solo una ejecuta (advisory lock) |
-| 15 | `documents.get` con una versión compactada | `version_pruned` con las versiones conservadas más cercanas |
-| 16 | `restore` desde una versión compactada | `version_pruned`; no se crea versión nueva |
-| 17 | `shares.new` con `mode: pinned` sobre una versión compactada | `version_pruned` |
-| 18 | Un `update` llega mientras se compacta el mismo documento | El `update` espera el commit de la compactación y se aplica normalmente; la versión actual nunca se borra |
-| 19 | `--dry-run` | Informa lo que borraría y no modifica filas ni objetos |
-| 20 | Documento borrado lógicamente | La compactación no lo procesa |
-| 21 | Un externo pide con `documents.get` una versión compactada de un documento público | `document_not_found`, sin `errorDetails` |
-| 22 | Versión de agente con `message`, hace 60 días | Se conserva |
-| 23 | Versión de `service` sin mensaje, hace 60 días | Se conserva |
-| 24 | Sesión del día anterior sin actividad posterior | Se compacta en la corrida siguiente al cruce de 24 h; las corridas siguientes no lo procesan hasta otro cruce |
-| 25 | Compactación de un bloque viejo | Los objetos de las versiones borradas quedan en `papelera/` y nada de ellos en `docs/` |
-| 26 | `storage restore-from-trash --version-row` sobre una versión compactada | Vuelven el objeto y la fila (protegida); la siguiente compactación la conserva |
+| 1 | 300 versions by the same author in 2 hours, all less than 24 h old | None is deleted |
+| 2 | The same case, with the versions from 3 days ago | Only the last of the block and the current one remain |
+| 3 | Ana edits, Bruno edits, Ana edits again on the same day, 3 days ago | Three versions remain, the last of each block |
+| 4 | One author with a 31-minute pause between two batches, 3 days ago | Two versions remain, one per block |
+| 5 | The same author alternates `via: human` and `via: agent` without pauses, 3 days ago | Each change of `via` closes the block; the last version of each block remains, human or agent |
+| 6 | Several blocks on the same day, 40 days ago | The last version of that day remains |
+| 7 | A block that starts 25 h ago and ends 23 h ago | The block is evaluated whole; no version of the block younger than 24 h is deleted |
+| 8 | Intermediate version with `message`, 60 days ago | Kept |
+| 9 | Restore 60 days ago | Kept |
+| 10 | Version pinned by an active link, 60 days ago | Kept; after revoking the link, the next compaction deletes it if it is not protected for another reason |
+| 11 | Document unchanged since the last compaction | Not processed |
+| 12 | Running the compaction twice in a row | The second one deletes nothing |
+| 13 | The process is interrupted after the commit, between the copy to the trash and the deletion of the original | The rows remain in `pruned_objects`; the next run finishes moving the objects. An original that no longer exists counts as done |
+| 14 | Two replicas start the compaction at the same time | Only one runs (advisory lock) |
+| 15 | `documents.get` with a compacted version | `version_pruned` with the closest kept versions |
+| 16 | `restore` from a compacted version | `version_pruned`; no new version is created |
+| 17 | `shares.new` with `mode: pinned` on a compacted version | `version_pruned` |
+| 18 | An `update` arrives while the same document is being compacted | The `update` waits for the compaction's commit and is applied normally; the current version is never deleted |
+| 19 | `--dry-run` | Reports what it would delete and modifies no rows or objects |
+| 20 | Logically deleted document | The compaction does not process it |
+| 21 | An external user requests with `documents.get` a compacted version of a public document | `document_not_found`, without `errorDetails` |
+| 22 | Agent version with `message`, 60 days ago | Kept |
+| 23 | `service` version without a message, 60 days ago | Kept |
+| 24 | Session from the previous day with no later activity | Compacted in the run following the 24 h crossing; the following runs do not process it until another crossing |
+| 25 | Compaction of an old block | The objects of the deleted versions are in `trash/` and none of them in `docs/` |
+| 26 | `storage restore-from-trash --version-row` on a compacted version | The object and the (protected) row come back; the next compaction keeps it |
 
-## 8. Revisión contra la implementación (2026-10-25)
+## 8. Review against the implementation (2026-10-25)
 
-Cambios acordados respecto del borrador del 2026-10-24, y decisiones del dueño del mismo día:
+Changes agreed with respect to the 2026-10-24 draft, and the owner's decisions of the same day:
 
-1. Las versiones de `via: agent` siguen la regla de bloques; solo `service` queda protegido por origen.
-2. Un externo nunca recibe `version_pruned`.
-3. No existe `kind = move`: `documents.move` no crea versión.
-4. Las restauraciones existentes se marcan por el mensaje fijo del servicio.
-5. `PurgeOrphans` pasa a semanal y paginado; el borrado de versiones compactadas lo hace `pruned_objects`.
-6. ~~Verificar el soporte de `NoncurrentVersionExpiration` en DigitalOcean Spaces.~~ Decidido: Spaces no lo confirma, así que el bucket deja de usar versionado y la red de seguridad es la papelera `papelera/` con expiración por tiempo (`DOCS_TRASH_RETENTION_DAYS`, default 7), que Spaces sí soporta. Pasan por la papelera la compactación, `PurgeOrphans` y la purga de documentos borrados. `storage init` suspende el versionado si estaba activado. Recuperación con `jiku-docs storage restore-from-trash` (sección 4). La compactación queda activada por default también en producción.
-7. Programación con hora del día (`DOCS_HISTORY_COMPACTION_HOUR`), como el resto de las tareas del servicio, en lugar de cron.
-8. Pendiente para otra etapa: la pantalla de historial y el campo de mensaje en la web (REQ en jiku).
-9. Fuera de alcance, anotado: el volumen de eventos, changelog y notificaciones por guardado no cambia con la compactación.
-10. Criterio de selección confirmado: además de los documentos con actividad nueva o con un link fijado que venció o se revocó, se procesan los que tienen alguna versión no protegida que cruzó el umbral de 24 h o el de 30 días desde la última compactación (sección 3, caso 24).
+1. `via: agent` versions follow the block rule; only `service` is protected by origin.
+2. An external user never receives `version_pruned`.
+3. There is no `kind = move`: `documents.move` does not create a version.
+4. Existing restores are marked by the service's fixed message.
+5. `PurgeOrphans` becomes weekly and paginated; deleting compacted versions is done by `pruned_objects`.
+6. ~~Verify support for `NoncurrentVersionExpiration` in DigitalOcean Spaces.~~ Decided: Spaces does not confirm it, so the bucket stops using versioning and the safety net is the `trash/` trash with time-based expiration (`DOCS_TRASH_RETENTION_DAYS`, default 7), which Spaces does support. The compaction, `PurgeOrphans` and the purge of deleted documents go through the trash. `storage init` suspends versioning if it was enabled. Recovery with `jiku-docs storage restore-from-trash` (section 4). The compaction is enabled by default in production too.
+7. Scheduling by hour of the day (`DOCS_HISTORY_COMPACTION_HOUR`), like the rest of the service's tasks, instead of cron.
+8. Pending for another stage: the history screen and the message field in the web (REQ in jiku).
+9. Out of scope, noted: the volume of events, changelog and notifications per save does not change with the compaction.
+10. Selection criterion confirmed: besides the documents with new activity or with a pinned link that expired or was revoked, those with some unprotected version that crossed the 24 h or the 30-day threshold since the last compaction are processed (section 3, case 24).

@@ -1,325 +1,342 @@
 # jiku-docs
 
-Módulo de documentación de Jiku: guarda la documentación de Grava en markdown, con permisos por
-visibilidad (`internal`, `public` para clientes externos, `restricted` solo para admins), versiones, vínculos con clientes, proyectos, requisitos y tareas de Jiku,
-búsqueda por texto completo, locks de edición, notificaciones en tiempo real, links públicos de solo
-lectura y adjuntos. Reemplaza a HedgeDoc.
+Jiku's documentation module: it stores Grava's documentation in markdown, with permissions by
+visibility (`internal`, `public` for external clients, `restricted` for admins only), versions, relations to
+Jiku clients, projects, requirements and tasks, full-text search, edit locks, real-time notifications,
+read-only public links and attachments. It replaces HedgeDoc.
 
-Como `core`, no tiene HTTP de negocio: atiende request/reply en el bus NATS de Jiku, toma la identidad
-del subject (garantizada por el auth-callout) y publica eventos en JetStream. Los frontends llegan por la
-`api` de Jiku; personas, agentes y servicios llegan directo al bus (cliente oficial:
+Like `core`, it has no business HTTP: it serves request/reply on Jiku's NATS bus, takes the identity from
+the subject (guaranteed by the auth-callout) and publishes events to JetStream. Frontends come in through
+the Jiku `api`; people, agents and services go directly to the bus (official client:
 [`jiku-go`](https://github.com/gravadigital/jiku-go)).
 
-- Especificación: [`docs/specification-v1.md`](docs/specification-v1.md)
-- Decisiones de integración (mandan sobre la especificación): [`docs/integration-decisions.md`](docs/integration-decisions.md)
-- Contratos AsyncAPI 3.0 (fuente de verdad de forma): [`docs/apis/`](docs/apis/)
-- Cambios: [`CHANGELOG.md`](CHANGELOG.md)
-- P-1, documentación sin carpetas (manda sobre la especificación): [`docs/p1/service.md`](docs/p1/service.md)
+- User documentation (features, user guide, installation, configuration, operations, bus reference, known
+  limitations): [`documentation/`](documentation/README.md)
+- Specification: [`docs/specification-v1.md`](docs/specification-v1.md)
+- Integration decisions (they take precedence over the specification): [`docs/integration-decisions.md`](docs/integration-decisions.md)
+- AsyncAPI 3.0 contracts (source of truth for shape): [`docs/apis/`](docs/apis/)
+- Changes: [`CHANGELOG.md`](CHANGELOG.md)
+- P-1, documentation without folders (takes precedence over the specification): [`docs/p1/service.md`](docs/p1/service.md)
 
-**Permisos (P-1, contrato 1.3.0).** Deciden la clase del caller y la visibilidad del documento, no las
-carpetas: `admin` y `user` leen y escriben todo lo `internal` y `public`; un externo lee lo `public`
-vinculado a sus proyectos; `restricted` es solo para `admin` y servicios, y para los demás no existe por
-ninguna vía. Las carpetas siguen existiendo para ordenar los archivos (CLI y sync); `folders.*` es solo
-para admins y servicios, y las reglas ACL, `externalBlocked` y `sharingBlocked` quedaron sin efecto.
+**Permissions (P-1, contract 1.3.0).** They are decided by the caller's class and the document's visibility,
+not by folders: `admin` and `user` read and write everything `internal` and `public`; an external person
+reads what is `public` and related to their projects; `restricted` is only for `admin` and services, and for
+everyone else it does not exist through any path. Folders still exist to organise the files (CLI and sync);
+`folders.*` is only for admins and services, and the ACL rules, `externalBlocked` and `sharingBlocked` no
+longer have any effect.
 
-## Arquitectura
+In `meta.describe` the visibilities are labelled **Internal** (`internal`), **Visible to the client**
+(`public`) and **Restricted** (`restricted`). A document created without a folder gets a generated location:
+`/clients/<client>/<project>/`, `/clients/<client>/general/` or `/general/`.
+
+## Architecture
 
 ```
-        api de Jiku (actor) ─┐     personas / agentes (jiku-go)      servicios (internal-app)
-                             ▼                 ▼                              ▼
-                  NATS + auth-callout ── {instance}.{userId}.jiku-docs-{commands|queries}.v1.{método}
-                             │
-                             ▼
-   jiku-docs ── micro jiku-docs-commands (19) / jiku-docs-queries (14), queue group propio
-     │  ├─ clases de caller y visibilidad, validación estricta, versionado, locks
-     │  ├─ users / project-permissions / entidades / files.*  ──▶ core (jiku-queries, jiku-commands)
-     │  ├─ PostgreSQL 16 propio (metadatos, changelog, índice es_unaccent)
-     │  └─ bucket S3 propio (una versión por objeto, subidas grandes, papelera/)
+        Jiku api (actor) ─┐        people / agents (jiku-go)        services (internal-app)
+                          ▼                    ▼                              ▼
+               NATS + auth-callout ── {instance}.{userId}.jiku-docs-{commands|queries}.v1.{method}
+                          │
+                          ▼
+   jiku-docs ── micro jiku-docs-commands (19) / jiku-docs-queries (14), own queue group
+     │  ├─ caller classes and visibility, strict validation, versioning, locks
+     │  ├─ users / project-permissions / entities / files.*  ──▶ core (jiku-queries, jiku-commands)
+     │  ├─ own PostgreSQL 16 (metadata, changelog, es_unaccent index)
+     │  └─ own S3 bucket (one version per object, large uploads, trash/)
      │
      ├─ outbox: changelog ─▶ JetStream JIKU_DOCS_EVENTS (Nats-Msg-Id = eventId)
-     │                    └▶ {instance}.{userId}.docs-notify.v1.* (personas con read)
-     ├─ indexador: durable jiku-docs-indexer sobre JIKU_DOCS_EVENTS
-     ├─ janitor: vencimiento de locks, purgas, revisión diaria de relaciones
-     └─ registro en el KV JIKU_MODULES (clave docs) al estar listo
+     │                    └▶ {instance}.{userId}.docs-notify.v1.* (people with read)
+     ├─ indexer: durable jiku-docs-indexer on JIKU_DOCS_EVENTS
+     ├─ janitor: lock expiry, purges, daily review of relations
+     └─ registration in the JIKU_MODULES KV (key docs) once ready
 ```
 
-| Paquete | Responsabilidad |
+| Package | Responsibility |
 | --- | --- |
-| `cmd/jiku-docs` | Binario y subcomandos (`serve`, `migrate`, `reindex`, `module deregister`, `storage init`, `storage restore-from-trash`, `history compact`, `import hedgedoc`, `healthcheck`) |
-| `internal/app` | Cableado del proceso: stream, servicios micro, outbox, indexador, janitor, registro |
-| `internal/bus` | Registro de los dos servicios NATS micro (patrón del `BusHost` de core) |
-| `internal/service` | Lógica: 19 comandos, 14 consultas, permisos por visibilidad, ubicación generada, relaciones y sugerencias, eventos, purgas, revisión de relaciones, migración P-1 |
-| `internal/query` | Gramática de lectura de core: filtros, `or`, orden, keyset, `fields`, `include`, `count`, `meta.describe` |
-| `internal/validate` | Decodificación deny-by-default (`invalid_fields` con `{field, value, allowed}`) |
-| `internal/protocol` | Sobre de respuesta, catálogo de errores, gramática de subjects, inbox, ULID |
-| `internal/caller`, `internal/acl` | Clases de caller; la ACL de carpetas (obsoleta) solo se evalúa en la migración P-1 |
-| `internal/coreapi` | Cliente de core (sobre `jiku-go`) con la caché de la especificación (60 s / 5 min) |
-| `internal/markdown`, `internal/secrets` | Frontmatter, títulos, temas, fragmentos, HTML sanitizado, detector de secretos |
-| `internal/store`, `internal/blob` | PostgreSQL (migraciones embebidas) y bucket S3 |
-| `internal/outbox`, `internal/indexer`, `internal/janitor`, `internal/registry`, `internal/metrics` | Procesos de fondo y observabilidad |
-| `internal/importer/hedgedoc` | Importador desde HedgeDoc (D-9) |
-| `internal/contract`, `internal/testutil`, `test/integration` | Validación contra `docs/apis/` y entorno de integración |
+| `cmd/jiku-docs` | Binary and subcommands (`serve`, `migrate`, `reindex`, `module deregister`, `storage init`, `storage restore-from-trash`, `history compact`, `import hedgedoc`, `healthcheck`) |
+| `internal/app` | Process wiring: stream, micro services, outbox, indexer, janitor, registration |
+| `internal/bus` | Registration of the two NATS micro services (core's `BusHost` pattern) |
+| `internal/service` | Logic: 19 commands, 14 queries, permissions by visibility, generated location, relations and suggestions, events, purges, relation review, P-1 migration |
+| `internal/query` | Core's read grammar: filters, `or`, ordering, keyset, `fields`, `include`, `count`, `meta.describe` |
+| `internal/validate` | Deny-by-default decoding (`invalid_fields` with `{field, value, allowed}`) |
+| `internal/protocol` | Response envelope, error catalogue, subject grammar, inbox, ULID |
+| `internal/caller`, `internal/acl` | Caller classes; the (deprecated) folder ACL is only evaluated in the P-1 migration |
+| `internal/coreapi` | Core client (on top of `jiku-go`) with the spec cache (60 s / 5 min) |
+| `internal/markdown`, `internal/secrets` | Frontmatter, titles, topics, snippets, sanitized HTML, secret detector |
+| `internal/store`, `internal/blob` | PostgreSQL (embedded migrations) and S3 bucket |
+| `internal/outbox`, `internal/indexer`, `internal/janitor`, `internal/registry`, `internal/metrics` | Background processes and observability |
+| `internal/importer/hedgedoc` | HedgeDoc importer (D-9) |
+| `internal/contract`, `internal/testutil`, `test/integration` | Validation against `docs/apis/` and the integration environment |
 
-## Requisitos en Jiku (para el alta)
+## Requirements in Jiku (for installation)
 
-jiku-docs no modifica Jiku; estos son los cambios que el repo de Jiku tiene que tener (rama `feat/jiku-docs`):
+jiku-docs does not modify Jiku. It needs **Jiku 1.7.0 or later**, the first release that carries these changes:
 
-1. **Machine user `jiku_docs`** (Access Token Type JWT) con roles `internal-app` y `docs` (D-1).
-2. **core: `users.list` debe exponer `roles` e `identityType`** como incluibles, al menos para callers de
-   clase `connector`. Hoy la ficha de `users` no los declara y **sin ellos jiku-docs no puede clasificar a
-   nadie** (toda llamada de persona falla con `upstream_unavailable`). jiku-docs pide
-   `users.list { filter: { id }, include: ["roles", "identityType"] }`; los nombres son configurables con
-   `CORE_USER_INCLUDES` (si core solo expone `roles`, usar `CORE_USER_INCLUDES=roles`: el tipo de identidad
-   se deriva del rol `internal-app`/`core`, como hace core).
-3. **core no debe purgar `files` sin vínculo** a una entidad de Jiku (los adjuntos de docs nunca se vinculan, D-3).
-4. **auth-callout**: regla `match: docs` arriba de `internal-app` con plantilla `docs.yaml`. Además de lo de
-   `connector.yaml`, jiku-docs necesita exactamente:
+1. **Machine user `jiku_docs`** (Access Token Type JWT) with roles `internal-app` and `docs` (D-1).
+2. **core: `users.list` must expose `roles` and `identityType`** as includables, at least for callers of
+   class `connector`. Today the `users` spec does not declare them and **without them jiku-docs cannot
+   classify anyone** (every person call fails with `upstream_unavailable`). jiku-docs requests
+   `users.list { filter: { id }, include: ["roles", "identityType"] }`; the names are configurable with
+   `CORE_USER_INCLUDES` (if core only exposes `roles`, use `CORE_USER_INCLUDES=roles`: the identity type is
+   derived from the `internal-app`/`core` role, as core does).
+3. **core must not purge `files` without a link** to a Jiku entity (docs attachments are never linked, D-3).
+4. **auth-callout**: a `match: docs` rule above `internal-app` with the `docs.yaml` template. Besides what is
+   in `connector.yaml`, jiku-docs needs exactly:
 
-   | Para qué | Permiso |
+   | What for | Permission |
    | --- | --- |
-   | Atender los servicios micro | sub `{instance}.*.jiku-docs-commands.v1.>` y `{instance}.*.jiku-docs-queries.v1.>` (queue groups `jiku-docs-commands` / `jiku-docs-queries`), sub `$SRV.>`, `allow_responses` como `core.yaml` |
-   | Eventos y notificaciones | pub `{instance}.docs-events.v1.>` y `{instance}.*.docs-notify.v1.>` |
-   | Stream y consumidor del indexador | pub `$JS.API.INFO`, `$JS.API.STREAM.CREATE.JIKU_DOCS_EVENTS`, `$JS.API.STREAM.UPDATE.JIKU_DOCS_EVENTS`, `$JS.API.STREAM.INFO.JIKU_DOCS_EVENTS`, `$JS.API.CONSUMER.CREATE.JIKU_DOCS_EVENTS` y `.>`, `$JS.API.CONSUMER.DURABLE.CREATE.JIKU_DOCS_EVENTS.>`, `$JS.API.CONSUMER.INFO.JIKU_DOCS_EVENTS.>`, `$JS.API.CONSUMER.MSG.NEXT.JIKU_DOCS_EVENTS.jiku-docs-indexer`, `$JS.ACK.JIKU_DOCS_EVENTS.>` |
-   | Registro de módulo | pub `$JS.API.STREAM.INFO.KV_JIKU_MODULES` y `$KV.JIKU_MODULES.docs` (escritura y borrado de su clave) |
-   | Respuestas | sub `_INBOX.<hash(userId)>.>` (lo arma jiku-go) |
+   | Serving the micro services | sub `{instance}.*.jiku-docs-commands.v1.>` and `{instance}.*.jiku-docs-queries.v1.>` (queue groups `jiku-docs-commands` / `jiku-docs-queries`), sub `$SRV.>`, `allow_responses` as in `core.yaml` |
+   | Events and notifications | pub `{instance}.docs-events.v1.>` and `{instance}.*.docs-notify.v1.>` |
+   | Stream and indexer consumer | pub `$JS.API.INFO`, `$JS.API.STREAM.CREATE.JIKU_DOCS_EVENTS`, `$JS.API.STREAM.UPDATE.JIKU_DOCS_EVENTS`, `$JS.API.STREAM.INFO.JIKU_DOCS_EVENTS`, `$JS.API.CONSUMER.CREATE.JIKU_DOCS_EVENTS` and `.>`, `$JS.API.CONSUMER.DURABLE.CREATE.JIKU_DOCS_EVENTS.>`, `$JS.API.CONSUMER.INFO.JIKU_DOCS_EVENTS.>`, `$JS.API.CONSUMER.MSG.NEXT.JIKU_DOCS_EVENTS.jiku-docs-indexer`, `$JS.ACK.JIKU_DOCS_EVENTS.>` |
+   | Module registration | pub `$JS.API.STREAM.INFO.KV_JIKU_MODULES` and `$KV.JIKU_MODULES.docs` (writing and deleting its key) |
+   | Replies | sub `_INBOX.<hash(userId)>.>` (built by jiku-go) |
 
-   Los lectores del registro (api, conectores, personas) necesitan los permisos que documenta
+   Registry readers (api, connectors, people) need the permissions documented in
    [`docs/apis/jiku-modules.yaml`](docs/apis/jiku-modules.yaml).
-5. **KV `JIKU_MODULES`** creado por el despliegue de Jiku (D-6). Si no existe, jiku-docs arranca igual y
-   reintenta registrarse cada 30 s.
-6. **api: `actor` completo** (D-11). La api manda a jiku-docs el mismo `actor` que a core (`buildActor`):
-   `{ id, roles, name?, username?, email? }`, con los roles del token web verificado. jiku-docs clasifica a
-   la persona con `actor.roles` (no consulta `users.list`, cuyo espejo de roles puede estar viejo) y un
-   `actor` sin `roles` es `invalid_fields`. Un externo recibe `documents.get` sin frontmatter.
+5. **`JIKU_MODULES` KV** created by the Jiku deployment (D-6). If it does not exist, jiku-docs starts anyway
+   and retries registering every 30 s.
+6. **api: full `actor`** (D-11). The api sends jiku-docs the same `actor` it sends core (`buildActor`):
+   `{ id, roles, name?, username?, email? }`, with the roles of the verified web token. jiku-docs classifies
+   the person with `actor.roles` (it does not query `users.list`, whose role mirror may be stale) and an
+   `actor` without `roles` is `invalid_fields`. An external person receives `documents.get` without
+   frontmatter.
 
-## Correr local contra el stack de Jiku
+## Running locally against the Jiku stack
 
-1. Levantar Jiku (`jiku/deploy/local.sh up`): crea la red `jiku-local_jiku`, NATS + auth-callout, MinIO y el KV.
-2. Configurar:
+1. Start Jiku (`jiku/deploy/local.sh up`): it creates the `jiku-local_jiku` network, NATS + auth-callout, MinIO
+   and the KV.
+2. Configure:
 
    ```sh
    cp .env.dist .env
-   # key del machine user, en base64 (la JSON key vive en .local/, nunca se commitea)
+   # machine user key, in base64 (the JSON key lives in .local/, it is never committed)
    echo "DOCS_SERVICE_USER_KEY_B64=$(base64 -w0 .local/jiku_docs.service_user.json)" >> .env
    echo "DOCS_SECRET_KEY=$(openssl rand -base64 32)" >> .env
    ```
 
-   Revisar `JIKU_API_USER_ID` (userId de `jiku/local/api-su.json`), `ZITADEL_PROJECT_ID` y `NATS_INSTANCE`
-   contra `jiku/deploy/.env`.
-3. Levantar:
+   Check `JIKU_API_USER_ID` (userId in `jiku/local/api-su.json`), `ZITADEL_PROJECT_ID` and `NATS_INSTANCE`
+   against `jiku/deploy/.env`.
+3. Start:
 
    ```sh
    docker compose -f docker-compose.local.yml up -d --build
    docker logs -f jiku-docs-local                       # "jiku-docs ready", "module registered"
    curl -s localhost:8090/readyz
-   nats micro info jiku-docs-queries                    # con las creds de un usuario del bus
+   nats micro info jiku-docs-queries                    # with the creds of a bus user
    ```
 
-   El compose levanta un Postgres 16 propio (`127.0.0.1:5442`), corre `jiku-docs storage init` (crea
-   `jiku-docs-content` sin versionado en el MinIO de Jiku, o lo suspende si estaba activado, y aplica las
-   reglas de ciclo de vida) y el servicio, con `NATS_URL=nats://nats:4222` y
-   las creds del sentinel de `../../jiku/deploy/nats/creds/sentinel-client.creds` (cambiar con
-   `JIKU_DEPLOY_DIR`).
-4. Probar con jiku-go: `jiku docs status`, `jiku docs ls /`, etc.
+   The compose starts its own Postgres 16 (`127.0.0.1:5442`), runs `jiku-docs storage init` (it creates
+   `jiku-docs-content` without versioning in Jiku's MinIO, or suspends versioning if it was enabled, and
+   applies the lifecycle rules) and the service, with `NATS_URL=nats://nats:4222` and the sentinel creds from
+   `../../jiku/deploy/nats/creds/sentinel-client.creds` (change it with `JIKU_DEPLOY_DIR`).
+4. Try it with jiku-go: `jiku docs status`, `jiku docs ls /`, etc.
 
-Sin Docker para el servicio: `go run ./cmd/jiku-docs` con las variables de `.env` exportadas y
-`DATABASE_URL` apuntando al Postgres del compose (`docker compose ... up -d docs-database docs-storage-init`).
+Without Docker for the service: `go run ./cmd/jiku-docs` with the `.env` variables exported and
+`DATABASE_URL` pointing at the compose's Postgres (`docker compose ... up -d docs-database docs-storage-init`).
 
-## Variables de entorno
+## Environment variables
 
-Todas están documentadas en [`.env.dist`](.env.dist). Las obligatorias para `serve`:
-`NATS_CREDS`, `ZITADEL_PROJECT_ID`, `DOCS_SERVICE_USER_KEY_B64` (o `_FILE`), `JIKU_API_USER_ID`,
+All of them are documented in [`.env.dist`](.env.dist). The required ones for `serve`:
+`NATS_CREDS`, `ZITADEL_PROJECT_ID`, `DOCS_SERVICE_USER_KEY_B64` (or `_FILE`), `JIKU_API_USER_ID`,
 `JIKU_WEB_URL`, `JIKU_PUBLIC_URL`, `DATABASE_URL`, `DOCS_S3_ENDPOINT`, `DOCS_S3_BUCKET`,
-`DOCS_S3_ACCESS_KEY`, `DOCS_S3_SECRET_KEY` y `DOCS_SECRET_KEY` (32 bytes, base64).
+`DOCS_S3_ACCESS_KEY`, `DOCS_S3_SECRET_KEY` and `DOCS_SECRET_KEY` (32 bytes, base64).
 
-En producción el bucket es un Space de DigitalOcean propio (`DOCS_S3_ENDPOINT=https://<región>.digitaloceanspaces.com`,
-`DOCS_S3_FORCE_PATH_STYLE=false`), sin versionado y con las reglas de ciclo de vida de `uploads/` y `papelera/`
-(`jiku-docs storage init` lo crea si la credencial lo permite y aplica las reglas; ver "Spaces" abajo).
+In production the bucket is a dedicated DigitalOcean Space (`DOCS_S3_ENDPOINT=https://<region>.digitaloceanspaces.com`,
+`DOCS_S3_FORCE_PATH_STYLE=false`), without versioning and with the lifecycle rules for `uploads/` and `trash/`
+(`jiku-docs storage init` creates it if the credential allows it and applies the rules; see "Spaces" below).
 
-## Operación
+## Operations
 
-| Subcomando | Qué hace |
+| Subcommand | What it does |
 | --- | --- |
-| `jiku-docs serve` (default) | Migra (incluida la migración de datos de P-1, una sola vez y antes de atender), crea/actualiza el stream, registra los servicios micro, arranca outbox, indexador y janitor y escribe la clave `docs` de `JIKU_MODULES` |
-| `jiku-docs migrate` | Aplica migraciones (también lo hace `serve`; seguras con varias réplicas) |
-| `jiku-docs reindex` | Regenera el índice de búsqueda completo (en proceso; no inyecta eventos en el stream) |
-| `jiku-docs module deregister` | Borra la clave `docs` (desinstalar). Un apagado normal **no** la borra |
-| `jiku-docs storage init` | Crea el bucket sin versionado (si lo tenía activado, lo suspende y lo avisa en el log), aplica las reglas de ciclo de vida (`uploads/` a 1 día, `papelera/` a `DOCS_TRASH_RETENTION_DAYS`) y las relee |
-| `jiku-docs storage restore-from-trash --key <clave> [--version-row]` | Devuelve un objeto desde `papelera/` a su clave original (nunca pisa uno existente; la copia de la papelera queda hasta que vence). Con `--version-row` también vuelve a poner en el historial la versión compactada (ver "Papelera" abajo). Imprime una línea JSON con lo que hizo |
-| `jiku-docs history compact [--document <id>] [--dry-run]` | Compacta el historial de versiones ahora (solo base y bucket, sin bus). `--dry-run` imprime una línea JSON por documento con cada versión, si se conserva y el motivo, y no toca nada. Si la corrida diaria tiene el lock, sale con error |
-| `jiku-docs import hedgedoc` | Importador (ver abajo) |
-| `jiku-docs healthcheck` | Consulta `/readyz` (HEALTHCHECK de la imagen) |
+| `jiku-docs serve` (default) | Migrates (including the P-1 data migration, only once and before serving), creates/updates the stream, registers the micro services, starts the outbox, indexer and janitor, and writes the `docs` key of `JIKU_MODULES` |
+| `jiku-docs migrate` | Applies migrations (`serve` does it too; safe with several replicas) |
+| `jiku-docs reindex` | Rebuilds the whole search index (in process; it does not inject events into the stream) |
+| `jiku-docs module deregister` | Deletes the `docs` key (uninstall). A normal shutdown does **not** delete it |
+| `jiku-docs storage init` | Creates the bucket without versioning (if versioning was enabled, it suspends it and warns in the log), applies the lifecycle rules (`uploads/` at 1 day, `trash/` at `DOCS_TRASH_RETENTION_DAYS`) and reads them back |
+| `jiku-docs storage restore-from-trash --key <key> [--version-row]` | Returns an object from `trash/` to its original key (it never overwrites an existing one; the trash copy stays until it expires). With `--version-row` it also puts the pruned version back into the history (see "Trash" below). Prints a JSON line with what it did |
+| `jiku-docs history compact [--document <id>] [--dry-run]` | Compacts the version history now (database and bucket only, no bus). `--dry-run` prints a JSON line per document with each version, whether it is kept and why, and touches nothing. If the daily run holds the lock, it exits with an error |
+| `jiku-docs import hedgedoc` | Importer (see below) |
+| `jiku-docs healthcheck` | Queries `/readyz` (the image's HEALTHCHECK) |
 
-**HTTP de operación** (`DOCS_HTTP_ADDR`, default `:8080`): `/healthz`, `/readyz` (base y NATS) y `/metrics`
-(Prometheus). La salud de negocio es la de NATS micro: `nats micro info jiku-docs-commands`.
+**Operations HTTP** (`DOCS_HTTP_ADDR`, default `:8080`): `/healthz`, `/readyz` (database and NATS) and
+`/metrics` (Prometheus). Business health is NATS micro's: `nats micro info jiku-docs-commands`.
 
-**Métricas y alertas sugeridas**
+**Suggested metrics and alerts**
 
-| Métrica | Alerta |
+| Metric | Alert |
 | --- | --- |
 | `jiku_docs_outbox_oldest_unpublished_seconds` | > 60 |
 | `jiku_docs_indexer_lag_seconds` | > 300 |
-| `jiku_docs_requests_total{code="upstream_unavailable"}` | tasa sostenida |
+| `jiku_docs_requests_total{code="upstream_unavailable"}` | sustained rate |
 | `jiku_docs_request_duration_seconds`, `jiku_docs_locks_active`, `jiku_docs_notifications_total`, `jiku_docs_outbox_published_total` | — |
-| `docs_history_last_success_timestamp_seconds` | más de 48 h atrás (la compactación falla o no corre); también `docs_history_runs_total{result="failure"}` |
-| `docs_history_pruned_objects_oldest_seconds` | > 86400 (el paso a la papelera no avanza); `docs_history_pruned_objects_pending` da el volumen |
-| `docs_trash_objects_moved_total{source}` | — (objetos movidos a `papelera/`: `compaction`, `orphans`, `deleted-documents`) |
+| `docs_history_last_success_timestamp_seconds` | more than 48 h ago (compaction fails or does not run); also `docs_history_runs_total{result="failure"}` |
+| `docs_history_pruned_objects_oldest_seconds` | > 86400 (moving to the trash is not progressing); `docs_history_pruned_objects_pending` gives the volume |
+| `docs_trash_objects_moved_total{source}` | — (objects moved to `trash/`: `compaction`, `orphans`, `deleted-documents`) |
 | `docs_history_versions_pruned_total`, `docs_history_bytes_freed_total`, `docs_history_run_duration_seconds` | — |
 
-**Logs**: JSON por stderr con método, caller, actor, `correlationId`, duración y `errorCode`. Nunca contenido,
-tokens ni URLs prefirmadas.
+**Logs**: JSON on stderr with method, caller, actor, `correlationId`, duration and `errorCode`. Never content,
+tokens or presigned URLs.
 
-**Tareas periódicas** (una sola réplica a la vez, por advisory lock): vencimiento de locks con
-`document.unlocked` (cada 10 s), borrado de cifrados de reintento de shares (5 min), subidas vencidas,
-adjuntos pendientes de más de 24 h, documentos borrados hace más de 30 días (sus objetos van a `papelera/`),
-changelog de más de 30 días, objetos huérfanos (barrido semanal y paginado: una página de 1.000 objetos por
-minuto, con el cursor en `service_state`; el contenido huérfano va a `papelera/`), accesos a links de más de 180 días y la revisión diaria
-de relaciones contra core (`DOCS_RELATION_REVIEW_HOUR_UTC`), que quita relaciones a entidades
-inexistentes reescribiendo el frontmatter en una versión nueva firmada por el servicio.
+**Periodic tasks** (one replica at a time, by advisory lock): lock expiry with `document.unlocked` (every
+10 s), deletion of the encrypted share retry tokens (5 min), expired uploads, attachments pending for more
+than 24 h, documents deleted more than 30 days ago (their objects go to `trash/`), changelog older than 30
+days, orphaned objects (weekly, paginated sweep: one page of 1,000 objects per minute, with the cursor in
+`service_state`; orphaned content goes to `trash/`), link accesses older than 180 days and the daily review
+of relations against core (`DOCS_RELATION_REVIEW_HOUR_UTC`), which removes relations to non-existent
+entities by rewriting the frontmatter in a new version signed by the service.
 
-**Compactación del historial** ([`docs/history-compaction-v1.md`](docs/history-compaction-v1.md)):
-cada guardado sigue creando una versión, y una vez por día, a partir de `DOCS_HISTORY_COMPACTION_HOUR` en
-`DOCS_HISTORY_TIMEZONE`, se borran las versiones intermedias viejas: menos de 24 h, todas; hasta 30 días, la
-última de cada bloque de edición (mismo autor, mismo `via`, pausas de menos de 30 min); más viejas, la última
-de cada día. Nunca se borran la versión actual, la creación, las restauraciones, las versiones con `message`,
-las de `via: service` ni las fijadas por un link `pinned` activo; las de agente siguen la regla de bloques
-(para proteger una, guardarla con `--message`). Procesa documento por documento con `FOR UPDATE` y
-transacciones cortas, y después del commit mueve los objetos a `papelera/` vía `pruned_objects` (copias en
-paralelo y `DeleteObjects` en lotes). Procesa los documentos con actividad nueva, con un link fijado que
-venció o se revocó, y los que tienen alguna versión no protegida que cruzó el umbral de 24 h o el de 30 días
-desde su última compactación (así la sesión del día anterior se compacta en la corrida siguiente aunque nadie
-vuelva a editar). Corre en una sola réplica (`pg_try_advisory_lock`), también frente a un `history compact` manual.
-Los parámetros están en `.env.dist`; `DOCS_HISTORY_COMPACTION_ENABLED=false` la apaga.
+**History compaction** ([`docs/history-compaction-v1.md`](docs/history-compaction-v1.md)):
+every save still creates a version, and once a day, from `DOCS_HISTORY_COMPACTION_HOUR` in
+`DOCS_HISTORY_TIMEZONE`, the old intermediate versions are deleted: under 24 h, all are kept; up to 30 days,
+the last of each editing block (same author, same `via`, pauses under 30 min); older, the last of each day.
+The current version, the creation, restores, versions with a `message`, versions with `via: service` and
+versions pinned by an active `pinned` link are never deleted; agent versions follow the block rule (to
+protect one, save it with `--message`). It processes document by document with `FOR UPDATE` and short
+transactions, and after the commit it moves the objects to `trash/` through `pruned_objects` (parallel
+copies and `DeleteObjects` in batches). It processes the documents with new activity, those with a pinned
+link that expired or was revoked, and those with an unprotected version that crossed the 24 h or the 30-day
+threshold since their last compaction (so the previous day's session is compacted in the next run even if
+nobody edits again). It runs on a single replica (`pg_try_advisory_lock`), also against a manual
+`history compact`. The parameters are in `.env.dist`; `DOCS_HISTORY_COMPACTION_ENABLED=false` turns it off.
 
-**Papelera.** Todo objeto de contenido que el servicio borra pasa por `papelera/`: las versiones compactadas,
-el contenido huérfano del barrido semanal y las versiones de los documentos purgados a los 30 días de
-borrados. Mover es `CopyObject` a `papelera/<clave original>` (en paralelo) y después `DeleteObjects` de los
-originales en lotes. Una fila de `pruned_objects` se elimina recién cuando el objeto quedó en la papelera y
-el original ya no existe; si el proceso se corta entre la copia y el borrado, la siguiente corrida lo
-retoma. Las subidas en tránsito (`uploads/`) y las páginas renderizadas (`renders/`) no son contenido y se
-borran directo. La papelera no la barre nadie: la vacía su regla de ciclo de vida.
+**Trash.** Every content object the service deletes goes through `trash/`: pruned versions, orphaned
+content from the weekly sweep and the versions of documents purged 30 days after deletion. Moving is
+`CopyObject` to `trash/<original key>` (in parallel) and then `DeleteObjects` of the originals in batches. A
+`pruned_objects` row is removed only once the object is in the trash and the original no longer exists; if
+the process stops between the copy and the delete, the next run picks it up. In-flight uploads (`uploads/`)
+and rendered pages (`renders/`) are not content and are deleted directly. Nobody sweeps the trash: its
+lifecycle rule empties it.
 
-**Bucket y ciclo de vida.** `storage init` deja el bucket sin versionado y dos reglas de expiración por
-tiempo: `uploads/` a 1 día y `papelera/` a `DOCS_TRASH_RETENTION_DAYS` (default 7). Relee las reglas y avisa
-en el log si el proveedor no las guardó. Verificado contra MinIO (tests `TestStorageInit*`).
+**Bucket and lifecycle.** `storage init` leaves the bucket without versioning and with two time-based
+expiration rules: `uploads/` at 1 day and `trash/` at `DOCS_TRASH_RETENTION_DAYS` (default 7). It reads the
+rules back and warns in the log if the provider did not store them. Verified against MinIO (tests
+`TestStorageInit*`).
 
-**Spaces.** Las dos reglas son expiraciones por tiempo bajo un prefijo, que DigitalOcean Spaces soporta
+**Spaces.** Both rules are time-based expirations under a prefix, which DigitalOcean Spaces supports
 ("Supported for time-based expiration and removing incomplete multipart uploads",
-[S3 Compatibility](https://docs.digitalocean.com/products/spaces/reference/s3-compatibility/)). Ya no hace
-falta `NoncurrentVersionExpiration`, que Spaces no confirma: el versionado del bucket dejó de ser la red de
-seguridad. `DOCS_HISTORY_COMPACTION_ENABLED=true` es el default seguro también en producción. Si el bucket
-tenía el versionado activado (lo activaba `storage init` antes de la papelera), `storage init` lo suspende
-(`Suspended`) y lo avisa en el log; las versiones viejas que ya guardaba **no** se borran solas: cuando ya no
-hagan falta, borrarlas a mano (por ejemplo `aws s3api list-object-versions` y `delete-object --version-id`
-sobre las que no son actuales, o `mc rm --recursive --versions --non-current` en MinIO).
+[S3 Compatibility](https://docs.digitalocean.com/products/spaces/reference/s3-compatibility/)).
+`NoncurrentVersionExpiration`, which Spaces does not confirm, is no longer needed: bucket versioning is no
+longer the safety net. `DOCS_HISTORY_COMPACTION_ENABLED=true` is the safe default in production too. If the
+bucket had versioning enabled (`storage init` enabled it before the trash existed), `storage init` suspends
+it (`Suspended`) and warns in the log; the old versions it already kept are **not** deleted on their own:
+when they are no longer needed, delete them by hand (for example `aws s3api list-object-versions` and
+`delete-object --version-id` on the non-current ones, or `mc rm --recursive --versions --non-current` in
+MinIO).
 
-**Recuperar una versión compactada por error** (dentro de `DOCS_TRASH_RETENTION_DAYS`):
+**Recovering a version pruned by mistake** (within `DOCS_TRASH_RETENTION_DAYS`):
 
-1. Encontrar la clave. Es `docs/<documentId>/<version>-<sha256>.md`; en la papelera está como
-   `papelera/docs/<documentId>/...`. Por ejemplo, con el cliente de S3 que se use:
-   `mc ls --recursive <alias>/jiku-docs-content/papelera/docs/<documentId>/` (el nombre empieza con el número
-   de versión). Si la compactación es reciente, el log por documento (`--dry-run` o nivel debug) muestra qué
-   versiones borró.
-2. Devolverla, objeto y fila del historial, con un solo comando:
+1. Find the key. It is `docs/<documentId>/<version>-<sha256>.md`; in the trash it is
+   `trash/docs/<documentId>/...`. For example, with whichever S3 client you use:
+   `mc ls --recursive <alias>/jiku-docs-content/trash/docs/<documentId>/` (the name starts with the version
+   number). If the compaction is recent, the per-document log (`--dry-run` or debug level) shows which
+   versions it deleted.
+2. Return it, object and history row, with a single command:
 
    ```sh
    jiku-docs storage restore-from-trash --key docs/<documentId>/<version>-<sha256>.md --version-row
    # {"key":"docs/...","objectRestored":true,"documentId":"...","version":3,"rowRestored":true}
    ```
 
-   La copia de la papelera guarda la fila de la versión (autor, `via`, fecha, checksum, tamaño, título) como
-   metadata del objeto, así que no hace falta escribir SQL a mano. El comando primero copia el objeto a su
-   clave original (si ya existe no lo pisa) y después, en una transacción, inserta la fila en
-   `document_versions` marcada `protected` (la próxima compactación no la vuelve a borrar) y descuenta
-   `pruned_versions_count`. Se niega si el documento ya no existe o está borrado (restaurarlo primero), si la
-   versión no es anterior a la actual o si esa versión ya existe con otro objeto. Es idempotente.
-3. Sin `--version-row` devuelve solo el objeto: sirve para el contenido huérfano o de un documento purgado,
-   que no tienen fila que restaurar. Un objeto devuelto sin fila vuelve a ser huérfano y el próximo barrido
-   lo manda otra vez a la papelera.
+   The trash copy keeps the version's row (author, `via`, date, checksum, size, title) as object metadata,
+   so there is no need to write SQL by hand. The command first copies the object to its original key (if it
+   already exists it does not overwrite it) and then, in a transaction, inserts the row into
+   `document_versions` marked `protected` (the next compaction will not delete it again) and decrements
+   `pruned_versions_count`. It refuses if the document no longer exists or is deleted (restore it first), if
+   the version is not older than the current one or if that version already exists with another object. It
+   is idempotent.
+3. Without `--version-row` it returns only the object: useful for orphaned content or content of a purged
+   document, which have no row to restore. An object returned without a row is orphaned again and the next
+   sweep sends it back to the trash.
 
-**Respaldo**: backup diario de la base (30 días); el bucket no tiene versionado: la red de seguridad de lo
-que borra el servicio es `papelera/`. Restaurar un backup anterior a una compactación puede dejar filas de
-versiones cuyo objeto está en la papelera (devolverlo con `restore-from-trash` sin `--version-row`) o ya
-venció (más de `DOCS_TRASH_RETENTION_DAYS`): al restaurar, verificar los objetos y descartar las filas sin
-objeto. El índice no se respalda: `reindex`.
+**Backup**: daily database backup (30 days); the bucket has no versioning: the safety net for what the
+service deletes is `trash/`. Restoring a backup older than a compaction may leave version rows whose object
+is in the trash (return it with `restore-from-trash` without `--version-row`) or has already expired (older
+than `DOCS_TRASH_RETENTION_DAYS`): when restoring, check the objects and discard the rows without an object.
+The index is not backed up: `reindex`.
 
-**Varias réplicas**: los comandos y consultas se reparten por queue group; outbox y janitor eligen líder
-con advisory locks de PostgreSQL; el indexador comparte el durable.
+**Several replicas**: commands and queries are spread by queue group; the outbox and the janitor elect a
+leader with PostgreSQL advisory locks; the indexer shares the durable.
 
-## Importar desde HedgeDoc (D-9)
+## Importing from HedgeDoc (D-9)
 
-El dump nunca sale de `.local/` ni se commitea. El importador lee una base MariaDB cargada con el dump y
-crea los documentos en proceso, como el servicio jiku-docs.
+The dump never leaves `.local/` and is never committed. The importer reads a MariaDB database loaded with the
+dump and creates the documents in process, like the jiku-docs service.
 
 ```sh
-# 1. MariaDB temporal con el dump (puerto que no choca con nada de Jiku)
+# 1. Temporary MariaDB with the dump (a port that does not clash with anything in Jiku)
 docker run -d --name jiku-docs-hedgedoc-db -e MARIADB_ROOT_PASSWORD=hedgedoc -e MARIADB_DATABASE=codimd \
   -p 127.0.0.1:33306:3306 mariadb:10.11
 docker exec -i jiku-docs-hedgedoc-db mariadb -uroot -phedgedoc codimd < .local/codimd-2026-10-24.sql
 
-# 2. Planilla de mapeo a completar (nota -> carpeta)
+# 2. Mapping sheet to fill in (note -> folder)
 go run ./cmd/jiku-docs import hedgedoc --export-mapping .local/hedgedoc-mapping.csv
 
-# 3. Simulación: plan + informe, sin escribir ni descargar nada
-#    (--check-relations además valida las relaciones contra core por el bus, solo lectura)
+# 3. Dry run: plan + report, without writing or downloading anything
+#    (--check-relations also validates the relations against core over the bus, read-only)
 go run ./cmd/jiku-docs import hedgedoc --mapping .local/hedgedoc-mapping.csv --dry-run
 
-# 4. Importación real (variables de .env exportadas: base, bucket, bus)
+# 4. Real import (.env variables exported: database, bucket, bus)
 go run ./cmd/jiku-docs import hedgedoc --mapping .local/hedgedoc-mapping.csv
 ```
 
-- **Planilla**: CSV con columnas `note` (id, shortid o alias), `folder` (`/infra/servidores/`) y opcionales
-  `fileName` y `skip`; las demás columnas se ignoran (sirven para revisar). Una fila sin `folder`, `fileName`
-  ni `skip` no cuenta como mapeada. Las notas sin carpeta van a `/importado/` con `visibility: restricted`
-  (P-1: solo las leen los admins); las mapeadas quedan `internal`, como cualquier documento.
-- **Relaciones y temas**: columnas opcionales `projects`, `clients`, `requirements` y `tasks` (ids de Jiku
-  separados por `;` o `,`) y `topics` (separados por `;`). Con algún valor, la versión 1 sale con el bloque
-  `jiku:` y los `topics` en el frontmatter, fusionados con lo que ya tenga (sin duplicar; temas
-  normalizados como el servicio). Solas no seleccionan una nota: aplican a las que se importan. Si core
-  responde `invalid_relation`, la nota se reintenta sin esa relación y el informe dice cuál se descartó y
-  por qué (`droppedRelations`); con `--dry-run --check-relations` se ven antes de importar.
-- **Qué se importa**: notas con contenido. Las anónimas (sin dueño) se omiten salvo que estén mapeadas en la planilla o se
-  pase `--include-anonymous`: en el dump real son ~10.000 y casi todas spam. `--only-mapped` importa solo lo
-  mapeado y `--limit N` sirve para probar.
-- **Contenido**: frontmatter con `title`, `topics` (de los `tags` de HedgeDoc) y un bloque `hedgedoc` con id,
-  shortid, alias, fechas, autor, último editor, permiso y las claves originales; fechas de creación y
-  modificación originales; el autor original en el `message` de la versión 1.
-- **Imágenes**: las URLs bajo `--asset-prefix` (default: el Space `grava-internal-01/docs-grava-io` y
-  `docs.grava.io/uploads/`) se descargan y suben como adjuntos por el servicio de archivos de core (D-3); el
-  markdown queda con `{JIKU_WEB_URL}/docs/attachments/{id}`.
-- **Enlaces entre notas** (`{--hedgedoc-url}/{alias|shortid|id}`, `/s/…`, `/p/…`) se reescriben a
-  `{JIKU_WEB_URL}/docs/{id}`; los que no resuelven quedan como estaban y se informan.
-- **Idempotente**: ids deterministas (ULID con la fecha de la nota); reimportar no duplica. En una
-  reimportación las notas ya importadas con el mismo contenido quedan `unchanged` y los adjuntos ya
-  confirmados no se vuelven a descargar; solo se reintentan los que fallaron. Si el contenido cambió (por
-  ejemplo, la planilla ahora trae relaciones), la nota se actualiza con `documents.{id}.update` sobre la
-  versión actual (`updated`, mensaje "Reimportado de HedgeDoc…"), siempre que la última versión sea del
-  importador; si alguien la editó, movió, renombró o borró en jiku-docs, queda `exists` y no se pisa.
-- **Informe** (`--report`, default `.local/hedgedoc-import-report.csv`): estado por nota, ruta destino,
-  adjuntos, enlaces sin resolver, relaciones y temas finales, relaciones descartadas y **posibles secretos** (regla y línea, nunca el valor). Esas notas fueron
-  públicas en HedgeDoc: hay que rotar esas credenciales antes de apagarlo.
+- **Mapping sheet**: a CSV with the columns `note` (id, shortid or alias), `folder` (`/infra/servers/`) and
+  the optional `fileName` and `skip`; other columns are ignored (they help with the review). A row without
+  `folder`, `fileName` or `skip` does not count as mapped. Notes without a folder go to `/imported/` with
+  `visibility: restricted` (P-1: only admins read them); mapped notes are `internal`, like any document.
+- **Relations and topics**: the optional columns `projects`, `clients`, `requirements` and `tasks` (Jiku ids
+  separated by `;` or `,`) and `topics` (separated by `;`). With any value, version 1 comes out with the
+  `jiku:` block and the `topics` in the frontmatter, merged with what it already has (no duplicates; topics
+  normalised like the service does). On their own they do not select a note: they apply to the notes being
+  imported. If core answers `invalid_relation`, the note is retried without that relation and the report
+  says which one was dropped and why (`droppedRelations`); with `--dry-run --check-relations` they show up
+  before importing.
+- **What is imported**: notes with content. Anonymous notes (without an owner) are skipped unless they are
+  mapped in the sheet or `--include-anonymous` is passed: in the real dump there are ~10,000 and almost all
+  are spam. `--only-mapped` imports only what is mapped and `--limit N` is useful for testing.
+- **Content**: frontmatter with `title`, `topics` (from HedgeDoc's `tags`) and a `hedgedoc` block with id,
+  shortid, alias, dates, author, last editor, permission and the original keys; the original creation and
+  modification dates; the original author in the `message` of version 1.
+- **Images**: URLs under `--asset-prefix` (default: the Space `grava-internal-01/docs-grava-io` and
+  `docs.grava.io/uploads/`) are downloaded and uploaded as attachments through core's file service (D-3);
+  the markdown ends up with `{JIKU_WEB_URL}/docs/attachments/{id}`.
+- **Links between notes** (`{--hedgedoc-url}/{alias|shortid|id}`, `/s/…`, `/p/…`) are rewritten to
+  `{JIKU_WEB_URL}/docs/{id}`; those that do not resolve stay as they were and are reported.
+- **Idempotent**: deterministic ids (ULID with the note's date); re-importing does not duplicate. In a
+  re-import, notes already imported with the same content stay `unchanged` and attachments already confirmed
+  are not downloaded again; only the failed ones are retried. If the content changed (for example, the sheet
+  now has relations), the note is updated with `documents.{id}.update` on the current version (`updated`,
+  message "Re-imported from HedgeDoc…"), as long as the last version is the importer's; if someone edited,
+  moved, renamed or deleted it in jiku-docs, it stays `exists` and is not overwritten.
+- **Report** (`--report`, default `.local/hedgedoc-import-report.csv`): status per note, target path,
+  attachments, unresolved links, final relations and topics, dropped relations and **possible secrets** (rule
+  and line, never the value). Those notes were public in HedgeDoc: rotate those credentials before shutting
+  it down.
 
-## Desarrollo
+## Development
 
 ```sh
 go build ./... && go vet ./... && golangci-lint run ./...
-go test -race ./...            # unitarios, de contrato e integración (requiere Docker)
-JIKU_DOCS_SKIP_INTEGRATION=1 go test ./...   # sin Docker
+go test -race ./...            # unit, contract and integration tests (requires Docker)
+JIKU_DOCS_SKIP_INTEGRATION=1 go test ./...   # without Docker
 docker build -t gravadigital/jiku-docs:local .
 ```
 
-Los tests de integración levantan PostgreSQL 16 y MinIO con testcontainers (contenedores
-`jiku-docs-test-*`, puertos aleatorios), un `nats-server` embebido con JetStream y un doble estricto de
-core, y validan **cada** pedido, respuesta, evento y notificación contra `docs/apis/`. Los tests de contrato
-verifican además que las fichas de recursos (las que alimentan `meta.describe`) coinciden con el YAML.
+The integration tests start PostgreSQL 16 and MinIO with testcontainers (containers `jiku-docs-test-*`,
+random ports), an embedded `nats-server` with JetStream and a strict core double, and validate **every**
+request, response, event and notification against `docs/apis/`. The contract tests also check that the
+resource specs (the ones that feed `meta.describe`) match the YAML.
 
-`test/e2e/local-bus.sh` recorre el módulo de punta a punta por el bus real, con el stack local levantado y
-el CLI `jiku` de jiku-go como servicio, user y external-user (visibilidad y `restricted`, documentos, ubicación generada, relaciones, permisos, locks,
-búsqueda, adjuntos, links, feed, sync y logs; `E2E_DISRUPTIVE=1` suma módulo caído y deregister). Las
-variables y sus defaults están en su encabezado.
+`test/e2e/local-bus.sh` walks the module end to end over the real bus, with the local stack running and
+jiku-go's `jiku` CLI as service, user and external-user (visibility and `restricted`, documents, generated
+location, relations, permissions, locks, search, attachments, links, feed, sync and logs; `E2E_DISRUPTIVE=1`
+adds module down and deregister). The variables and their defaults are in its header.
 
-`jiku-go` se usa en su versión publicada (`v1.3.0`, desde el proxy de Go); no hace falta ningún `replace`.
+`jiku-go` is used at its published version (`v1.3.0`, from the Go proxy); no `replace` is needed.
 
-CI (`.github/workflows/`): `ci.yml` (build, vet, lint, tests, `docker build`), `dev-images.yml` (imagen
-`gravadigital/jiku-docs:dev` en cada push a `dev`) y `release.yml` (tags `vX.Y.Z` → `X.Y.Z`, `X.Y`,
-`latest`; exige la sección del CHANGELOG). Secrets: `DOCKERHUB_USERNAME`, `DOCKERHUB_TOKEN`.
+CI (`.github/workflows/`): `ci.yml` (build, vet, lint, tests, `docker build`), `dev-images.yml` (image
+`gravadigital/jiku-docs:dev` on every push to `dev`) and `release.yml` (tags `vX.Y.Z` → `X.Y.Z`, `X.Y`,
+`latest`; requires the CHANGELOG section). Secrets: `DOCKERHUB_USERNAME`, `DOCKERHUB_TOKEN`.
+
+## License
+
+[Apache-2.0](LICENSE) © Grava Digital.

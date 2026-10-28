@@ -13,7 +13,7 @@ RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache
 
 FROM gcr.io/distroless/static-debian12:nonroot
 LABEL org.opencontainers.image.title="jiku-docs" \
-      org.opencontainers.image.description="Módulo de documentación de Jiku" \
+      org.opencontainers.image.description="Jiku documentation module" \
       org.opencontainers.image.vendor="Grava Digital"
 COPY --from=build /out/jiku-docs /usr/local/bin/jiku-docs
 USER nonroot:nonroot

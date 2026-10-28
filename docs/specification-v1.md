@@ -1,160 +1,160 @@
-# jiku-docs: especificación técnica v1
+# jiku-docs: technical specification v1
 
 Oct 24, 2026 · @Lautaro Alvarez
 
-## 1. Resumen, alcance y requisitos
+## 1. Summary, scope and requirements
 
-`jiku-docs` es un servicio nuevo del ecosistema Jiku que almacena la documentación de Grava en markdown, con permisos por carpeta, vinculación con entidades de Jiku, búsqueda por texto completo y sincronización en tiempo real. Reemplaza a la instancia actual de HedgeDoc, que no tiene API y expone todos los documentos públicamente.
+`jiku-docs` is a new service of the Jiku ecosystem that stores Grava's documentation in markdown, with per-folder permissions, relations to Jiku entities, full-text search and real-time sync. It replaces the current HedgeDoc instance, which has no API and exposes every document publicly.
 
-Sigue el mismo patrón que `core`: no tiene HTTP propio, atiende request/reply en el bus NATS de Jiku, toma la identidad del subject (garantizada por el auth-callout) y publica eventos en JetStream. Los frontends llegan a través de la `api` de Jiku; las personas (daemon de sincronización, agentes) y los servicios llegan directo al bus.
+It follows the same pattern as `core`: it has no HTTP of its own, it serves request/reply on the Jiku NATS bus, takes the identity from the subject (guaranteed by the auth-callout) and publishes events to JetStream. Frontends reach it through the Jiku `api`; people (sync daemon, agents) and services reach the bus directly.
 
-### Alcance de la v1
+### Scope of v1
 
-- Carpetas jerárquicas con permisos heredables.
-- Documentos markdown versionados, con frontmatter que los vincula a clientes, proyectos, requisitos y tareas de Jiku.
-- Adjuntos en S3 enlazados desde el markdown.
-- Catálogo indexado: búsqueda por texto completo, filtrable por metadatos.
-- Sesiones de edición con lock y control de versión, para trabajo asistido por agentes.
-- Notificaciones en tiempo real por persona y feed de cambios para reconciliar.
-- Links públicos de solo lectura para compartir un documento con terceros, con vencimiento y revocación.
-- Comandos de documentación y daemon de sincronización dentro de jiku-go, usado por personas y agentes.
-- Importación desde HedgeDoc.
+- Hierarchical folders with inheritable permissions.
+- Versioned markdown documents, with frontmatter that relates them to Jiku clients, projects, requirements and tasks.
+- Attachments in S3 linked from the markdown.
+- Indexed catalog: full-text search, filterable by metadata.
+- Editing sessions with lock and version control, for agent-assisted work.
+- Real-time per-person notifications and a change feed for reconciliation.
+- Public read-only links to share a document with third parties, with expiry and revocation.
+- Documentation commands and sync daemon inside jiku-go, used by people and agents.
+- Import from HedgeDoc.
 
-### Fuera de alcance de la v1
+### Out of scope for v1
 
-- Edición colaborativa simultánea (CRDT). El modelo es un editor y muchos lectores en vivo; la arquitectura permite sumarla después.
-- Formatos que no sean markdown en el árbol de documentos.
-- Almacenamiento de secretos. Los documentos describen accesos, pero las credenciales viven en un gestor de secretos.
-- Búsqueda semántica (embeddings). La búsqueda es por texto completo; el contrato ya prevé los modos `semantic` e `hybrid` para agregarla sin cambios incompatibles.
-- Adaptador WebDAV.
+- Simultaneous collaborative editing (CRDT). The model is one editor and many live readers; the architecture allows adding it later.
+- Formats other than markdown in the document tree.
+- Secret storage. Documents describe access, but credentials live in a secrets manager.
+- Semantic search (embeddings). Search is full-text; the contract already provides for the `semantic` and `hybrid` modes so they can be added without incompatible changes.
+- WebDAV adapter.
 
-### Requisitos funcionales
+### Functional requirements
 
-| Id | Requisito |
+| Id | Requirement |
 | --- | --- |
-| RF-01 | Toda operación está autenticada por la identidad de Jiku (Zitadel vía auth-callout), salvo la lectura por link compartido |
-| RF-02 | Permisos de lectura, escritura y administración por carpeta, heredados a subcarpetas |
-| RF-03 | Un documento vive en una carpeta y puede vincularse con varios clientes, proyectos, requisitos y tareas |
-| RF-04 | Documentos transversales (infraestructura, interno, buenas prácticas) conviven con documentos de cliente |
-| RF-05 | Solo se aceptan archivos `.md` en el árbol de documentos |
-| RF-06 | Adjuntos en S3, enlazados desde el markdown, con los permisos del documento |
-| RF-07 | Historial de versiones con autor, fecha y origen (persona, agente o servicio) |
-| RF-08 | Un agente puede abrir, editar y guardar un documento en nombre de la persona con la que trabaja |
-| RF-09 | Quien tiene un documento abierto o sincronizado recibe los cambios en segundos |
-| RF-10 | Búsqueda por contenido, proyecto, cliente, tema, fecha y autor, respetando permisos |
-| RF-11 | Los clientes externos pueden ver documentos públicos de los proyectos que ya ven en Jiku |
-| RF-12 | Jiku puede listar los documentos vinculados a un proyecto, requisito o tarea |
-| RF-13 | Quien administra una carpeta puede generar un link público de solo lectura de un documento, con vencimiento obligatorio, y revocarlo en cualquier momento |
-| RF-14 | El módulo es opcional: Jiku descubre si está instalado y disponible, y habilita o deshabilita cada funcionalidad de documentación en la api, la web y los conectores sin cambios de configuración |
+| RF-01 | Every operation is authenticated by the Jiku identity (Zitadel via auth-callout), except reading through a share link |
+| RF-02 | Read, write and administration permissions per folder, inherited by subfolders |
+| RF-03 | A document lives in a folder and can be related to several clients, projects, requirements and tasks |
+| RF-04 | Cross-cutting documents (infrastructure, internal, best practices) coexist with client documents |
+| RF-05 | Only `.md` files are accepted in the document tree |
+| RF-06 | Attachments in S3, linked from the markdown, with the document's permissions |
+| RF-07 | Version history with author, date and origin (person, agent or service) |
+| RF-08 | An agent can open, edit and save a document on behalf of the person it works with |
+| RF-09 | Whoever has a document open or synced receives the changes within seconds |
+| RF-10 | Search by content, project, client, topic, date and author, respecting permissions |
+| RF-11 | External clients can see public documents of the projects they already see in Jiku |
+| RF-12 | Jiku can list the documents related to a project, requirement or task |
+| RF-13 | Whoever administers a folder can generate a public read-only link to a document, with mandatory expiry, and revoke it at any time |
+| RF-14 | The module is optional: Jiku discovers whether it is installed and available, and enables or disables each documentation feature in the api, the web and the connectors without configuration changes |
 
-### Requisitos no funcionales
+### Non-functional requirements
 
-| Id | Requisito |
+| Id | Requirement |
 | --- | --- |
-| RNF-01 | Latencia p95 de consultas simples menor a 300 ms; búsqueda por texto menor a 500 ms |
-| RNF-02 | Una notificación de cambio llega a los clientes conectados en menos de 3 s |
-| RNF-03 | Ningún cambio confirmado se pierde: outbox para eventos y feed de cambios reconciliable |
-| RNF-04 | Comandos seguros de reintentar (idempotencia por id y versión base) |
-| RNF-05 | Deny-by-default en permisos, campos de filtro y claves de payload, como el resto de Jiku |
-| RNF-06 | Escala objetivo: 30 usuarios, 20.000 documentos, documentos de hasta 5 MiB |
-| RNF-07 | Contratos AsyncAPI como fuente de verdad, validados en tests |
+| RNF-01 | p95 latency of simple queries under 300 ms; text search under 500 ms |
+| RNF-02 | A change notification reaches connected clients in under 3 s |
+| RNF-03 | No confirmed change is lost: outbox for events and a reconcilable change feed |
+| RNF-04 | Commands safe to retry (idempotency by id and base version) |
+| RNF-05 | Deny-by-default on permissions, filter fields and payload keys, like the rest of Jiku |
+| RNF-06 | Target scale: 30 users, 20,000 documents, documents of up to 5 MiB |
+| RNF-07 | AsyncAPI contracts as the source of truth, validated in tests |
 
-## 2. Arquitectura
+## 2. Architecture
 
-`jiku-docs` es un proceso Go con dos servicios NATS micro (`jiku-docs-commands` y `jiku-docs-queries`), una base PostgreSQL propia y dos buckets S3. No accede a la base de Jiku: todo lo que necesita de Jiku lo consulta a `core` por `jiku-queries`.
+`jiku-docs` is a Go process with two NATS micro services (`jiku-docs-commands` and `jiku-docs-queries`), its own PostgreSQL database and two S3 buckets. It does not access the Jiku database: everything it needs from Jiku it queries from `core` through `jiku-queries`.
 
 ```
-   web / opus-web            jiku (CLI y sync)            servicios de Jiku
-        │ HTTP              (persona con su token)       (rol internal-app)
+   web / opus-web            jiku (CLI and sync)          Jiku services
+        │ HTTP              (person with own token)      (internal-app role)
         ▼                             │                           │
-   api de Jiku ── actor ──┐           │                           │
+   Jiku api ───── actor ──┐           │                           │
                           ▼           ▼                           ▼
-                 NATS + auth-callout (identidad en el subject) ◀─────────────┐
+                 NATS + auth-callout (identity in the subject) ◀─────────────┐
                           │                       │                          │
                           ▼                       ▼                          │
                         core               jiku-docs ── outbox ──▶ JIKU_DOCS_EVENTS
                           │             │      │      │                    │
-                    PostgreSQL Jiku     │      │      └─▶ docs-notify        ▼
-                                        ▼      ▼          (por persona)   indexador
-                              Postgres docs   S3 docs / S3 adjuntos
+                    Jiku PostgreSQL     │      │      └─▶ docs-notify        ▼
+                                        ▼      ▼          (per person)    indexer
+                              Postgres docs   S3 docs / S3 attachments
 ```
 
-### Componentes
+### Components
 
-| Componente | Responsabilidad | Tecnología |
+| Component | Responsibility | Technology |
 | --- | --- | --- |
-| `jiku-docs` (servicio) | Comandos y consultas, autorización, versionado, locks, validación de markdown y frontmatter, outbox | Go, NATS micro |
-| Publicador de outbox | Lee el changelog confirmado y publica en `JIKU_DOCS_EVENTS` y en `docs-notify` de cada persona autorizada | Go, mismo binario |
-| Indexador | Consume `JIKU_DOCS_EVENTS`, fragmenta el texto y mantiene el catálogo | Go, mismo binario o proceso aparte |
-| Postgres docs | Árbol, ACL, documentos, versiones, relaciones, changelog, índice (full-text) | PostgreSQL 16 |
-| S3 docs | Contenido de cada versión de cada documento | Bucket sin versionado; lo que borra el servicio pasa por `papelera/` |
-| S3 adjuntos | Bytes de los adjuntos | Bucket aparte, sin acceso público |
-| `jiku-go` | Librería y CLI existentes; suman el grupo `jiku docs`, el daemon `jiku docs sync` y los paquetes `modules` y `modules/docs` | Go |
-| api de Jiku | Rutas HTTP para los frontends, descubrimiento del módulo y redirección de adjuntos | Existente, se extiende |
+| `jiku-docs` (service) | Commands and queries, authorization, versioning, locks, markdown and frontmatter validation, outbox | Go, NATS micro |
+| Outbox publisher | Reads the committed changelog and publishes to `JIKU_DOCS_EVENTS` and to the `docs-notify` of each authorized person | Go, same binary |
+| Indexer | Consumes `JIKU_DOCS_EVENTS`, splits the text into chunks and maintains the catalog | Go, same binary or separate process |
+| Postgres docs | Tree, ACL, documents, versions, relations, changelog, index (full-text) | PostgreSQL 16 |
+| S3 docs | Content of each version of each document | Bucket without versioning; whatever the service deletes goes through `trash/` |
+| S3 attachments | Attachment bytes | Separate bucket, no public access |
+| `jiku-go` | Existing library and CLI; they add the `jiku docs` group, the `jiku docs sync` daemon and the `modules` and `modules/docs` packages | Go |
+| Jiku api | HTTP routes for the frontends, module discovery and attachment redirection | Existing, extended |
 
-### Decisiones de diseño
+### Design decisions
 
-1. **El storage es la fuente de verdad del contenido; Postgres la de los metadatos.** Cada versión es un objeto inmutable en S3 hasta que la compactación la elimina (política de retención del historial: [`history-compaction-v1.md`](history-compaction-v1.md)). El índice es derivado y se puede regenerar.
-2. **El frontmatter es la fuente de verdad de las relaciones, temas y visibilidad.** Se parsea en cada escritura. Así un documento editado localmente puede vincularse a un proyecto sin usar otra herramienta.
-3. **La identidad la pone el subject.** `jiku-docs` no valida tokens; confía en el auth-callout, igual que `core`.
-4. **Los comandos son idempotentes.** Ids generados por el cliente (ULID) y versión base obligatoria en las modificaciones.
-5. **Los eventos no se pierden.** Se escriben en el changelog en la misma transacción del comando y se publican desde ahí (outbox).
-6. **Dos canales de eventos.** Stream completo solo para servicios; notificaciones filtradas por permisos para personas.
-7. **Un editor, muchos lectores.** Lock por sesión con vencimiento; los demás ven los cambios en vivo.
+1. **Storage is the source of truth for content; Postgres for metadata.** Each version is an immutable object in S3 until compaction removes it (history retention policy: [`history-compaction-v1.md`](history-compaction-v1.md)). The index is derived and can be regenerated.
+2. **The frontmatter is the source of truth for relations, topics and visibility.** It is parsed on every write. This way a document edited locally can be related to a project without using another tool.
+3. **The subject sets the identity.** `jiku-docs` does not validate tokens; it trusts the auth-callout, just like `core`.
+4. **Commands are idempotent.** Client-generated ids (ULID) and a mandatory base version on modifications.
+5. **Events are never lost.** They are written to the changelog in the same transaction as the command and published from there (outbox).
+6. **Two event channels.** Full stream for services only; permission-filtered notifications for people.
+7. **One editor, many readers.** Per-session lock with expiry; the rest see the changes live.
 
-8) **El módulo es opcional.** Jiku no guarda datos de documentación y descubre el módulo por un registro en el bus; sin él, Jiku funciona igual (sección 13).
+8) **The module is optional.** Jiku stores no documentation data and discovers the module through a registry on the bus; without it, Jiku works the same (section 13).
 
-## 3. Modelo de dominio
+## 3. Domain model
 
-> **P-1 (contrato 1.3.0, `docs/p1/service.md`):** la carpeta ya no define quién ve un documento: lo define su `visibility` (`internal`, `public`, `restricted`) junto con la clase del caller (sección 4). La ubicación solo ordena los archivos para el CLI y el daemon de sync; si `documents.new` no la trae, el servidor la genera de las relaciones. Donde esta sección habla de carpetas que deciden acceso, manda P-1.
+> **P-1 (contract 1.3.0, `docs/p1/service.md`):** the folder no longer defines who sees a document: its `visibility` (`internal`, `public`, `restricted`) does, together with the caller class (section 4). The location only organises the files for the CLI and the sync daemon; if `documents.new` does not carry it, the server generates it from the relations. Where this section talks about folders deciding access, P-1 prevails.
 
-Cada documento tiene una **ubicación** (la carpeta, que ordena los archivos) y **relaciones** (de qué trata, que nunca dan acceso). Esto permite documentos transversales sin duplicarlos.
+Each document has a **location** (the folder, which organises the files) and **relations** (what it is about, which never grant access). This allows cross-cutting documents without duplicating them.
 
-### Entidades
+### Entities
 
-| Entidad | Descripción | Identificador |
+| Entity | Description | Identifier |
 | --- | --- | --- |
-| Carpeta | Nodo del árbol. Tiene reglas de acceso, decide si hereda las del padre y si permite clientes externos (`externalBlocked`) y links compartidos (`sharingBlocked`) | ULID |
-| Documento | Archivo markdown dentro de una carpeta, con versión actual y metadatos derivados del frontmatter | ULID |
-| Versión | Contenido inmutable de un documento en un momento, con autor y origen | `documentId` + número correlativo |
-| Relación | Vínculo de un documento con un cliente, proyecto, requisito o tarea de Jiku | Id numérico de Jiku + tipo |
-| Tema | Etiqueta libre normalizada (`infra`, `accesos`, `reuniones`) | Slug |
-| Adjunto | Archivo binario en S3, perteneciente a un documento | ULID |
-| Sesión de edición | Lock temporal de un documento por una persona, opcionalmente asistida por un agente | `sessionId` (ULID) |
-| Link compartido | Credencial al portador que da lectura anónima a un solo documento, con vencimiento | ULID (el token secreto solo se guarda como hash) |
+| Folder | Tree node. It has access rules, decides whether it inherits the parent's and whether it allows external clients (`externalBlocked`) and share links (`sharingBlocked`) | ULID |
+| Document | Markdown file inside a folder, with a current version and metadata derived from the frontmatter | ULID |
+| Version | Immutable content of a document at a point in time, with author and origin | `documentId` + sequential number |
+| Relation | Link between a document and a Jiku client, project, requirement or task | Jiku numeric id + type |
+| Topic | Normalised free-form tag (`infra`, `access`, `meetings`) | Slug |
+| Attachment | Binary file in S3, belonging to a document | ULID |
+| Editing session | Temporary lock on a document by a person, optionally assisted by an agent | `sessionId` (ULID) |
+| Share link | Bearer credential that grants anonymous read access to a single document, with expiry | ULID (the secret token is stored only as a hash) |
 
-### Árbol de carpetas recomendado
+### Recommended folder tree
 
 ```
-/interno/                procesos, administración, equipo
-/infra/                  servidores, accesos, runbooks
-/buenas-practicas/       estándares, Grava Workflow
-/clientes/<cliente>/<proyecto>/
-    reuniones/           resúmenes de reuniones
-    tecnico/             arquitectura, decisiones, integraciones
+/internal/               processes, administration, team
+/infra/                  servers, access, runbooks
+/best-practices/         standards, Grava Workflow
+/clients/<client>/<project>/
+    meetings/            meeting summaries
+    technical/           architecture, decisions, integrations
 ```
 
-El árbol se organiza por quién debe ver, no por tema. Un documento sobre el servidor de staging vive en `/infra/` y se relaciona con los proyectos que lo usan; al buscar "documentos del proyecto X" aparece junto con los de `/clientes/<cliente>/X/`, siempre que la persona pueda leer `/infra/`.
+The tree is organised by who should see, not by topic. A document about the staging server lives in `/infra/` and is related to the projects that use it; when searching for "documents of project X" it shows up together with those in `/clients/<client>/X/`, as long as the person can read `/infra/`.
 
-### Visibilidad
+### Visibility
 
-Cada documento tiene `visibility`: `internal` (default), `public` o `restricted` (P-1).
+Each document has a `visibility`: `internal` (default), `public` or `restricted` (P-1).
 
-- `internal`: todas las personas internas (`admin`, `user`) lo leen y escriben.
-- `public`: además lo leen los externos con permiso sobre alguno de sus proyectos (sección 4). Lo puede poner cualquier persona interna.
-- `restricted`: solo `admin` y servicios. Para un `user` o un externo no existe por ninguna vía. Solo un `admin` (o un servicio) lo pone o lo quita, en `new`, `update`, `restore` y `relations.update`; un `user` recibe `permission_denied`. No admite links, y pasar un documento a `restricted` revoca los activos.
+- `internal`: every internal person (`admin`, `user`) reads and writes it.
+- `public`: external people with permission on any of its projects also read it (section 4). Any internal person can set it.
+- `restricted`: only `admin` and services. For a `user` or an external person it does not exist through any path. Only an `admin` (or a service) sets or removes it, in `new`, `update`, `restore` and `relations.update`; a `user` gets `permission_denied`. It does not allow share links, and moving a document to `restricted` revokes the active ones.
 
-### Formato del documento
+### Document format
 
-UTF-8, fin de línea LF (el servicio normaliza CRLF), tamaño máximo 5 MiB. Nombre de archivo: `^[^/\\]{1,200}\.md$`, único por carpeta sin distinguir mayúsculas.
+UTF-8, LF line endings (the service normalises CRLF), maximum size 5 MiB. File name: `^[^/\\]{1,200}\.md$`, unique per folder, case-insensitive.
 
-El frontmatter YAML es opcional:
+The YAML frontmatter is optional:
 
 ```markdown
 ---
-title: Acceso al servidor de staging
+title: Access to the staging server
 visibility: internal
-topics: [infra, accesos]
+topics: [infra, access]
 jiku:
   clients: [4]
   projects: [12, 31]
@@ -162,666 +162,666 @@ jiku:
   tasks: []
 ---
 
-# Acceso al servidor de staging
+# Access to the staging server
 ...
 ```
 
-Reglas de parseo:
+Parsing rules:
 
-- `title`: si falta, se toma el primer encabezado `#`; si tampoco hay, el nombre de archivo sin extensión.
-- `visibility`: `internal`, `public` o `restricted`. Otro valor es error `frontmatter_invalid`.
-- `topics`: lista de strings; se normalizan a kebab-case sin acentos. Los temas se crean al usarse.
-- `jiku`: bloque estricto. Solo acepta `clients`, `projects`, `requirements` y `tasks`, con listas de ids numéricos. Cada id se valida contra `core`; uno inexistente o no visible para quien escribe es error `invalid_relation`.
-- Otras claves de primer nivel se conservan en el contenido y se ignoran.
+- `title`: if missing, the first `#` heading is used; if there is none either, the file name without extension.
+- `visibility`: `internal`, `public` or `restricted`. Any other value is a `frontmatter_invalid` error.
+- `topics`: list of strings; normalised to kebab-case without accents. Topics are created when used.
+- `jiku`: strict block. It only accepts `clients`, `projects`, `requirements` and `tasks`, with lists of numeric ids. Each id is validated against `core`; one that does not exist or is not visible to the writer is an `invalid_relation` error.
+- Other top-level keys are kept in the content and ignored.
 
-Como el frontmatter es parte del contenido, cambiar relaciones, temas o visibilidad es una actualización normal del documento y genera versión.
+Since the frontmatter is part of the content, changing relations, topics or visibility is a normal document update and creates a version.
 
-### Enlaces a adjuntos
+### Attachment links
 
-Los adjuntos se enlazan con una URL estable de la web de Jiku (D-5: `{JIKU_WEB_URL}/docs/attachments/{id}`, que la web atiende con su sesión y reenvía a la `api`), nunca con la URL de S3:
+Attachments are linked with a stable Jiku web URL (D-5: `{JIKU_WEB_URL}/docs/attachments/{id}`, which the web serves with its session and forwards to the `api`), never with the S3 URL:
 
 ```markdown
-![Diagrama de red]({JIKU_WEB_URL}/docs/attachments/01JBX7Q2M4N8P6R3T5V9W1Y0ZA)
+![Network diagram]({JIKU_WEB_URL}/docs/attachments/01JBX7Q2M4N8P6R3T5V9W1Y0ZA)
 ```
 
-La `api` resuelve esa ruta verificando permisos y redirige a una URL prefirmada de corta duración (sección 9).
+The `api` resolves that route by checking permissions and redirects to a short-lived presigned URL (section 9).
 
-## 4. Identidad y autorización
+## 4. Identity and authorization
 
-`jiku-docs` no valida tokens: el `user-id` del subject es la identidad, y el auth-callout garantiza que nadie publique bajo un id ajeno. Sobre esa identidad, el servicio decide permisos con la clase del caller, la visibilidad del documento y datos que consulta a `core`.
+`jiku-docs` does not validate tokens: the subject's `user-id` is the identity, and the auth-callout guarantees that nobody publishes under someone else's id. On top of that identity, the service decides permissions with the caller class, the document's visibility and data it queries from `core`.
 
-> **P-1 (contrato 1.3.0, `docs/p1/service.md`):** la ACL de carpetas quedó **sin efecto** (se conserva en la base y en el contrato como obsoleta), igual que `externalBlocked` y `sharingBlocked`:
+> **P-1 (contract 1.3.0, `docs/p1/service.md`):** the folder ACL is **without effect** (it is kept in the database and in the contract as deprecated), as are `externalBlocked` and `sharingBlocked`:
 
-| Visibilidad | `admin` | `user` | `external-user` | servicio |
+| Visibility | `admin` | `user` | `external-user` | service |
 | --- | --- | --- | --- | --- |
-| `internal` | lee y escribe | lee y escribe | nunca | todo |
-| `public` | lee y escribe | lee y escribe | lee, si está vinculado a un proyecto de sus `project-permissions` | todo |
-| `restricted` | lee y escribe | nunca | nunca | todo |
+| `internal` | reads and writes | reads and writes | never | everything |
+| `public` | reads and writes | reads and writes | reads, if related to a project in their `project-permissions` | everything |
+| `restricted` | reads and writes | never | never | everything |
 
-`folders.*` (comandos) es solo para `admin` y servicios; las personas internas ven todas las carpetas y escriben documentos en cualquiera. `unlock` con `force` es solo para `admin`. Cualquier persona interna crea y revoca links de documentos `internal` y `public`. La migración de datos de P-1 (al arrancar, una sola vez) pasó a `restricted` todo documento que un `user` no podía leer con la ACL vigente y a `internal` los `public` bajo `externalBlocked`. Las subsecciones "ACL de carpetas" y "Clientes externos" describen el modelo anterior.
+`folders.*` (commands) is only for `admin` and services; internal people see every folder and write documents in any of them. `unlock` with `force` is only for `admin`. Any internal person creates and revokes links for `internal` and `public` documents. The P-1 data migration (on startup, only once) moved to `restricted` every document that a `user` could not read with the ACL in force and to `internal` the `public` ones under `externalBlocked`. The subsections "Folder ACL" and "External clients" describe the previous model.
 
-### Clases de caller
+### Caller classes
 
-| Clase | Cómo se reconoce | Identidad efectiva | Lectura | Escritura |
+| Class | How it is recognised | Effective identity | Read | Write |
 | --- | --- | --- | --- | --- |
-| `person-internal` | `users.identity_type = person` y rol interno | El `user-id` del subject | `internal` y `public`; `restricted` solo `admin` (P-1) | Igual que la lectura |
-| `person-external` | `users.identity_type = person` y rol de cliente | El `user-id` del subject | Solo documentos `public` vinculados a proyectos visibles en `project-permissions` | Nunca |
-| `api` | El `user-id` es el de la `api` de Jiku | La persona declarada en `actor` (`actor.id`) | Según la clase que dan `actor.roles` | Según la clase que dan `actor.roles` |
-| `service` | `identity_type = service` con rol `internal-app` | El `user-id` del subject | Todo, sin recorte | Todo; queda atribuido al servicio |
+| `person-internal` | `users.identity_type = person` and an internal role | The subject's `user-id` | `internal` and `public`; `restricted` only `admin` (P-1) | Same as read |
+| `person-external` | `users.identity_type = person` and a client role | The subject's `user-id` | Only `public` documents related to projects visible in `project-permissions` | Never |
+| `api` | The `user-id` is the one of the Jiku `api` | The person declared in `actor` (`actor.id`) | According to the class given by `actor.roles` | According to the class given by `actor.roles` |
+| `service` | `identity_type = service` with the `internal-app` role | The subject's `user-id` | Everything, without trimming | Everything; attributed to the service |
 
-Mapeo de roles de Zitadel a clases: `admin` y `user` son `person-internal`; `external-user` es `person-external`; `internal-app` es `service`. Cualquier otro rol (`core`, `bus-observer`) no tiene acceso a `jiku-docs`.
+Mapping of Zitadel roles to classes: `admin` and `user` are `person-internal`; `external-user` is `person-external`; `internal-app` is `service`. Any other role (`core`, `bus-observer`) has no access to `jiku-docs`.
 
-Reglas de `actor`, iguales a las de `core`:
+`actor` rules, the same as `core`'s:
 
-- Solo la `api` puede mandar la clave `actor`. Si la manda cualquier otro caller: `invalid_fields`.
-- Si la `api` no manda `actor`, la llamada se trata como del servicio `api`.
-- El `actor` es el mismo sobre que la `api` manda a `core`: `{ id, roles, name?, username?, email? }`, con `roles` tomados del token web ya verificado (D-11). Un `actor` sin `roles` o con claves desconocidas es `invalid_fields`.
-- La clase de la persona sale de `actor.roles` (`admin`/`user` → `person-internal`, `external-user` → `person-external`, otro → `caller_not_authorized`) y las reglas de ACL por rol usan esos mismos roles; para la `api` con `actor` no se consulta `users.list`. La autoría es siempre `actor.id`. Los `project-permissions` de un externo se siguen pidiendo a `core`.
-- Los campos de autoría del payload no existen: el autor siempre es la identidad efectiva.
+- Only the `api` can send the `actor` key. If any other caller sends it: `invalid_fields`.
+- If the `api` does not send `actor`, the call is treated as coming from the `api` service.
+- The `actor` is the same envelope the `api` sends to `core`: `{ id, roles, name?, username?, email? }`, with `roles` taken from the already verified web token (D-11). An `actor` without `roles` or with unknown keys is `invalid_fields`.
+- The person's class comes from `actor.roles` (`admin`/`user` → `person-internal`, `external-user` → `person-external`, anything else → `caller_not_authorized`) and the per-role ACL rules use those same roles; for the `api` with `actor`, `users.list` is not queried. Authorship is always `actor.id`. The `project-permissions` of an external person are still requested from `core`.
+- Authorship fields in the payload do not exist: the author is always the effective identity.
 
-### Datos que se consultan a core
+### Data queried from core
 
-| Dato | Consulta | Caché |
+| Data | Query | Cache |
 | --- | --- | --- |
-| Roles e `identity_type` del caller (personas por el bus y servicios; no la `api` con `actor`) | `users.list` con `filter.id` | 60 s por usuario |
-| Proyectos visibles para un externo | `project-permissions.list` con `filter.userId` | 60 s por usuario |
-| Existencia de entidades en relaciones | `clients.list`, `projects.list`, `requirements.list`, `tasks.list` con `filter.id` | 5 min |
+| Roles and `identity_type` of the caller (people over the bus and services; not the `api` with `actor`) | `users.list` with `filter.id` | 60 s per user |
+| Projects visible to an external person | `project-permissions.list` with `filter.userId` | 60 s per user |
+| Existence of entities in relations | `clients.list`, `projects.list`, `requirements.list`, `tasks.list` with `filter.id` | 5 min |
 
-Si `core` no responde, las operaciones que dependen de esos datos fallan con `upstream_unavailable` (nunca se concede acceso por defecto). Los datos en caché se siguen usando hasta su vencimiento.
+If `core` does not respond, the operations that depend on that data fail with `upstream_unavailable` (access is never granted by default). Cached data keeps being used until it expires.
 
-Como `core` no publica eventos de clientes ni proyectos, una tarea diaria revisa las relaciones de todos los documentos contra `core` y quita las que apuntan a entidades que ya no existen, registrándolo en el historial del documento.
+Since `core` does not publish client or project events, a daily task checks the relations of every document against `core` and removes those pointing to entities that no longer exist, recording it in the document's history.
 
-Un usuario sin fila en `users` (por el problema de espejo descrito en la guía de conectores, §3.4) recibe `unknown_caller`. Ese problema no alcanza a las personas que entran por la web: la `api` manda sus roles frescos en `actor` (D-11).
+A user without a row in `users` (because of the mirroring problem described in the connector guide, §3.4) receives `unknown_caller`. That problem does not affect people who come in through the web: the `api` sends their fresh roles in `actor` (D-11).
 
-### ACL de carpetas
+### Folder ACL
 
-Cada regla es: carpeta + principal + permiso.
+Each rule is: folder + principal + permission.
 
-| Campo | Valores |
+| Field | Values |
 | --- | --- |
-| `principalType` | `role` (un rol de Zitadel, tal como figura en `users.roles`) o `user` (un `user-id`) |
-| `principal` | El rol o el `user-id` |
-| `permission` | `read`, `write` (incluye read) o `manage` (incluye write, permite cambiar ACL, mover carpetas y publicar) |
+| `principalType` | `role` (a Zitadel role, as it appears in `users.roles`) or `user` (a `user-id`) |
+| `principal` | The role or the `user-id` |
+| `permission` | `read`, `write` (includes read) or `manage` (includes write, allows changing the ACL, moving folders and publishing) |
 
-Permiso efectivo de una persona sobre una carpeta:
+Effective permission of a person on a folder:
 
-1. Se juntan las reglas de la carpeta que coinciden con la persona (por `user-id` o por cualquiera de sus roles).
-2. Si la carpeta tiene `inheritAcl = true`, se suman las reglas efectivas de la carpeta padre, recursivamente.
-3. El permiso efectivo es el máximo encontrado. Sin reglas, no hay acceso.
+1. The folder's rules that match the person (by `user-id` or by any of their roles) are collected.
+2. If the folder has `inheritAcl = true`, the effective rules of the parent folder are added, recursively.
+3. The effective permission is the highest one found. Without rules, there is no access.
 
-No existen reglas de denegación: para restringir una subcarpeta se pone `inheritAcl = false` y se definen sus reglas explícitas. La carpeta raíz tiene `inheritAcl = false` y una regla `manage` para el rol admin.
+There are no deny rules: to restrict a subfolder, set `inheritAcl = false` and define its explicit rules. The root folder has `inheritAcl = false` and a `manage` rule for the admin role.
 
-### Reglas de visibilidad en lecturas
+### Visibility rules on reads
 
-- Un documento o carpeta que la persona no puede leer responde `*_not_found`, sin distinguir "no existe" de "no es visible", igual que `core`.
-- Una escritura sobre algo que se puede leer pero no escribir responde `permission_denied`.
-- Los resultados de `list`, `search` y `changes` se filtran por permisos antes de paginar.
+- A document or folder the person cannot read answers `*_not_found`, without distinguishing "does not exist" from "not visible", just like `core`.
+- A write on something that can be read but not written answers `permission_denied`.
+- The results of `list`, `search` and `changes` are filtered by permissions before paginating.
 
-### Clientes externos
+### External clients
 
-Un usuario externo ve un documento si se cumplen las tres condiciones: `visibility = public`, el documento tiene una relación con un proyecto (o un requisito o tarea de un proyecto) que aparece en sus `project-permissions`, y la carpeta del documento no tiene la marca `externalBlocked = true`. Esa marca permite cerrar carpetas enteras (por ejemplo `/infra/`) a clientes aunque alguien publique un documento por error. El externo lee solo la versión actual: las anteriores pueden ser de antes de publicarlo. Tampoco ve el frontmatter (tiene ids internos de requisitos y tareas): ver `documents.get` en la sección 7.
+An external user sees a document if all three conditions hold: `visibility = public`, the document has a relation with a project (or a requirement or task of a project) that appears in their `project-permissions`, and the document's folder does not have the `externalBlocked = true` flag. That flag allows closing whole folders (for example `/infra/`) to clients even if someone publishes a document by mistake. The external person reads only the current version: earlier ones may predate its publication. They do not see the frontmatter either (it has internal ids of requirements and tasks): see `documents.get` in section 7.
 
-### Links compartidos
+### Share links
 
-Un link compartido es una credencial al portador: quien tiene el link lee el documento sin identificarse. Por eso es la única lectura que no pasa por el bus; la resuelve la `api` de Jiku en una ruta HTTP pública (sección 9.8).
+A share link is a bearer credential: whoever has the link reads the document without identifying themselves. That is why it is the only read that does not go through the bus; it is resolved by the Jiku `api` on a public HTTP route (section 9.8).
 
-Convive con el acceso de clientes con cuenta, pero con otro propósito. Para clientes que tienen usuario en opus-web, lo correcto es `visibility: public` vinculado a sus proyectos: queda atado a su identidad y se revoca con su acceso. El link es para casos puntuales: alguien sin cuenta, un proveedor, un documento que se envía una vez.
+It coexists with access by clients with an account, but serves another purpose. For clients who have a user in opus-web, the right thing is `visibility: public` related to their projects: it is tied to their identity and is revoked together with their access. The link is for one-off cases: someone without an account, a supplier, a document that is sent once.
 
-| Regla | Definición |
+| Rule | Definition |
 | --- | --- |
-| Quién crea | Cualquier persona interna que lee el documento (P-1); un documento `restricted` no admite links (`sharing_blocked`) |
-| Quién revoca | Cualquier persona interna que lee el documento (P-1) |
-| Carpetas bloqueadas | Obsoleto desde P-1: `sharingBlocked` no tiene efecto. Lo reemplaza `restricted` |
-| Token | 256 bits aleatorios en base64url con prefijo `jds_` (permite detectarlo con escáneres de secretos). Se devuelve una sola vez; se guarda solo su SHA-256 |
-| Modo | `latest` muestra siempre la versión actual; `pinned` muestra una versión fija |
-| Vencimiento | Obligatorio. Default 30 días, máximo 180 |
-| Adjuntos | Incluidos por defecto; desactivables por link. Solo se sirven adjuntos del documento compartido |
-| Qué se muestra | Solo el cuerpo renderizado a HTML sanitizado. El frontmatter se quita siempre (contiene ids de Jiku y temas internos). Los enlaces a otros documentos se muestran como texto |
-| Invalidación | Revocar, vencer, borrar el documento o pasarlo a `restricted` corta el link en el siguiente acceso. Borrar el documento o restringirlo revoca sus links (`revokeReason`: `document_deleted` o `restricted`): restaurarlo o volverlo a `internal` no los reactiva |
-| Secretos | Si el detector de secretos marcó el documento, `shares.new` exige `acknowledgeSecretWarning: true` |
-| Auditoría | Cada link registra creador, fecha, contador de accesos y último acceso. Cada acceso se guarda con IP hasheada y agente de usuario truncado |
+| Who creates | Any internal person who reads the document (P-1); a `restricted` document does not allow links (`sharing_blocked`) |
+| Who revokes | Any internal person who reads the document (P-1) |
+| Blocked folders | Deprecated since P-1: `sharingBlocked` has no effect. Replaced by `restricted` |
+| Token | 256 random bits in base64url with the `jds_` prefix (lets secret scanners detect it). Returned only once; only its SHA-256 is stored |
+| Mode | `latest` always shows the current version; `pinned` shows a fixed version |
+| Expiry | Mandatory. Default 30 days, maximum 180 |
+| Attachments | Included by default; can be disabled per link. Only attachments of the shared document are served |
+| What is shown | Only the body rendered to sanitised HTML. The frontmatter is always removed (it contains Jiku ids and internal topics). Links to other documents are shown as text |
+| Invalidation | Revoking, expiring, deleting the document or moving it to `restricted` cuts the link on the next access. Deleting or restricting the document revokes its links (`revokeReason`: `document_deleted` or `restricted`): restoring it or setting it back to `internal` does not reactivate them |
+| Secrets | If the secret detector flagged the document, `shares.new` requires `acknowledgeSecretWarning: true` |
+| Audit | Each link records creator, date, access counter and last access. Each access is stored with a hashed IP and a truncated user agent |
 
-Un link inválido por cualquier motivo responde lo mismo (`share_not_found`, y 404 en la ruta pública), para no revelar si existió, venció o fue revocado.
+A link that is invalid for any reason answers the same (`share_not_found`, and 404 on the public route), so as not to reveal whether it existed, expired or was revoked.
 
-## 5. Protocolo en el bus
+## 5. Bus protocol
 
-El protocolo copia las convenciones de `core` (gramática de subjects, forma de la respuesta, filtros y paginación) para que quien ya integró Jiku no tenga que aprender nada nuevo. Las diferencias son tres: idempotencia, outbox y transferencia de contenido.
+The protocol copies `core`'s conventions (subject grammar, response shape, filters and pagination) so that whoever already integrated Jiku does not have to learn anything new. There are three differences: idempotency, outbox and content transfer.
 
 ### Subjects
 
 ```
-Comandos:       {instance}.{user-id}.jiku-docs-commands.v1.{método}
+Commands:       {instance}.{user-id}.jiku-docs-commands.v1.{method}
                 prod.281234567890123456.jiku-docs-commands.v1.documents.01JBX7Q2M4.update
-Consultas:      {instance}.{user-id}.jiku-docs-queries.v1.{método}
+Queries:        {instance}.{user-id}.jiku-docs-queries.v1.{method}
                 prod.281234567890123456.jiku-docs-queries.v1.documents.search
-Eventos:        {instance}.docs-events.v1.{entidad}.{acción}
+Events:         {instance}.docs-events.v1.{entity}.{action}
                 prod.docs-events.v1.document.updated
-Notificaciones: {instance}.{user-id}.docs-notify.v1.{entidad}.{acción}
+Notifications:  {instance}.{user-id}.docs-notify.v1.{entity}.{action}
                 prod.281234567890123456.docs-notify.v1.document.updated
 ```
 
-| Segmento | Valor |
+| Segment | Value |
 | --- | --- |
-| `instance` | `dev` / `prod`, igual que `NATS_INSTANCE` de Jiku |
-| `user-id` | El `sub` del token del caller, crudo |
-| `version` | `v1`. Comandos y consultas se versionan juntos; eventos y notificaciones, por separado |
-| `método` | En comandos, los ids van en el subject (`documents.{id}.update`). En consultas, en el payload |
+| `instance` | `dev` / `prod`, same as Jiku's `NATS_INSTANCE` |
+| `user-id` | The `sub` of the caller's token, raw |
+| `version` | `v1`. Commands and queries are versioned together; events and notifications, separately |
+| `method` | In commands, ids go in the subject (`documents.{id}.update`). In queries, in the payload |
 
-Los ids ULID son válidos como token de subject (26 caracteres alfanuméricos en mayúscula).
+ULID ids are valid as subject tokens (26 uppercase alphanumeric characters).
 
-### Conexión de los callers
+### Caller connection
 
-Igual que con `core`: credenciales del sentinel, token de Zitadel con refresco en caliente e `inboxPrefix` derivado del `user-id` (`_INBOX.` + primeros 16 caracteres de `lowercase(base32_sin_padding(sha256(userId)))`). Sin `inboxPrefix` las respuestas no llegan y el síntoma es un timeout.
+Same as with `core`: sentinel credentials, Zitadel token with hot refresh and an `inboxPrefix` derived from the `user-id` (`_INBOX.` + first 16 characters of `lowercase(base32_without_padding(sha256(userId)))`). Without `inboxPrefix` replies do not arrive and the symptom is a timeout.
 
-### Respuesta
+### Response
 
 ```jsonc
 { "status": "success", "data": { ... } }
 { "status": "failure", "errorCode": "version_conflict", "errorMessage": "...", "errorDetails": { "currentVersion": 8 } }
 ```
 
-Se decide siempre por `errorCode`; `errorMessage` es texto en español para la interfaz.
+Always decide by `errorCode`; `errorMessage` is human-readable English text for the interface.
 
-### Catálogo de errores
+### Error catalog
 
-| Código | Significado | Reintento |
+| Code | Meaning | Retry |
 | --- | --- | --- |
-| `invalid_fields` | Clave desconocida, campo no declarado en filtro, orden o fields, o `actor` enviado por un caller que no es la `api` | No: bug del caller |
-| `invalid_cursor` | Cambió `filter` o `sort` entre páginas | Reiniciar paginación |
-| `document_not_found` / `folder_not_found` / `attachment_not_found` | No existe o no es visible | No |
-| `permission_denied` | Se puede leer pero no escribir o administrar | No |
-| `version_conflict` | `baseVersion` distinta de la actual. `errorDetails.currentVersion` | Releer, combinar y reintentar |
-| `version_pruned` | Se pide (`documents.get` con `version`), restaura (`restore`) o fija (`shares.new` con `mode: pinned`) una versión que la compactación del historial borró. `errorDetails`: `requestedVersion`, `previousAvailable` y `nextAvailable` (las conservadas más cercanas, o `null`). Un `person-external` nunca lo recibe: para él cualquier versión que no sea la actual es `document_not_found` sin `errorDetails`. Ver [`history-compaction-v1.md`](history-compaction-v1.md) | Pedir una de las versiones conservadas |
-| `document_locked` | Otra sesión tiene el lock. `errorDetails`: `holder`, `via`, `expiresAt` | Esperar o pedir liberación |
-| `lock_not_held` | La sesión no tiene el lock que intenta renovar o liberar | Volver a tomarlo |
-| `already_exists` | Un `id` de cliente ya usado con otro contenido, o nombre de archivo repetido en la carpeta | No |
-| `file_name_invalid` | Nombre que no termina en `.md` o con caracteres prohibidos | No |
-| `frontmatter_invalid` | YAML mal formado o valor inválido. `errorDetails`: `line`, `field`, `reason` | No |
-| `invalid_relation` | Id de Jiku inexistente o no visible. `errorDetails`: `entityType`, `entityId` | No |
-| `content_too_large` | Más de 5 MiB, o más de 256 KiB inline | Usar subida por URL |
-| `checksum_mismatch` | El SHA-256 declarado no coincide con el contenido | Recalcular |
-| `upload_not_found` | `contentUploadId` vencido o inexistente | Pedir otra URL |
-| `folder_not_empty` | Se intenta borrar una carpeta con contenido | No |
-| `attachment_type_not_allowed` / `attachment_too_large` | Política de adjuntos | No |
-| `query_timeout` | La consulta superó el tiempo de la base | Achicar el filtro |
-| `unknown_caller` / `caller_not_authorized` | Sin fila en `users` o rol sin permiso | Reconectar |
-| `upstream_unavailable` | `core` no respondió una consulta necesaria | Reintentar con backoff |
-| `internal_error` | Cualquier otra cosa | Reintentar con backoff |
+| `invalid_fields` | Unknown key, field not declared in filter, sort or fields, or `actor` sent by a caller that is not the `api` | No: caller bug |
+| `invalid_cursor` | `filter` or `sort` changed between pages | Restart pagination |
+| `document_not_found` / `folder_not_found` / `attachment_not_found` | Does not exist or is not visible | No |
+| `permission_denied` | Can be read but not written or administered | No |
+| `version_conflict` | `baseVersion` differs from the current one. `errorDetails.currentVersion` | Re-read, merge and retry |
+| `version_pruned` | Requesting (`documents.get` with `version`), restoring (`restore`) or pinning (`shares.new` with `mode: pinned`) a version that history compaction deleted. `errorDetails`: `requestedVersion`, `previousAvailable` and `nextAvailable` (the closest kept ones, or `null`). A `person-external` never receives it: for them any version other than the current one is `document_not_found` without `errorDetails`. See [`history-compaction-v1.md`](history-compaction-v1.md) | Request one of the kept versions |
+| `document_locked` | Another session holds the lock. `errorDetails`: `holder`, `via`, `expiresAt` | Wait or ask for release |
+| `lock_not_held` | The session does not hold the lock it tries to renew or release | Take it again |
+| `already_exists` | A client `id` already used with different content, or a repeated file name in the folder | No |
+| `file_name_invalid` | Name that does not end in `.md` or has forbidden characters | No |
+| `frontmatter_invalid` | Malformed YAML or invalid value. `errorDetails`: `line`, `field`, `reason` | No |
+| `invalid_relation` | Jiku id that does not exist or is not visible. `errorDetails`: `entityType`, `entityId` | No |
+| `content_too_large` | More than 5 MiB, or more than 256 KiB inline | Use upload by URL |
+| `checksum_mismatch` | The declared SHA-256 does not match the content | Recompute |
+| `upload_not_found` | `contentUploadId` expired or nonexistent | Request another URL |
+| `folder_not_empty` | Attempt to delete a folder with content | No |
+| `attachment_type_not_allowed` / `attachment_too_large` | Attachment policy | No |
+| `query_timeout` | The query exceeded the database time limit | Narrow the filter |
+| `unknown_caller` / `caller_not_authorized` | No row in `users` or a role without permission | Reconnect |
+| `upstream_unavailable` | `core` did not answer a required query | Retry with backoff |
+| `internal_error` | Anything else | Retry with backoff |
 
-El catálogo puede crecer dentro de `v1`: un código desconocido se trata como error genérico.
+The catalog may grow within `v1`: an unknown code is treated as a generic error.
 
-Errores de links compartidos:
+Share link errors:
 
-| Código | Significado | Reintento |
+| Code | Meaning | Retry |
 | --- | --- | --- |
-| `share_not_found` | Link inexistente, revocado, vencido, de un documento borrado o de una carpeta bloqueada (no se distingue) | No |
-| `sharing_blocked` | La carpeta o un ancestro tiene `sharingBlocked` | No |
-| `share_expiry_invalid` | `expiresAt` en el pasado o más allá del máximo (180 días) | Corregir la fecha |
-| `secret_warning_not_acknowledged` | El documento tiene una alerta de posible secreto y no se envió `acknowledgeSecretWarning: true` | Revisar y confirmar |
+| `share_not_found` | Link nonexistent, revoked, expired, of a deleted document or of a blocked folder (not distinguished) | No |
+| `sharing_blocked` | The folder or an ancestor has `sharingBlocked` | No |
+| `share_expiry_invalid` | `expiresAt` in the past or beyond the maximum (180 days) | Fix the date |
+| `secret_warning_not_acknowledged` | The document has a possible-secret warning and `acknowledgeSecretWarning: true` was not sent | Review and confirm |
 
-Errores de configuración del módulo (sección 13):
+Module configuration errors (section 13):
 
-| Código | Significado | Reintento |
+| Code | Meaning | Retry |
 | --- | --- | --- |
-| `semantic_search_not_configured` | `documents.search` con `mode` `semantic` o `hybrid` (no disponibles en la v1) | Usar `mode: text` |
-| `attachments_not_configured` | Operación de adjuntos sin bucket configurado | No |
+| `semantic_search_not_configured` | `documents.search` with `mode` `semantic` or `hybrid` (not available in v1) | Use `mode: text` |
+| `attachments_not_configured` | Attachment operation without a configured bucket | No |
 
-### Timeouts y límites
+### Timeouts and limits
 
-| Parámetro | Valor |
+| Parameter | Value |
 | --- | --- |
-| Timeout recomendado para comandos | 5 s |
-| Timeout recomendado para consultas | 10 s (la base corta a 8 s con `query_timeout`) |
-| Contenido inline en comandos y respuestas | Hasta 256 KiB |
-| Tamaño máximo de un documento | 5 MiB |
-| URLs prefirmadas | Vencen a los 300 s |
-| `page.limit` | Default 50, máximo 200 |
+| Recommended timeout for commands | 5 s |
+| Recommended timeout for queries | 10 s (the database cuts at 8 s with `query_timeout`) |
+| Inline content in commands and responses | Up to 256 KiB |
+| Maximum document size | 5 MiB |
+| Presigned URLs | Expire after 300 s |
+| `page.limit` | Default 50, maximum 200 |
 
-Por encima de 256 KiB el contenido viaja por S3: el comando `documents.request-content-upload` devuelve una URL de subida y un `contentUploadId`, y `documents.get` devuelve `contentUrl` en lugar de `content`.
+Above 256 KiB the content travels through S3: the `documents.request-content-upload` command returns an upload URL and a `contentUploadId`, and `documents.get` returns `contentUrl` instead of `content`.
 
-### Idempotencia
+### Idempotency
 
-A diferencia de `core`, todos los comandos de `jiku-docs` se pueden reintentar tras un timeout:
+Unlike `core`, every `jiku-docs` command can be retried after a timeout:
 
-| Comando | Mecanismo |
+| Command | Mechanism |
 | --- | --- |
-| Altas (`folders.new`, `documents.new`) | El cliente genera el `id` (ULID). Repetir con el mismo `id` y el mismo contenido devuelve el recurso existente; con otro contenido, `already_exists` |
-| Modificaciones de documento | `baseVersion` obligatoria. Si el contenido enviado es idéntico a la versión actual (mismo SHA-256), responde `success` con esa versión aunque `baseVersion` haya quedado vieja |
-| Locks | Tomar un lock que la misma sesión ya tiene lo renueva |
-| Bajas | Borrar algo ya borrado responde `success` |
+| Creations (`folders.new`, `documents.new`) | The client generates the `id` (ULID). Repeating with the same `id` and the same content returns the existing resource; with different content, `already_exists` |
+| Document modifications | `baseVersion` is mandatory. If the content sent is identical to the current version (same SHA-256), it answers `success` with that version even if `baseVersion` is stale |
+| Locks | Taking a lock the same session already holds renews it |
+| Deletions | Deleting something already deleted answers `success` |
 
-### Filtros, orden y paginación
+### Filters, sort and pagination
 
-Misma gramática que `jiku-queries`: `filter` (con operadores `gte`, `lte` y un solo nivel de `or`), `sort` (con `-` para descendente, siempre se agrega `id`), `page` con cursor keyset, `fields`, `include` y `count`. La ausencia de `page.cursor` es la única señal de fin. `meta.describe` devuelve los campos, filtros, órdenes y enums de cada recurso.
+Same grammar as `jiku-queries`: `filter` (with the `gte` and `lte` operators and a single level of `or`), `sort` (with `-` for descending; `id` is always appended), `page` with a keyset cursor, `fields`, `include` and `count`. The absence of `page.cursor` is the only end signal. `meta.describe` returns the fields, filters, sorts and enums of each resource.
 
-## 6. Comandos (`jiku-docs-commands`)
+## 6. Commands (`jiku-docs-commands`)
 
-19 comandos (P-1 suma `documents.{id}.relations.update`). Todos responden con `{ status, data }`; en altas y modificaciones `data` trae como mínimo `id` y, en documentos, `version`. El detalle de cada payload está en el contrato `jiku-docs-commands.yaml`; los esquemas rechazan claves desconocidas.
+19 commands (P-1 adds `documents.{id}.relations.update`). All answer `{ status, data }`; on creations and modifications `data` carries at least `id` and, for documents, `version`. The details of each payload are in the `jiku-docs-commands.yaml` contract; the schemas reject unknown keys.
 
-### Carpetas
+### Folders
 
-| Método | Payload | Respuesta | Permiso | Errores específicos |
+| Method | Payload | Response | Permission | Specific errors |
 | --- | --- | --- | --- | --- |
-| `folders.new` | `id`, `parentId`, `name`, `inheritAcl?` (default `true`), `externalBlocked?`, sharingBlocked? (los tres obsoletos, sin efecto) | `{ id, path }` | `admin` o servicio | `folder_not_found`, `already_exists`, `permission_denied` |
-| `folders.{id}.edit` | `name?`, `parentId?` (mover), `inheritAcl?`, `externalBlocked?`, sharingBlocked? | `{ id, path }` | `admin` o servicio | `folder_not_found`, `already_exists`, `invalid_fields` (mover dentro de sí misma) |
-| `folders.{id}.delete` | vacío | `{ id }` | `admin` o servicio | `folder_not_empty` |
-| `folders.{id}.acl.replace` | `rules: [{ principalType, principal, permission }]` (máx. 100). Obsoleto: las reglas no tienen efecto | `{ id, rules }` | `admin` o servicio | `invalid_fields` |
+| `folders.new` | `id`, `parentId`, `name`, `inheritAcl?` (default `true`), `externalBlocked?`, sharingBlocked? (the three deprecated, without effect) | `{ id, path }` | `admin` or service | `folder_not_found`, `already_exists`, `permission_denied` |
+| `folders.{id}.edit` | `name?`, `parentId?` (move), `inheritAcl?`, `externalBlocked?`, sharingBlocked? | `{ id, path }` | `admin` or service | `folder_not_found`, `already_exists`, `invalid_fields` (move into itself) |
+| `folders.{id}.delete` | empty | `{ id }` | `admin` or service | `folder_not_empty` |
+| `folders.{id}.acl.replace` | `rules: [{ principalType, principal, permission }]` (max. 100). Deprecated: the rules have no effect | `{ id, rules }` | `admin` or service | `invalid_fields` |
 
-### Documentos
+### Documents
 
-| Método | Payload | Respuesta | Permiso | Errores específicos |
+| Method | Payload | Response | Permission | Specific errors |
 | --- | --- | --- | --- | --- |
-| `documents.new` | `id`, `folderId?`, `fileName?`, `content` o `contentUploadId`, `checksum`, `via?`, `message?` | `{ id, version: 1, path, folderId, fileName }` | Persona interna o servicio; `restricted` solo `admin` | `folder_not_found`, `permission_denied`, `already_exists`, `file_name_invalid`, `frontmatter_invalid`, `invalid_relation`, `content_too_large`, `checksum_mismatch`, `upload_not_found` |
-| `documents.{id}.update` | `baseVersion`, `content` o `contentUploadId`, `checksum`, `sessionId?`, `via?`, `message?` | `{ id, version }` | `write` | `version_conflict`, `document_locked`, `frontmatter_invalid`, `invalid_relation`, `content_too_large`, `checksum_mismatch` |
-| `documents.{id}.move` | `baseVersion`, `folderId?`, `fileName?` | `{ id, version, path }` | `write` en origen y destino | `version_conflict`, `document_locked`, `already_exists`, `file_name_invalid` |
+| `documents.new` | `id`, `folderId?`, `fileName?`, `content` or `contentUploadId`, `checksum`, `via?`, `message?` | `{ id, version: 1, path, folderId, fileName }` | Internal person or service; `restricted` only `admin` | `folder_not_found`, `permission_denied`, `already_exists`, `file_name_invalid`, `frontmatter_invalid`, `invalid_relation`, `content_too_large`, `checksum_mismatch`, `upload_not_found` |
+| `documents.{id}.update` | `baseVersion`, `content` or `contentUploadId`, `checksum`, `sessionId?`, `via?`, `message?` | `{ id, version }` | `write` | `version_conflict`, `document_locked`, `frontmatter_invalid`, `invalid_relation`, `content_too_large`, `checksum_mismatch` |
+| `documents.{id}.move` | `baseVersion`, `folderId?`, `fileName?` | `{ id, version, path }` | `write` on source and destination | `version_conflict`, `document_locked`, `already_exists`, `file_name_invalid` |
 | `documents.{id}.delete` | `baseVersion` | `{ id }` | `write` | `version_conflict`, `document_locked` |
-| `documents.{id}.restore` | `fromVersion`, `baseVersion` | `{ id, version }` | `write` | `version_conflict`, `document_not_found` (versión inexistente) |
-| `documents.{id}.lock` | `sessionId`, `via` (`human` / `agent`), `ttlSeconds?` (30 a 300, default 120) | `{ id, sessionId, expiresAt }` | `write` | `document_locked` |
-| `documents.{id}.unlock` | `sessionId`, `force?` | `{ id }` | `write`; `force` solo `admin` o servicio | `lock_not_held` |
+| `documents.{id}.restore` | `fromVersion`, `baseVersion` | `{ id, version }` | `write` | `version_conflict`, `document_not_found` (nonexistent version) |
+| `documents.{id}.lock` | `sessionId`, `via` (`human` / `agent`), `ttlSeconds?` (30 to 300, default 120) | `{ id, sessionId, expiresAt }` | `write` | `document_locked` |
+| `documents.{id}.unlock` | `sessionId`, `force?` | `{ id }` | `write`; `force` only `admin` or service | `lock_not_held` |
 | `documents.{id}.relations.update` | `baseVersion`, `add?`, `remove?` (`{ clients, projects, requirements, tasks }`), `sessionId?` | `{ id, version, relations }` | `write` | `version_conflict`, `document_locked`, `invalid_relation`, `invalid_fields` |
-| `documents.request-content-upload` | `checksum`, `size` | `{ contentUploadId, uploadUrl, expiresIn }` | Cualquier persona interna o servicio | `content_too_large` |
+| `documents.request-content-upload` | `checksum`, `size` | `{ contentUploadId, uploadUrl, expiresIn }` | Any internal person or service | `content_too_large` |
 
-Notas:
+Notes:
 
-- **`via`** registra el origen del cambio: `human`, `agent` o `service`. Para servicios se fuerza `service`. No afecta permisos; es trazabilidad.
-- **`delete`** es lógico: el documento deja de listarse, se conservan sus versiones y se puede restaurar con `documents.{id}.restore` por 30 días; después se elimina definitivamente junto con sus versiones.
-- **`restore`** crea una versión nueva con el contenido de `fromVersion`; nunca reescribe historia. Sobre un documento borrado, lo reactiva.
-- **Lock:** si un documento tiene lock, las escrituras de otras sesiones fallan con `document_locked`. Sin lock, cualquier persona con `write` puede escribir, siempre con `baseVersion`. El lock se renueva repitiendo `lock` con el mismo `sessionId` antes de `expiresAt`.
-- **Ubicación generada (P-1):** sin `folderId`, el servidor crea (si faltan) y usa `/clientes/<cliente>/<proyecto>/` (el cliente sale del proyecto según core o del primero de `jiku.clients`; sin cliente, `sin-cliente`), `/clientes/<cliente>/general/` o `/general/`, con slugs kebab-case sin acentos de los nombres de core y el primer proyecto o cliente tal como figura en el frontmatter. Sin `fileName`, el título en kebab-case `.md`, único en la carpeta (`-2`, `-3`…). Cambiar relaciones después no mueve el documento.
-- **`relations.update` (P-1):** reescribe solo el bloque `jiku:` del frontmatter ((actuales ∪ `add`) ∖ `remove`; agregar un proyecto agrega su cliente si falta) y crea una versión `update` con un mensaje automático ("Proyecto asignado: EXO - Videoconferencia"). Sin cambios responde `success` con la versión actual. No lleva `via`: el origen sale de la clase del caller.
-- **Nombres (P-1):** cada escritura guarda el nombre del autor (`actor.name` o `username` con la api, el `name` de `users.list` por el bus, el nombre del servicio para un servicio), que las consultas devuelven como `createdByName`, `updatedByName`, `authorName` y `lock.holderName`. Si el `actor` llega sin `name` ni `username` (el token de la web no los trae), el nombre sale de `users.list` de core. Al leer, un nombre `null` guardado se completa desde core sin escribirlo en la base. Es una etiqueta y no una decisión de acceso: con core caído queda `null` y la operación sigue (caché en memoria de 10 min, 1 min para ids que core no conoce, 30 s sin consultar tras un fallo, 2 s de espera como máximo).
-- **Contenido por URL:** el cliente pide `request-content-upload`, hace `PUT` del contenido a `uploadUrl` y después manda `contentUploadId` en `new` o `update`. El servicio verifica el SHA-256 al consumirlo. Un `contentUploadId` se usa una sola vez.
+- **`via`** records the origin of the change: `human`, `agent` or `service`. For services `service` is forced. It does not affect permissions; it is traceability.
+- **`delete`** is logical: the document is no longer listed, its versions are kept and it can be restored with `documents.{id}.restore` for 30 days; after that it is permanently removed together with its versions.
+- **`restore`** creates a new version with the content of `fromVersion`; it never rewrites history. On a deleted document, it reactivates it.
+- **Lock:** if a document has a lock, writes from other sessions fail with `document_locked`. Without a lock, any person with `write` can write, always with `baseVersion`. The lock is renewed by repeating `lock` with the same `sessionId` before `expiresAt`.
+- **Generated location (P-1):** without `folderId`, the server creates (if missing) and uses `/clients/<client>/<project>/` (the client comes from the project according to core or from the first of `jiku.clients`; without a client, `no-client`), `/clients/<client>/general/` or `/general/`, with kebab-case slugs without accents of the core names and the first project or client as listed in the frontmatter. Without `fileName`, the title in kebab-case `.md`, unique in the folder (`-2`, `-3`…). Changing relations later does not move the document.
+- **`relations.update` (P-1):** rewrites only the `jiku:` block of the frontmatter ((current ∪ `add`) ∖ `remove`; adding a project adds its client if missing) and creates an `update` version with an automatic message ("Project assigned: EXO - Videoconferencia"). Without changes it answers `success` with the current version. It does not carry `via`: the origin comes from the caller class.
+- **Names (P-1):** each write stores the author's name (`actor.name` or `username` with the api, the `name` from `users.list` over the bus, the service name for a service), which queries return as `createdByName`, `updatedByName`, `authorName` and `lock.holderName`. If the `actor` arrives without `name` or `username` (the web token does not carry them), the name comes from core's `users.list`. On read, a stored `null` name is filled in from core without writing it to the database. It is a label and not an access decision: with core down it stays `null` and the operation continues (in-memory cache of 10 min, 1 min for ids core does not know, 30 s without querying after a failure, 2 s wait at most).
+- **Content by URL:** the client requests `request-content-upload`, does a `PUT` of the content to `uploadUrl` and then sends `contentUploadId` in `new` or `update`. The service verifies the SHA-256 when consuming it. A `contentUploadId` is used only once.
 
-### Adjuntos
+### Attachments
 
-| Método | Payload | Respuesta | Permiso | Errores específicos |
+| Method | Payload | Response | Permission | Specific errors |
 | --- | --- | --- | --- | --- |
-| `attachments.request-upload` | `id`, `documentId`, `fileName`, `mimeType`, `fileSize`, `checksum` | `{ id, uploadUrl, expiresIn, link }` | `write` en el documento | `attachment_type_not_allowed`, `attachment_too_large`, `already_exists` |
-| `attachments.{id}.confirm` | vacío | `{ id, status: "ready" }` | El mismo caller que pidió la subida | `upload_not_found`, `checksum_mismatch` |
-| `attachments.{id}.request-download` | vacío | `{ id, downloadUrl, expiresIn }` | `read` en el documento | `attachment_not_found` |
-| `attachments.{id}.delete` | vacío | `{ id }` | `write` en el documento | `attachment_not_found` |
+| `attachments.request-upload` | `id`, `documentId`, `fileName`, `mimeType`, `fileSize`, `checksum` | `{ id, uploadUrl, expiresIn, link }` | `write` on the document | `attachment_type_not_allowed`, `attachment_too_large`, `already_exists` |
+| `attachments.{id}.confirm` | empty | `{ id, status: "ready" }` | The same caller that requested the upload | `upload_not_found`, `checksum_mismatch` |
+| `attachments.{id}.request-download` | empty | `{ id, downloadUrl, expiresIn }` | `read` on the document | `attachment_not_found` |
+| `attachments.{id}.delete` | empty | `{ id }` | `write` on the document | `attachment_not_found` |
 
-`link` es la URL estable para pegar en el markdown (`{JIKU_WEB_URL}/docs/attachments/{id}`, D-5). Un adjunto queda en estado `pending` hasta `confirm`; los pendientes de más de 24 h se borran. La política de tipos y tamaños (default: imágenes, PDF, planillas, comprimidos; 50 MiB) se configura en el servicio.
+`link` is the stable URL to paste into the markdown (`{JIKU_WEB_URL}/docs/attachments/{id}`, D-5). An attachment stays in `pending` status until `confirm`; pending ones older than 24 h are deleted. The type and size policy (default: images, PDF, spreadsheets, archives; 50 MiB) is configured in the service.
 
-### Links compartidos
+### Share links
 
-| Método | Payload | Respuesta | Permiso | Errores específicos |
+| Method | Payload | Response | Permission | Specific errors |
 | --- | --- | --- | --- | --- |
-| `shares.new` | `id`, `documentId`, `mode` (`latest` / `pinned`), `version?` (obligatorio con `pinned`), `expiresAt`, `includeAttachments?` (default `true`), `note?`, `acknowledgeSecretWarning?` | `{ id, token, url, expiresAt }` | Persona interna que lee el documento (no `restricted`) | `document_not_found`, `permission_denied`, `sharing_blocked`, `share_expiry_invalid`, `secret_warning_not_acknowledged`, `already_exists` |
-| `shares.{id}.revoke` | vacío | `{ id, revokedAt }` | Persona interna que lee el documento | `share_not_found`, `permission_denied` |
+| `shares.new` | `id`, `documentId`, `mode` (`latest` / `pinned`), `version?` (mandatory with `pinned`), `expiresAt`, `includeAttachments?` (default `true`), `note?`, `acknowledgeSecretWarning?` | `{ id, token, url, expiresAt }` | Internal person who reads the document (not `restricted`) | `document_not_found`, `permission_denied`, `sharing_blocked`, `share_expiry_invalid`, `secret_warning_not_acknowledged`, `already_exists` |
+| `shares.{id}.revoke` | empty | `{ id, revokedAt }` | Internal person who reads the document | `share_not_found`, `permission_denied` |
 
-`token` y `url` aparecen solo en la respuesta de `shares.new`; no se pueden volver a consultar. Si se pierde el link, se revoca y se crea otro. Reintentar `shares.new` con el mismo `id` tras un timeout devuelve el mismo link solo dentro de los 5 minutos (el servicio guarda el token cifrado ese tiempo para cubrir el caso); después responde `already_exists` sin token.
+`token` and `url` appear only in the `shares.new` response; they cannot be queried again. If the link is lost, it is revoked and another one is created. Retrying `shares.new` with the same `id` after a timeout returns the same link only within 5 minutes (the service keeps the token encrypted for that time to cover this case); after that it answers `already_exists` without a token.
 
-## 7. Consultas (`jiku-docs-queries`)
+## 7. Queries (`jiku-docs-queries`)
 
-14 consultas (P-1 suma `documents.suggest-relations`), con la misma gramática que `jiku-queries`. Todas filtran por permisos antes de devolver o paginar; un `restricted` no existe para un `user` ni para un externo en ninguna (ni en conteos, fragmentos, feed o temas).
+14 queries (P-1 adds `documents.suggest-relations`), with the same grammar as `jiku-queries`. All filter by permissions before returning or paginating; a `restricted` document does not exist for a `user` or for an external person in any of them (not in counts, snippets, feed or topics).
 
-| Método | Para qué | Parámetros principales |
+| Method | Purpose | Main parameters |
 | --- | --- | --- |
-| `meta.describe` | Describe recursos, campos, filtros, órdenes y enums | ninguno |
-| `folders.list` | Navegar el árbol | `filter`: `parentId`, `pathPrefix`, `id[]`; `include`: `effectivePermission` |
-| `folders.get` | Detalle de una carpeta | `id`; `include`: `acl` (obsoleto; solo `admin` y servicios), `effectivePermission` (`write` para `user`, `manage` para `admin`) |
-| `documents.list` | Catálogo filtrable | ver filtros abajo |
-| `documents.get` | Documento con su contenido | `id`, `version?`; `include`: `content`, `relations`, `topics`, `lock`, `attachments`. Trae `prunedVersionsCount` (no a externos); una `version` compactada responde `version_pruned` |
-| `documents.versions.list` | Historial (con huecos en la numeración por la compactación) | `documentId`, `author`, `via`, `createdAt`, `kind`, `protected`; orden por `version`. Cada versión trae `kind` (`create`, `update`, `restore`) y `protected` |
-| `documents.search` | Búsqueda por texto completo | `query`, `mode`, `filter`, `limit` |
-| `documents.changes` | Feed de cambios para reconciliar | `sinceSeq`, `limit`, `filter.pathPrefix?` |
-| `topics.list` | Temas en uso, con cantidad de documentos | `filter.prefix?` |
-| `attachments.list` | Adjuntos de un documento | `filter.documentId` |
-| `documents.suggest-relations` | Candidatos para "Asignar sugerido" (P-1) | `id`. Devuelve hasta 5 `{ projectId, clientId, score, reason }` por nombres, partes del nombre o código de proyectos y nombres de clientes de core en el título (pesa más) y el contenido; excluye los proyectos ya vinculados; un candidato solo de cliente trae `projectId: null`. Un externo recibe `permission_denied` |
+| `meta.describe` | Describes resources, fields, filters, sorts and enums | none |
+| `folders.list` | Browse the tree | `filter`: `parentId`, `pathPrefix`, `id[]`; `include`: `effectivePermission` |
+| `folders.get` | Folder detail | `id`; `include`: `acl` (deprecated; only `admin` and services), `effectivePermission` (`write` for `user`, `manage` for `admin`) |
+| `documents.list` | Filterable catalog | see filters below |
+| `documents.get` | Document with its content | `id`, `version?`; `include`: `content`, `relations`, `topics`, `lock`, `attachments`. Carries `prunedVersionsCount` (not to external people); a pruned `version` answers `version_pruned` |
+| `documents.versions.list` | History (with gaps in the numbering because of compaction) | `documentId`, `author`, `via`, `createdAt`, `kind`, `protected`; sorted by `version`. Each version carries `kind` (`create`, `update`, `restore`) and `protected` |
+| `documents.search` | Full-text search | `query`, `mode`, `filter`, `limit` |
+| `documents.changes` | Change feed for reconciliation | `sinceSeq`, `limit`, `filter.pathPrefix?` |
+| `topics.list` | Topics in use, with document count | `filter.prefix?` |
+| `attachments.list` | Attachments of a document | `filter.documentId` |
+| `documents.suggest-relations` | Candidates for "Asignar sugerido" (assign suggested) (P-1) | `id`. Returns up to 5 `{ projectId, clientId, score, reason }` based on names, parts of the name or code of projects and names of clients from core found in the title (weighs more) and the content; excludes projects already related; a client-only candidate carries `projectId: null`. An external person gets `permission_denied` |
 
-### Filtros de `documents.list`
+### `documents.list` filters
 
-| Filtro | Tipo | Notas |
+| Filter | Type | Notes |
 | --- | --- | --- |
-| `id` | ULID o lista | Traer varios por id |
-| `folderId` | ULID | Solo esa carpeta |
-| `pathPrefix` | string | Esa carpeta y sus descendientes (`/clientes/acme/`) |
-| `clientId`, `projectId`, `requirementId`, `taskId` | entero o lista | Por relación con Jiku. `projectId` incluye documentos vinculados a requisitos o tareas de ese proyecto |
-| `topic` | string o lista | Coincidencia exacta del slug |
-| `visibility` | `internal` / `public` / `restricted` | `restricted` pedido por quien no lo lee: lista vacía |
-| `hasProject`, `hasClient`, `hasTopic` | boolean | P-1. `false`: "Sin proyecto" (ni directo ni por requisito o tarea), "Sin cliente" (sin `jiku.clients`), "Sin tema" |
-| `createdBy`, `updatedBy` | user-id o lista | Autor de la primera o la última versión |
-| `createdAt`, `updatedAt` | rango (`gte`, `lte`) | ISO 8601 UTC |
-| `fileName` | string | Prefijo, sin distinguir mayúsculas |
+| `id` | ULID or list | Fetch several by id |
+| `folderId` | ULID | Only that folder |
+| `pathPrefix` | string | That folder and its descendants (`/clients/acme/`) |
+| `clientId`, `projectId`, `requirementId`, `taskId` | integer or list | By relation with Jiku. `projectId` includes documents related to requirements or tasks of that project |
+| `topic` | string or list | Exact slug match |
+| `visibility` | `internal` / `public` / `restricted` | `restricted` requested by someone who cannot read it: empty list |
+| `hasProject`, `hasClient`, `hasTopic` | boolean | P-1. `false`: "Sin proyecto" (no project; neither direct nor through a requirement or task), "Sin cliente" (no client; without `jiku.clients`), "Sin tema" (no topic) |
+| `createdBy`, `updatedBy` | user-id or list | Author of the first or the last version |
+| `createdAt`, `updatedAt` | range (`gte`, `lte`) | ISO 8601 UTC |
+| `fileName` | string | Prefix, case-insensitive |
 | `deleted` | boolean | Default `false` |
 
-Orden permitido: `updatedAt`, `createdAt`, `title`, `path`. Campos base: `id`, `title`, `path`, `folderId`, `version`, `visibility`, `updatedAt`, `updatedBy`, `updatedByName`, `clients`, `projects` (P-1; `createdByName` se pide en `fields`). Con `filter.projectId` cada ítem trae `projectMatch` (`direct` si el proyecto está en `jiku.projects`, `indirect` si llega por un requisito o una tarea); lo mismo en `documents.search`, cuyos ítems también traen `clients`, `projects`, `createdByName`, `updatedByName` y `visibility`. A un externo, `clients` va vacío y `projects` solo con los suyos. `documents.list` nunca devuelve contenido; para eso está `documents.get`.
+Allowed sort: `updatedAt`, `createdAt`, `title`, `path`. Base fields: `id`, `title`, `path`, `folderId`, `version`, `visibility`, `updatedAt`, `updatedBy`, `updatedByName`, `clients`, `projects` (P-1; `createdByName` is requested in `fields`). With `filter.projectId` each item carries `projectMatch` (`direct` if the project is in `jiku.projects`, `indirect` if it comes through a requirement or a task); the same in `documents.search`, whose items also carry `clients`, `projects`, `createdByName`, `updatedByName` and `visibility`. For an external person, `clients` is empty and `projects` only contains theirs. `documents.list` never returns content; that is what `documents.get` is for.
 
 ### `documents.get`
 
 ```jsonc
-// pedido
+// request
 { "id": "01JBX7Q2M4N8P6R3T5V9W1Y0ZA", "include": ["content", "relations", "lock"] }
 
-// respuesta
+// response
 { "status": "success", "data": {
-  "id": "01JBX7Q2M4N8P6R3T5V9W1Y0ZA", "title": "Acceso al servidor de staging",
-  "path": "/infra/servidores/staging.md", "version": 7, "checksum": "sha256:9f2c…",
+  "id": "01JBX7Q2M4N8P6R3T5V9W1Y0ZA", "title": "Access to the staging server",
+  "path": "/infra/servers/staging.md", "version": 7, "checksum": "sha256:9f2c…",
   "visibility": "internal", "updatedAt": "2026-10-24T13:02:11.123Z", "updatedBy": "281234567890123456",
-  "content": "---\ntitle: …",          // o "contentUrl" si supera 256 KiB
+  "content": "---\ntitle: …",          // or "contentUrl" if it exceeds 256 KiB
   "relations": { "clients": [4], "projects": [12, 31], "requirements": [812], "tasks": [] },
   "lock": { "sessionId": "01JC…", "holder": "281234567890123456", "via": "agent", "expiresAt": "…" }
 } }
 ```
 
-Para un `person-external` (por el bus o por la `api` con `actor`), `content` y `contentUrl` traen el documento **sin frontmatter**, y `checksum` y `sizeBytes` de esa respuesta son los de ese cuerpo, no los del archivo guardado (D-11). Si el cuerpo supera 256 KiB, se guarda una copia derivada bajo `renders/` (la purga la borra a las 24 h) y `contentUrl` apunta a ella. `documents.versions.list` hace lo mismo con la única versión que ve un externo. En `documents.list`, `documents.changes` y los eventos, `checksum` identifica la versión guardada (archivo completo): un externo lo usa para detectar cambios, no para verificar el contenido recibido. Los snippets de `documents.search` nunca incluyen frontmatter.
+For a `person-external` (over the bus or through the `api` with `actor`), `content` and `contentUrl` carry the document **without frontmatter**, and the `checksum` and `sizeBytes` of that response are those of that body, not those of the stored file (D-11). If the body exceeds 256 KiB, a derived copy is stored under `renders/` (the purge deletes it after 24 h) and `contentUrl` points to it. `documents.versions.list` does the same with the only version an external person sees. In `documents.list`, `documents.changes` and the events, `checksum` identifies the stored version (full file): an external person uses it to detect changes, not to verify the received content. The `documents.search` snippets never include frontmatter.
 
 ### `documents.search`
 
 ```jsonc
 {
-  "query": "\"integración con aduana\" -prueba",  // comillas para frases, OR, y -palabra para excluir
-  "mode": "text",                              // único valor en la v1; semantic o hybrid → semantic_search_not_configured
+  "query": "\"customs integration\" -test",    // quotes for phrases, OR, and -word to exclude
+  "mode": "text",                              // only value in v1; semantic or hybrid → semantic_search_not_configured
   "filter": { "clientId": 4, "updatedAt": { "gte": "2026-06-01T00:00:00Z" } },
-  "limit": 20                                   // máx. 50
+  "limit": 20                                   // max. 50
 }
 ```
 
-Respuesta: lista de fragmentos con `documentId`, `version`, `title`, `path`, `headingPath` (los encabezados que contienen al fragmento), `snippet` (hasta 500 caracteres), `score`, `updatedAt` y `updatedBy`. Acepta los mismos filtros que `documents.list`. No pagina: devuelve los mejores `limit` resultados.
+Response: list of chunks with `documentId`, `version`, `title`, `path`, `headingPath` (the headings that contain the chunk), `snippet` (up to 500 characters), `score`, `updatedAt` and `updatedBy`. It accepts the same filters as `documents.list`. It does not paginate: it returns the best `limit` results.
 
 ### `documents.changes`
 
-Feed ordenado por un número de secuencia global y monotónico (`seq`). Es lo que usa el daemon al reconectar.
+Feed ordered by a global, monotonic sequence number (`seq`). It is what the daemon uses when reconnecting.
 
 ```jsonc
-// pedido
-{ "sinceSeq": 18340, "limit": 500, "filter": { "pathPrefix": "/clientes/" } }
+// request
+{ "sinceSeq": 18340, "limit": 500, "filter": { "pathPrefix": "/clients/" } }
 
-// respuesta
+// response
 { "status": "success", "data": {
-  "items": [ { "seq": 18341, "type": "document.updated", "documentId": "01JB…", "version": 8, "path": "/clientes/acme/pzt/reuniones/2026-10-24.md" } ],
+  "items": [ { "seq": 18341, "type": "document.updated", "documentId": "01JB…", "version": 8, "path": "/clients/acme/pzt/meetings/2026-10-24.md" } ],
   "nextSeq": 18341, "hasMore": false
 } }
 ```
 
-Incluye solo cambios de documentos que la persona puede leer en el momento de la consulta. Los permisos pueden cambiar después de un evento, así que un documento que dejó de ser visible no aparece como borrado: el daemon lo detecta con la reconciliación completa (sección 10). El feed conserva 30 días; un `sinceSeq` más viejo responde `invalid_cursor` y obliga a reconciliar completo.
+It includes only changes to documents the person can read at the time of the query. Permissions may change after an event, so a document that stopped being visible does not show up as deleted: the daemon detects it with the full reconciliation (section 10). The feed keeps 30 days; an older `sinceSeq` answers `invalid_cursor` and forces a full reconciliation.
 
-### Consultas de links compartidos
+### Share link queries
 
-| Método | Quién | Parámetros | Devuelve |
+| Method | Who | Parameters | Returns |
 | --- | --- | --- | --- |
-| `shares.list` | `manage` en la carpeta del documento | `filter`: `documentId`, `status` (`active` / `revoked` / `expired`), `createdBy` | Links con `id`, `mode`, `version`, `expiresAt`, `revokedAt`, `createdBy`, `accessCount`, `lastAccessAt`, `note`. Nunca el token |
-| `shares.resolve` | Solo la `api` (sin `actor`) | `token` | `{ shareId, documentId, title, version, html, attachments: [{ id, fileName, mimeType }] }` o `share_not_found` |
-| `shares.attachment` | Solo la `api` (sin `actor`) | `token`, `attachmentId` | `{ downloadUrl, expiresIn }` o `share_not_found` |
+| `shares.list` | `manage` on the document's folder | `filter`: `documentId`, `status` (`active` / `revoked` / `expired`), `createdBy` | Links with `id`, `mode`, `version`, `expiresAt`, `revokedAt`, `createdBy`, `accessCount`, `lastAccessAt`, `note`. Never the token |
+| `shares.resolve` | Only the `api` (without `actor`) | `token` | `{ shareId, documentId, title, version, html, attachments: [{ id, fileName, mimeType }] }` or `share_not_found` |
+| `shares.attachment` | Only the `api` (without `actor`) | `token`, `attachmentId` | `{ downloadUrl, expiresIn }` or `share_not_found` |
 
-`shares.resolve` y `shares.attachment` responden `caller_not_authorized` a cualquier caller que no sea la `api`. `html` llega sanitizado, sin frontmatter y con los enlaces a adjuntos ya reescritos a la ruta pública; si supera 256 KiB, viene `htmlUrl` (prefirmada, 300 s) en su lugar. Cada `resolve` exitoso incrementa el contador de accesos y registra el acceso.
+`shares.resolve` and `shares.attachment` answer `caller_not_authorized` to any caller that is not the `api`. `html` arrives sanitised, without frontmatter and with attachment links already rewritten to the public route; if it exceeds 256 KiB, `htmlUrl` (presigned, 300 s) comes instead. Each successful `resolve` increments the access counter and records the access.
 
-## 8. Eventos, notificaciones y feed de cambios
+## 8. Events, notifications and change feed
 
-Cada cambio confirmado se escribe en el changelog en la misma transacción del comando. Desde ahí salen tres cosas: el evento completo para servicios, la notificación filtrada para personas y el feed `documents.changes`. Ningún cambio confirmado puede quedar sin evento.
+Each confirmed change is written to the changelog in the same transaction as the command. Three things come out of there: the full event for services, the filtered notification for people and the `documents.changes` feed. No confirmed change can be left without an event.
 
 ### Outbox
 
 ```
-comando → valida → transacción { escribe metadatos + inserta changelog(seq) } → COMMIT → responde
+command → validates → transaction { writes metadata + inserts changelog(seq) } → COMMIT → replies
                                                   │
-                    publicador de outbox ◀───────┘  (LISTEN/NOTIFY + barrido cada 5 s)
+                    outbox publisher ◀───────────┘  (LISTEN/NOTIFY + sweep every 5 s)
                          │
                          ├─▶ JetStream JIKU_DOCS_EVENTS   (Nats-Msg-Id = eventId: dedupe)
-                         ├─▶ docs-notify de cada persona autorizada
-                         └─▶ marca published_at en el changelog
+                         ├─▶ docs-notify of each authorized person
+                         └─▶ sets published_at in the changelog
 ```
 
-El contenido se sube a S3 antes de abrir la transacción, con una clave que incluye el checksum. Si la transacción falla queda un objeto huérfano que un proceso de limpieza borra; nunca queda un metadato apuntando a un objeto inexistente.
+The content is uploaded to S3 before opening the transaction, with a key that includes the checksum. If the transaction fails an orphan object is left, which a cleanup process deletes; there is never metadata pointing to a nonexistent object.
 
-### Stream `JIKU_DOCS_EVENTS`
+### `JIKU_DOCS_EVENTS` stream
 
-| Parámetro | Valor |
+| Parameter | Value |
 | --- | --- |
 | Subjects | `{instance}.docs-events.v1.>` |
-| Retención | `limits`, `max_age` 30 días |
-| Entrega | At-least-once; deduplicar por `eventId` |
-| Duplicados en publicación | Ventana de deduplicación de 2 min con `Nats-Msg-Id` |
-| Consumidores | Solo servicios: indexador, Jiku y conectores autorizados. Las personas no tienen permiso sobre el stream |
+| Retention | `limits`, `max_age` 30 days |
+| Delivery | At-least-once; deduplicate by `eventId` |
+| Duplicates on publish | 2 min deduplication window with `Nats-Msg-Id` |
+| Consumers | Services only: indexer, Jiku and authorized connectors. People have no permission on the stream |
 
-### Catálogo de eventos (15)
+### Event catalog (15)
 
-| Evento | Lo emite |
+| Event | Emitted by |
 | --- | --- |
 | `document.created` | `documents.new` |
 | `document.updated` | `documents.{id}.update` |
 | `document.moved` | `documents.{id}.move` |
 | `document.deleted` | `documents.{id}.delete` |
 | `document.restored` | `documents.{id}.restore` |
-| `document.locked` | `documents.{id}.lock` (al tomarlo, no al renovarlo) |
-| `document.unlocked` | `documents.{id}.unlock` o vencimiento del lock |
+| `document.locked` | `documents.{id}.lock` (when taken, not when renewed) |
+| `document.unlocked` | `documents.{id}.unlock` or lock expiry |
 | `folder.created` | `folders.new` |
 | `folder.updated` | `folders.{id}.edit` |
 | `folder.deleted` | `folders.{id}.delete` |
 | `folder.acl.changed` | `folders.{id}.acl.replace` |
 | `attachment.created` | `attachments.{id}.confirm` |
 | `attachment.deleted` | `attachments.{id}.delete` |
-| `share.created` | `shares.new`. Nunca lleva el token |
-| `share.revoked` | `shares.{id}.revoke`, y la revocación automática al borrar el documento (`changes.reason`: `manual` / `document_deleted`) |
+| `share.created` | `shares.new`. Never carries the token |
+| `share.revoked` | `shares.{id}.revoke`, and the automatic revocation when the document is deleted (`changes.reason`: `manual` / `document_deleted`) |
 
-Los eventos `share.*` solo van al stream; no generan notificaciones por persona. Los accesos a un link no generan eventos: quedan en el registro de accesos y en los contadores de `shares.list`.
+`share.*` events only go to the stream; they do not generate per-person notifications. Accesses to a link do not generate events: they stay in the access log and in the `shares.list` counters.
 
-### Sobre del evento
+### Event envelope
 
 ```jsonc
 {
-  "eventId": "01JC…",                       // ULID, clave de deduplicación
-  "seq": 18341,                             // posición en el changelog
+  "eventId": "01JC…",                       // ULID, deduplication key
+  "seq": 18341,                             // position in the changelog
   "type": "document.updated",
   "version": "v1",
   "occurredAt": "2026-10-24T13:02:11.123Z",
   "correlationId": "…",
   "actor": { "id": "281234567890123456", "name": "Lautaro", "via": "agent" },
-  "entity": { "type": "document", "id": "01JB…", "folderId": "01JA…", "path": "/infra/servidores/staging.md" },
+  "entity": { "type": "document", "id": "01JB…", "folderId": "01JA…", "path": "/infra/servers/staging.md" },
   "snapshot": { "title": "…", "version": 8, "checksum": "sha256:…", "visibility": "internal",
                 "relations": { "projects": [12, 31] }, "topics": ["infra"] },
   "changes": { "version": { "from": 7, "to": 8 }, "relations": { "added": { "projects": [31] } } }
 }
 ```
 
-El sobre nunca lleva el contenido del documento: quien lo necesite lo pide con `documents.get`. `snapshot` es el estado de los metadatos después del cambio.
+The envelope never carries the document content: whoever needs it requests it with `documents.get`. `snapshot` is the metadata state after the change.
 
-### Notificaciones por persona
+### Per-person notifications
 
-> **P-1:** se calculan con el modelo de visibilidad: un documento `restricted` notifica solo a los admins. Cuando un documento pasa a `restricted`, cada `user` recibe `access.changed` (sin detalle); cuando deja de ser `public`, lo mismo para los externos con permiso sobre alguno de sus proyectos. El daemon de sync reconcilia con esa señal.
+> **P-1:** they are computed with the visibility model: a `restricted` document notifies only the admins. When a document moves to `restricted`, each `user` receives `access.changed` (without detail); when it stops being `public`, the same goes for the external people with permission on any of its projects. The sync daemon reconciles with that signal.
 
-Subject: `{instance}.{user-id}.docs-notify.v1.{entidad}.{acción}`. Son mensajes NATS simples (sin JetStream): si la persona no está conectada, se pierden, y el feed `documents.changes` cubre el hueco.
+Subject: `{instance}.{user-id}.docs-notify.v1.{entity}.{action}`. They are plain NATS messages (no JetStream): if the person is not connected, they are lost, and the `documents.changes` feed covers the gap.
 
-- Mismo sobre que el evento, sin `changes.relations` ni `snapshot.relations` (pueden revelar proyectos que la persona no ve).
-- Se envían a todas las personas con `read` sobre el documento en ese momento, estén conectadas o no, calculado por el publicador de outbox. Con la escala objetivo el costo es despreciable y no hace falta registrar presencia.
-- `folder.acl.changed` se notifica a todas las personas internas como `access.changed`, sin detalle: es la señal para que el daemon reconcilie.
+- Same envelope as the event, without `changes.relations` or `snapshot.relations` (they could reveal projects the person does not see).
+- They are sent to every person with `read` on the document at that moment, whether connected or not, as computed by the outbox publisher. At the target scale the cost is negligible and there is no need to track presence.
+- `folder.acl.changed` is notified to every internal person as `access.changed`, without detail: it is the signal for the daemon to reconcile.
 
-### Consumir el stream desde un servicio
+### Consuming the stream from a service
 
-Igual que `JIKU_EVENTS`: durable propio con nombre único, ack explícito, `filter_subject` con la versión (`{instance}.docs-events.v1.>`), deduplicación persistida por `eventId` e ignorar los eventos que provocó el propio servicio (`actor.id`).
+Same as `JIKU_EVENTS`: own durable with a unique name, explicit ack, `filter_subject` with the version (`{instance}.docs-events.v1.>`), deduplication persisted by `eventId`, and ignoring the events caused by the service itself (`actor.id`).
 
-## 9. Flujos principales
+## 9. Main flows
 
-Ocho recorridos cubren los casos de uso de la v1. En todos, la identidad sale del subject y cada escritura genera versión, changelog y evento.
+Eight walkthroughs cover the v1 use cases. In all of them, the identity comes from the subject and each write generates a version, changelog entry and event.
 
-### 9.1 Trabajar un documento con un agente
+### 9.1 Working on a document with an agent
 
-1. La persona le pide al agente trabajar sobre un tema. El agente ejecuta `jiku docs search` o `jiku docs query documents.list` y elige el documento.
-2. El agente ejecuta `jiku docs get <id> -o json` y guarda `version` como versión base.
-3. Si el documento tiene lock de otra sesión (lo informa `get`), el agente avisa quién lo está editando y ofrece trabajar en solo lectura.
-4. Para una edición larga, toma el lock con `jiku docs lock <id> --session <ulid> --ttl 300` y lo renueva repitiendo el comando antes de que venza.
-5. Cada cambio que la persona acepta se guarda con `jiku docs put <id> <archivo> --base-version <n> --session <ulid> --message "..."`, con `JIKU_VIA=agent` en el entorno. La respuesta trae la nueva versión, que pasa a ser la base.
-6. Cada guardado dispara `document.updated`: la web y los daemons de quienes pueden leerlo actualizan el documento en segundos.
-7. Al terminar, el agente ejecuta `jiku docs unlock <id> --session <ulid>`. Si no lo hace, el lock vence solo.
+1. The person asks the agent to work on a topic. The agent runs `jiku docs search` or `jiku docs query documents.list` and picks the document.
+2. The agent runs `jiku docs get <id> -o json` and keeps `version` as the base version.
+3. If the document has a lock from another session (reported by `get`), the agent says who is editing it and offers to work read-only.
+4. For a long edit, it takes the lock with `jiku docs lock <id> --session <ulid> --ttl 300` and renews it by repeating the command before it expires.
+5. Each change the person accepts is saved with `jiku docs put <id> <file> --base-version <n> --session <ulid> --message "..."`, with `JIKU_VIA=agent` in the environment. The response carries the new version, which becomes the base.
+6. Each save triggers `document.updated`: the web and the daemons of whoever can read it update the document within seconds.
+7. When done, the agent runs `jiku docs unlock <id> --session <ulid>`. If it does not, the lock expires on its own.
 
-Si en el paso 5 llega `version_conflict` (alguien escribió sin lock, por ejemplo desde un daemon offline que reconectó), el agente relee con jiku docs get, muestra la diferencia y el agente propone una combinación antes de reintentar.
+If `version_conflict` arrives in step 5 (someone wrote without a lock, for example from an offline daemon that reconnected), the agent re-reads with jiku docs get, shows the difference and proposes a merge before retrying.
 
-### 9.2 Cambio remoto en un archivo sincronizado
+### 9.2 Remote change to a synced file
 
-1. Otra persona guarda una versión nueva.
-2. El publicador de outbox envía `docs-notify.v1.document.updated` a cada persona conectada con `read`.
-3. El daemon recibe la notificación, compara la versión con la que tiene registrada y, si es mayor, llama a `documents.get`.
-4. Si el archivo local no tiene cambios pendientes, lo reemplaza de forma atómica (escribe en temporal y renombra). El editor lo recarga.
-5. Si el archivo local tiene cambios sin subir, guarda la versión remota como `<nombre>.remoto-v<versión>.md` junto al original y avisa al usuario.
-6. El daemon actualiza su `lastSeq` local con el `seq` del evento.
+1. Another person saves a new version.
+2. The outbox publisher sends `docs-notify.v1.document.updated` to each connected person with `read`.
+3. The daemon receives the notification, compares the version with the one it has recorded and, if it is higher, calls `documents.get`.
+4. If the local file has no pending changes, it replaces it atomically (writes to a temporary file and renames). The editor reloads it.
+5. If the local file has unuploaded changes, it saves the remote version as `<name>.remoto-v<version>.md` ("remote"; a jiku-go literal) next to the original and notifies the user.
+6. The daemon updates its local `lastSeq` with the event's `seq`.
 
-### 9.3 Cambio local subido por el daemon
+### 9.3 Local change uploaded by the daemon
 
-1. El daemon detecta el cambio en disco (fsnotify) y espera 2 s sin cambios nuevos (debounce).
-2. Calcula el SHA-256. Si coincide con la versión registrada, no hace nada.
-3. Llama a `documents.{id}.update` con `baseVersion` = versión registrada y `via: human`.
-4. Con `success`, registra la nueva versión. Con `version_conflict`, descarga la versión remota como copia y avisa. Con `document_locked`, muestra quién edita y reintenta cuando llegue `document.unlocked`.
-5. Un archivo `.md` nuevo en una carpeta sincronizada se crea con `documents.new` (id generado por el daemon). Un archivo con otra extensión se ignora y se avisa.
+1. The daemon detects the change on disk (fsnotify) and waits 2 s without new changes (debounce).
+2. It computes the SHA-256. If it matches the recorded version, it does nothing.
+3. It calls `documents.{id}.update` with `baseVersion` = recorded version and `via: human`.
+4. On `success`, it records the new version. On `version_conflict`, it downloads the remote version as a copy and notifies. On `document_locked`, it shows who is editing and retries when `document.unlocked` arrives.
+5. A new `.md` file in a synced folder is created with `documents.new` (id generated by the daemon). A file with another extension is ignored and reported.
 
-### 9.4 Reconexión y reconciliación
+### 9.4 Reconnection and reconciliation
 
-1. Al arrancar o reconectar, el daemon llama a `documents.changes` con su `lastSeq` y aplica cada cambio como en 9.2.
-2. Si recibe `invalid_cursor` (pasó más tiempo que la retención del feed) o `access.changed`, hace reconciliación completa: `documents.list` paginado con `fields: [id, path, version, checksum]` y compara con su registro local.
-3. Los documentos locales que ya no aparecen en el listado se mueven a una carpeta `.jiku-docs/sin-acceso/` y se avisa, en lugar de borrarlos.
-4. Además, el daemon hace una reconciliación completa cada 24 h.
+1. On startup or reconnection, the daemon calls `documents.changes` with its `lastSeq` and applies each change as in 9.2.
+2. If it receives `invalid_cursor` (more time passed than the feed retention) or `access.changed`, it does a full reconciliation: paginated `documents.list` with `fields: [id, path, version, checksum]` and compares with its local record.
+3. Local documents that no longer appear in the listing are moved to a `.jiku-docs/sin-acceso/` ("no access"; a jiku-go literal) folder and reported, instead of being deleted.
+4. In addition, the daemon does a full reconciliation every 24 h.
 
-### 9.5 Subir y ver un adjunto
+### 9.5 Uploading and viewing an attachment
 
-1. El cliente llama a `attachments.request-upload` con un `id` propio y los datos del archivo.
-2. Hace `PUT` del archivo a `uploadUrl`, directo a S3.
-3. Llama a `attachments.{id}.confirm`; el servicio verifica que el objeto existe y que el checksum coincide.
-4. Inserta `link` en el markdown y guarda el documento con `update`.
-5. Al abrir el enlace (`{JIKU_WEB_URL}/docs/attachments/{id}`, D-5), la web lo reenvía con la sesión de la persona a la `api` (`GET /api/docs/attachments/{id}`), que la autentica, llama a `attachments.{id}.request-download` como `actor` y responde 302 a la URL prefirmada.
+1. The client calls `attachments.request-upload` with its own `id` and the file data.
+2. It does a `PUT` of the file to `uploadUrl`, directly to S3.
+3. It calls `attachments.{id}.confirm`; the service verifies that the object exists and that the checksum matches.
+4. It inserts `link` into the markdown and saves the document with `update`.
+5. When the link is opened (`{JIKU_WEB_URL}/docs/attachments/{id}`, D-5), the web forwards it with the person's session to the `api` (`GET /api/docs/attachments/{id}`), which authenticates it, calls `attachments.{id}.request-download` as `actor` and answers 302 to the presigned URL.
 
-### 9.6 Documentos de un proyecto en Jiku
+### 9.6 Documents of a project in Jiku
 
-1. Una persona abre un proyecto en la web de Jiku.
-2. La `api` llama a `documents.list` con `filter.projectId` y `actor`.
-3. `jiku-docs` devuelve los documentos vinculados al proyecto, a sus requisitos o a sus tareas, que esa persona puede leer, incluidos los transversales de `/infra/` o `/buenas-practicas/`.
-4. Para un cliente externo en opus-web, el mismo llamado devuelve solo los `public` (sección 4).
+1. A person opens a project in the Jiku web.
+2. The `api` calls `documents.list` with `filter.projectId` and `actor`.
+3. `jiku-docs` returns the documents related to the project, its requirements or its tasks that this person can read, including the cross-cutting ones in `/infra/` or `/best-practices/`.
+4. For an external client in opus-web, the same call returns only the `public` ones (section 4).
 
-### 9.7 Importación desde HedgeDoc
+### 9.7 Import from HedgeDoc
 
-1. Exportar las notas de HedgeDoc en markdown con su metadato (título, autor, fechas).
-2. Una persona del equipo asigna a cada nota una carpeta destino en una planilla de mapeo; las no asignadas van a `/importado/` con acceso solo para administración.
-3. Un script crea los documentos con `documents.new` como servicio, agrega el frontmatter con la fecha original y conserva el autor original en el campo `message` de la primera versión.
-4. Antes de apagar HedgeDoc, revisar las notas con datos sensibles: hasta hoy fueron públicas, así que cualquier credencial que aparezca debe rotarse.
+1. Export the HedgeDoc notes in markdown with their metadata (title, author, dates).
+2. A team member assigns each note a destination folder in a mapping sheet; unassigned ones go to `/imported/` with access for administration only.
+3. A script creates the documents with `documents.new` as a service, adds the frontmatter with the original date and keeps the original author in the `message` field of the first version.
+4. Before shutting HedgeDoc down, review the notes with sensitive data: until now they were public, so any credential that shows up must be rotated.
 
-### 9.8 Compartir un documento por link público
+### 9.8 Sharing a document through a public link
 
-1. Desde la web (o el agente, con confirmación de la persona) se elige el documento, el modo (`latest` o `pinned`), el vencimiento y si se incluyen adjuntos.
-2. La `api` llama a `shares.new` con `actor`. `jiku-docs` verifica `manage` y que la carpeta no tenga `sharingBlocked`, genera el token, guarda su hash y responde `token` y `url`.
-3. La web muestra el link una sola vez para copiarlo, con la fecha de vencimiento.
-4. El destinatario abre `https://{JIKU_PUBLIC_URL}/p/docs/{token}`. La `api` atiende la ruta sin sesión, aplica rate limiting por IP y llama a `shares.resolve` como servicio.
-5. Si el link es válido, la `api` responde una página de solo lectura con el `html` recibido y las cabeceras `X-Robots-Tag: noindex`, `Referrer-Policy: no-referrer`, `Cache-Control: private, no-store` y una CSP que no permite scripts.
-6. Las imágenes y adjuntos de la página apuntan a `/p/docs/{token}/attachments/{id}`; la `api` llama a `shares.attachment` y responde 302 a una URL prefirmada de corta duración.
-7. Si el link es inválido por cualquier motivo, la `api` responde 404 con una página genérica.
-8. Para cortar el acceso, alguien con `manage` (o el creador) llama a `shares.{id}.revoke`; el siguiente acceso ya responde 404.
+1. From the web (or the agent, with the person's confirmation) the document, the mode (`latest` or `pinned`), the expiry and whether attachments are included are chosen.
+2. The `api` calls `shares.new` with `actor`. `jiku-docs` checks `manage` and that the folder does not have `sharingBlocked`, generates the token, stores its hash and answers `token` and `url`.
+3. The web shows the link only once to copy it, with the expiry date.
+4. The recipient opens `https://{JIKU_PUBLIC_URL}/p/docs/{token}`. The `api` serves the route without a session, applies per-IP rate limiting and calls `shares.resolve` as a service.
+5. If the link is valid, the `api` answers a read-only page with the received `html` and the headers `X-Robots-Tag: noindex`, `Referrer-Policy: no-referrer`, `Cache-Control: private, no-store` and a CSP that does not allow scripts.
+6. The images and attachments of the page point to `/p/docs/{token}/attachments/{id}`; the `api` calls `shares.attachment` and answers 302 to a short-lived presigned URL.
+7. If the link is invalid for any reason, the `api` answers 404 with a generic page.
+8. To cut access, someone with `manage` (or the creator) calls `shares.{id}.revoke`; the next access already answers 404.
 
-## 10. Clientes: jiku-go
+## 10. Clients: jiku-go
 
-El cliente oficial del módulo es [`jiku-go`](https://github.com/gravadigital/jiku-go), el binario y librería que ya existe para hablar con Jiku por NATS. No hay daemon ni servidor MCP aparte: personas y agentes usan el mismo CLI, y los servicios en Go la misma librería. `jiku-go` ya resuelve el inbox prefix, el token con refresco, los subjects y la validación contra `meta.describe`; el módulo reutiliza todo eso.
+The official client of the module is [`jiku-go`](https://github.com/gravadigital/jiku-go), the binary and library that already exists to talk to Jiku over NATS. There is no separate daemon or MCP server: people and agents use the same CLI, and Go services the same library. `jiku-go` already handles the inbox prefix, the token with refresh, the subjects and validation against `meta.describe`; the module reuses all of that.
 
-### 10.1 Librería
+### 10.1 Library
 
-| Paquete | Qué agrega |
+| Package | What it adds |
 | --- | --- |
-| `modules` | Lee `JIKU_MODULES`, hace el ping y devuelve el estado (`not_installed`, `incompatible`, `unavailable`, `available`) y el `serviceName`. Opt-in, como `events` |
-| `modules/docs` | Cliente de `jiku-docs` sobre el mismo `jiku.Client`: las operaciones genéricas (`List`, `Get`, `Iterate`, `Contract`) apuntadas al servicio del registro, más helpers para lo que tiene pasos propios (`Search`, `GetContent`, `Put`, `New`, `Lock`, `Attach`, `Share`) |
+| `modules` | Reads `JIKU_MODULES`, does the ping and returns the status (`not_installed`, `incompatible`, `unavailable`, `available`) and the `serviceName`. Opt-in, like `events` |
+| `modules/docs` | `jiku-docs` client on the same `jiku.Client`: the generic operations (`List`, `Get`, `Iterate`, `Contract`) pointed at the service from the registry, plus helpers for whatever has its own steps (`Search`, `GetContent`, `Put`, `New`, `Lock`, `Attach`, `Share`) |
 
-Notas de diseño:
+Design notes:
 
-- El paquete se llama `modules/docs` porque `docs/` ya es la carpeta de documentación del repositorio.
-- El nombre del servicio sale del registro (`serviceName`); nada queda compilado con `jiku-docs`.
-- Como `jiku-docs` responde `meta.describe` con la misma forma que `core`, el contrato como dato, la validación previa de filtros y la paginación por cursor funcionan sin cambios.
-- Los códigos de error del módulo se agregan como constantes (`CodeVersionConflict`, `CodeDocumentLocked`, `CodeShareNotFound`, etc.), para usar con `IsCode`.
-- El propio servicio `jiku-docs` usa la librería para consultar a `core` con su machine user.
+- The package is called `modules/docs` because `docs/` is already the repository's documentation folder.
+- The service name comes from the registry (`serviceName`); nothing is compiled with `jiku-docs`.
+- Since `jiku-docs` answers `meta.describe` with the same shape as `core`, the contract as data, the upfront filter validation and cursor pagination work unchanged.
+- The module's error codes are added as constants (`CodeVersionConflict`, `CodeDocumentLocked`, `CodeShareNotFound`, etc.), to use with `IsCode`.
+- The `jiku-docs` service itself uses the library to query `core` with its machine user.
 
-### 10.2 CLI: grupo `jiku docs`
+### 10.2 CLI: `jiku docs` group
 
-Dos niveles. Los genéricos son los comandos que ya existen para `core`, apuntados al módulo:
+Two levels. The generic ones are the commands that already exist for `core`, pointed at the module:
 
-| Comando | Qué hace |
+| Command | What it does |
 | --- | --- |
-| `jiku docs status` | Estado del módulo y `serviceName` |
-| `jiku docs describe [recurso]` | Contrato del módulo, desde su `meta.describe` |
-| `jiku docs query <método>` | Cualquier consulta, con `--filter`, `--sort`, `--fields`, `--include`, `--all` y validación previa |
-| `jiku docs cmd <método> <json>` | Cualquier comando, con el id en el método |
+| `jiku docs status` | Module status and `serviceName` |
+| `jiku docs describe [resource]` | The module's contract, from its `meta.describe` |
+| `jiku docs query <method>` | Any query, with `--filter`, `--sort`, `--fields`, `--include`, `--all` and upfront validation |
+| `jiku docs cmd <method> <json>` | Any command, with the id in the method |
 
-Los ergonómicos ocultan los pasos que un agente haría mal a mano:
+The ergonomic ones hide the steps an agent would get wrong by hand:
 
-| Comando | Qué hace |
+| Command | What it does |
 | --- | --- |
-| `jiku docs ls [ruta]` | Carpetas y documentos de una ruta |
-| `jiku docs search <texto>` | `documents.search`, con `--mode` y `--filter` |
-| `jiku docs get <id o ruta>` | Markdown crudo a stdout; versión, checksum y lock a stderr. `-o json` devuelve todo junto; `--version N` una versión anterior |
-| `jiku docs put <id> <archivo>` | `documents.{id}.update` con `--base-version` obligatorio, `--session` y `--message` opcionales |
-| `jiku docs new <archivo> --folder <ruta o id>` | `documents.new` |
-| `jiku docs mv`, `rm`, `restore` | Mover, borrar y restaurar, siempre con `--base-version` |
-| `jiku docs history <id>` | Historial de versiones |
-| `jiku docs lock <id>`, `unlock <id>` | Sesión de edición con `--session` y `--ttl` |
-| `jiku docs attach <id> <archivo>` | Pide la subida, sube el archivo, confirma e imprime el link para el markdown |
-| `jiku docs share <id> --expires 30d` | Crea un link compartido (`--pinned`, `--no-attachments`, `--note`) e imprime la URL, que no se puede volver a consultar |
-| `jiku docs shares <id>`, `revoke <shareId>` | Lista y revoca links |
-| `jiku docs edit <id>` | Para personas: toma el lock, abre `$EDITOR`, guarda y libera, renovando el lock mientras el editor está abierto |
-| `jiku docs sync [carpeta]` | El daemon de sincronización (10.4) |
+| `jiku docs ls [path]` | Folders and documents of a path |
+| `jiku docs search <text>` | `documents.search`, with `--mode` and `--filter` |
+| `jiku docs get <id or path>` | Raw markdown to stdout; version, checksum and lock to stderr. `-o json` returns everything together; `--version N` an earlier version |
+| `jiku docs put <id> <file>` | `documents.{id}.update` with mandatory `--base-version`, optional `--session` and `--message` |
+| `jiku docs new <file> --folder <path or id>` | `documents.new` |
+| `jiku docs mv`, `rm`, `restore` | Move, delete and restore, always with `--base-version` |
+| `jiku docs history <id>` | Version history |
+| `jiku docs lock <id>`, `unlock <id>` | Editing session with `--session` and `--ttl` |
+| `jiku docs attach <id> <file>` | Requests the upload, uploads the file, confirms and prints the link for the markdown |
+| `jiku docs share <id> --expires 30d` | Creates a share link (`--pinned`, `--no-attachments`, `--note`) and prints the URL, which cannot be queried again |
+| `jiku docs shares <id>`, `revoke <shareId>` | Lists and revokes links |
+| `jiku docs edit <id>` | For people: takes the lock, opens `$EDITOR`, saves and releases, renewing the lock while the editor is open |
+| `jiku docs sync [folder]` | The sync daemon (10.4) |
 
-Lo que hacen todos los comandos ergonómicos sin que nadie lo pida: generar el ULID de las altas (reintentar es seguro), calcular el SHA-256, usar la subida por URL cuando el contenido supera 256 KiB, aceptar una ruta (`/infra/servidores/staging.md`) donde va un id y enviar `via` según `JIKU_VIA` (10.5).
+What every ergonomic command does without anyone asking: generate the ULID for creations (retrying is safe), compute the SHA-256, use the upload by URL when the content exceeds 256 KiB, accept a path (`/infra/servers/staging.md`) where an id goes and send `via` according to `JIKU_VIA` (10.5).
 
 ```
-jiku docs search "integración con aduana" --filter clientId=4
-jiku docs get /infra/servidores/staging.md > staging.md
-jiku docs put 01JBX7Q2M4N8P6R3T5V9W1Y0ZA staging.md --base-version 7 --message "Nuevo puerto SSH"
-jiku docs share 01JBX7Q2M4N8P6R3T5V9W1Y0ZA --expires 15d --note "Proveedor de hosting"
+jiku docs search "customs integration" --filter clientId=4
+jiku docs get /infra/servers/staging.md > staging.md
+jiku docs put 01JBX7Q2M4N8P6R3T5V9W1Y0ZA staging.md --base-version 7 --message "New SSH port"
+jiku docs share 01JBX7Q2M4N8P6R3T5V9W1Y0ZA --expires 15d --note "Hosting provider"
 ```
 
-Si el módulo no está instalado o no responde, cualquier `jiku docs` sale con código distinto de cero y un mensaje que distingue los dos casos.
+If the module is not installed or does not respond, any `jiku docs` exits with a non-zero code and a message that distinguishes the two cases.
 
-### 10.3 Cambios en el resto de jiku-go
+### 10.3 Changes in the rest of jiku-go
 
-| Comando | Cambio |
+| Command | Change |
 | --- | --- |
-| `jiku doctor` | Una línea más para el módulo: no instalado, incompatible, caído o disponible, con el tiempo de respuesta del ping |
-| `jiku batch` | Campo opcional `service` en cada línea (`core` por defecto, `docs`), para mezclar consultas de ambos en una sola conexión |
-| `jiku raw` | Sin cambios: `--service jiku-docs-queries` ya funciona |
+| `jiku doctor` | One more line for the module: not installed, incompatible, down or available, with the ping response time |
+| `jiku batch` | Optional `service` field on each line (`core` by default, `docs`), to mix queries of both in a single connection |
+| `jiku raw` | Unchanged: `--service jiku-docs-queries` already works |
 
-La compatibilidad semántica de `jiku-go` cubre los nombres de comandos y flags nuevos desde la versión que los incorpore.
+`jiku-go`'s semantic compatibility covers the new command and flag names from the version that incorporates them.
 
-### 10.4 Daemon `jiku docs sync`
+### 10.4 `jiku docs sync` daemon
 
-Corre en primer plano o como servicio del sistema (systemd o launchd) y espeja en una carpeta local los documentos que la persona puede leer.
+It runs in the foreground or as a system service (systemd or launchd) and mirrors into a local folder the documents the person can read.
 
-| Aspecto | Definición |
+| Aspect | Definition |
 | --- | --- |
-| Login | El de `jiku-go`: `jiku login` (device flow) para personas, key file para uso desatendido |
-| Carpeta local | `~/JikuDocs/` por defecto; refleja el árbol con las mismas rutas |
-| Alcance | Todo lo legible, o una selección de carpetas configurada por la persona |
-| Estado local | SQLite en `~/JikuDocs/.jiku-docs/state.db`: `documentId`, ruta, versión, checksum, `lastSeq` |
-| Permisos locales | Archivos de carpetas con solo `read` quedan de solo lectura en disco |
-| Tiempo real | Suscripción a `{instance}.{user-id}.docs-notify.v1.>` |
-| Reconciliación | `documents.changes` al reconectar; completa ante `access.changed`, `invalid_cursor` o cada 24 h |
-| Conflictos | Nunca pisa cambios locales: guarda la versión remota como copia y avisa |
-| Ignorados | Archivos que no son `.md`, ocultos y temporales de editores (`.swp`, `~`, `.#*`) |
-| Estado visible | Log en stderr y `jiku docs sync status` (últimos cambios y conflictos pendientes). Una interfaz gráfica queda fuera de la v1 |
+| Login | `jiku-go`'s: `jiku login` (device flow) for people, key file for unattended use |
+| Local folder | `~/JikuDocs/` by default; it mirrors the tree with the same paths |
+| Scope | Everything readable, or a selection of folders configured by the person |
+| Local state | SQLite in `~/JikuDocs/.jiku-docs/state.db`: `documentId`, path, version, checksum, `lastSeq` |
+| Local permissions | Files in folders with only `read` are read-only on disk |
+| Real time | Subscription to `{instance}.{user-id}.docs-notify.v1.>` |
+| Reconciliation | `documents.changes` on reconnect; full on `access.changed`, `invalid_cursor` or every 24 h |
+| Conflicts | Never overwrites local changes: saves the remote version as a copy and notifies |
+| Ignored | Non-`.md` files, hidden files and editor temporary files (`.swp`, `~`, `.#*`) |
+| Visible status | Log on stderr and `jiku docs sync status` (latest changes and pending conflicts). A graphical interface is out of v1 |
 
-Los adjuntos no se sincronizan: quedan como enlaces que se abren en el navegador.
+Attachments are not synced: they stay as links that open in the browser.
 
-### 10.5 Agentes
+### 10.5 Agents
 
-Los agentes usan el CLI con el contrato que ya tienen a mano; se le agregan los comandos de `jiku docs`. No hay servidor MCP en la v1.
+Agents use the CLI with the contract they already have at hand; the `jiku docs` commands are added to it. There is no MCP server in v1.
 
-- **Autoría.** El CLI corre con el token de la persona (`jiku login`), así que lo que escribe un agente queda a nombre de ella. Para registrar que lo hizo un agente, su entorno define `JIKU_VIA=agent`; sin la variable, el CLI envía `via: human`.
-- **Sesiones.** Cada invocación del CLI es un proceso aparte, así que un agente no mantiene un lock renovado en segundo plano. La protección real es `--base-version`; para ediciones largas, el agente toma el lock con `--ttl 300` y lo renueva repitiendo `jiku docs lock` con la misma `--session`.
-- **Reglas en el contrato del agente.** Buscar antes de crear, para no duplicar. Citar documento y versión al responder con información de la documentación. No guardar cambios que la persona no aceptó. No ejecutar `jiku docs share` ni `revoke` sin confirmación explícita: el CLI no puede imponer ese gate, depende de estas instrucciones.
-- **Agentes sin shell.** Si aparece alguno (por ejemplo, un asistente en el navegador), un subcomando `jiku mcp` puede exponer las mismas operaciones de la librería como herramientas MCP, con aprobación por herramienta en el cliente.
+- **Authorship.** The CLI runs with the person's token (`jiku login`), so whatever an agent writes is attributed to that person. To record that an agent did it, its environment sets `JIKU_VIA=agent`; without the variable, the CLI sends `via: human`.
+- **Sessions.** Each CLI invocation is a separate process, so an agent does not keep a lock renewed in the background. The real protection is `--base-version`; for long edits, the agent takes the lock with `--ttl 300` and renews it by repeating `jiku docs lock` with the same `--session`.
+- **Rules in the agent's contract.** Search before creating, to avoid duplicates. Cite document and version when answering with information from the documentation. Do not save changes the person did not accept. Do not run `jiku docs share` or `revoke` without explicit confirmation: the CLI cannot enforce that gate, it depends on these instructions.
+- **Agents without a shell.** If one shows up (for example, an assistant in the browser), a `jiku mcp` subcommand can expose the same library operations as MCP tools, with per-tool approval in the client.
 
-### 10.6 Adaptador WebDAV (opcional)
+### 10.6 WebDAV adapter (optional)
 
-Un proceso aparte que expone el árbol por WebDAV para quien quiera montar una unidad o usar herramientas estándar. Traduce cada operación a comandos y consultas del bus (`PROPFIND` a `folders.list` y `documents.list`, `GET` a `documents.get`, `PUT` a `documents.new` o `update` usando el ETag como versión base, `LOCK` a `documents.{id}.lock`). Como los clientes WebDAV nativos no soportan OIDC, se autentica con tokens personales emitidos desde la web de Jiku. No forma parte de la v1.
+A separate process that exposes the tree over WebDAV for whoever wants to mount a drive or use standard tools. It translates each operation into bus commands and queries (`PROPFIND` to `folders.list` and `documents.list`, `GET` to `documents.get`, `PUT` to `documents.new` or `update` using the ETag as base version, `LOCK` to `documents.{id}.lock`). Since native WebDAV clients do not support OIDC, it authenticates with personal tokens issued from the Jiku web. It is not part of v1.
 
-## 11. Modelo de datos e indexación
+## 11. Data model and indexing
 
-Base PostgreSQL propia (`jiku_docs`), separada de la de Jiku. El servicio usa un usuario con escritura; el indexador puede usar el mismo o uno restringido a las tablas de índice.
+Own PostgreSQL database (`jiku_docs`), separate from Jiku's. The service uses a user with write access; the indexer can use the same one or one restricted to the index tables.
 
-### Tablas
+### Tables
 
-> **P-1 (migración `0005`):** `documents.visibility` admite `restricted`; columnas de nombres guardados al escribir (`documents.created_by_name`, `documents.updated_by_name`, `document_versions.author_name`, `document_locks.holder_name`); `shares.revoke_reason` admite `restricted`. La migración de datos (visibilidad y nombres) corre en Go al arrancar y se registra en `service_state` (`migration:p1-visibility`, `migration:p1-names`).
+> **P-1 (migration `0005`):** `documents.visibility` accepts `restricted`; columns for names stored on write (`documents.created_by_name`, `documents.updated_by_name`, `document_versions.author_name`, `document_locks.holder_name`); `shares.revoke_reason` accepts `restricted`. The data migration (visibility and names) runs in Go on startup and is recorded in `service_state` (`migration:p1-visibility`, `migration:p1-names`).
 
 ```sql
 CREATE TABLE folders (
   id               text PRIMARY KEY,             -- ULID
   parent_id        text REFERENCES folders(id),
   name             text NOT NULL,
-  path             text NOT NULL UNIQUE,         -- materializado: '/clientes/acme/pzt/'
+  path             text NOT NULL UNIQUE,         -- materialised: '/clients/acme/pzt/'
   inherit_acl      boolean NOT NULL DEFAULT true,
   external_blocked boolean NOT NULL DEFAULT false,
-  sharing_blocked  boolean NOT NULL DEFAULT false,  -- efectivo = OR con los ancestros
+  sharing_blocked  boolean NOT NULL DEFAULT false,  -- effective = OR with the ancestors
   created_by       text NOT NULL,
   created_at       timestamptz NOT NULL DEFAULT now()
 );
@@ -836,13 +836,13 @@ CREATE TABLE folder_rules (
 );
 
 CREATE TABLE documents (
-  id              text PRIMARY KEY,              -- ULID generado por el cliente
+  id              text PRIMARY KEY,              -- ULID generated by the client
   folder_id       text NOT NULL REFERENCES folders(id),
   file_name       text NOT NULL,
   title           text NOT NULL,
   visibility      text NOT NULL DEFAULT 'internal' CHECK (visibility IN ('internal','public','restricted')),  -- P-1
   current_version integer NOT NULL,
-  checksum        text NOT NULL,                 -- 'sha256:<hex>' de la versión actual
+  checksum        text NOT NULL,                 -- 'sha256:<hex>' of the current version
   size_bytes      integer NOT NULL,
   created_by      text NOT NULL,
   created_at      timestamptz NOT NULL,
@@ -870,7 +870,7 @@ CREATE TABLE document_relations (
   document_id text NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
   entity_type text NOT NULL CHECK (entity_type IN ('client','project','requirement','task')),
   entity_id   integer NOT NULL,
-  project_id  integer,                           -- proyecto resuelto, para filtrar por proyecto
+  project_id  integer,                           -- resolved project, to filter by project
   PRIMARY KEY (document_id, entity_type, entity_id)
 );
 
@@ -918,25 +918,25 @@ CREATE TABLE changelog (
   entity_type  text NOT NULL,
   entity_id    text NOT NULL,
   folder_id    text,
-  payload      jsonb NOT NULL,                  -- sobre completo del evento
+  payload      jsonb NOT NULL,                  -- full event envelope
   occurred_at  timestamptz NOT NULL DEFAULT now(),
   published_at timestamptz
 );
 CREATE INDEX changelog_unpublished ON changelog (seq) WHERE published_at IS NULL;
 ```
 
-`project_id` en `document_relations` se resuelve al guardar (para requisitos y tareas se consulta a `core`) y permite que `filter.projectId` incluya documentos vinculados a requisitos o tareas del proyecto.
+`project_id` in `document_relations` is resolved on save (for requirements and tasks `core` is queried) and lets `filter.projectId` include documents related to requirements or tasks of the project.
 
-Links compartidos:
+Share links:
 
 ```sql
 CREATE TABLE shares (
-  id                  text PRIMARY KEY,           -- ULID generado por el cliente
+  id                  text PRIMARY KEY,           -- ULID generated by the client
   document_id         text NOT NULL REFERENCES documents(id),
-  token_hash          bytea NOT NULL UNIQUE,      -- sha256(token); el token nunca se guarda en claro
-  token_retry_cipher  bytea,                      -- token cifrado para reintentos; se borra a los 5 min
+  token_hash          bytea NOT NULL UNIQUE,      -- sha256(token); the token is never stored in clear
+  token_retry_cipher  bytea,                      -- encrypted token for retries; deleted after 5 min
   mode                text NOT NULL CHECK (mode IN ('latest','pinned')),
-  version             integer,                    -- obligatorio con mode = 'pinned'
+  version             integer,                    -- mandatory with mode = 'pinned'
   include_attachments boolean NOT NULL DEFAULT true,
   note                text,
   created_by          text NOT NULL,
@@ -956,20 +956,20 @@ CREATE TABLE share_accesses (
   accessed_at   timestamptz NOT NULL DEFAULT now(),
   kind          text NOT NULL CHECK (kind IN ('document','attachment')),
   attachment_id text,
-  ip_hash       bytea NOT NULL,                   -- HMAC de la IP con una clave del servicio
-  user_agent    text                              -- truncado a 200 caracteres
+  ip_hash       bytea NOT NULL,                   -- HMAC of the IP with a service key
+  user_agent    text                              -- truncated to 200 characters
 );
 CREATE INDEX share_accesses_share ON share_accesses (share_id, accessed_at DESC);
 ```
 
-Los registros de `share_accesses` se conservan 180 días.
+`share_accesses` records are kept for 180 days.
 
-Compactación del historial (migración `0003`, [`history-compaction-v1.md`](history-compaction-v1.md), sección 4):
+History compaction (migration `0003`, [`history-compaction-v1.md`](history-compaction-v1.md), section 4):
 
 ```sql
 ALTER TABLE document_versions
   ADD COLUMN kind text NOT NULL DEFAULT 'update' CHECK (kind IN ('create','update','restore')),
-  ADD COLUMN protected boolean NOT NULL DEFAULT false;   -- create, restore, con message o via service
+  ADD COLUMN protected boolean NOT NULL DEFAULT false;   -- create, restore, with message or via service
 
 ALTER TABLE documents
   ADD COLUMN last_compacted_at timestamptz,
@@ -977,33 +977,33 @@ ALTER TABLE documents
 CREATE INDEX documents_pending_compaction ON documents (id)
   WHERE deleted_at IS NULL AND (last_compacted_at IS NULL OR updated_at > last_compacted_at);
 
-CREATE TABLE pruned_objects (                            -- objetos a borrar de S3 después del commit
+CREATE TABLE pruned_objects (                            -- objects to delete from S3 after the commit
   storage_key text PRIMARY KEY,
   document_id text NOT NULL,
   version     integer NOT NULL,
   pruned_at   timestamptz NOT NULL DEFAULT now(),
-  version_row jsonb          -- migración 0004: la fila borrada, que viaja como metadata a la papelera
+  version_row jsonb          -- migration 0004: the deleted row, which travels as metadata to the trash
 );
 ```
 
-Los datos existentes se marcan al migrar: la versión 1 es `create`, las que tienen el mensaje fijo `Restaurado desde la versión N` son `restore`, y quedan protegidas las creaciones, restauraciones, versiones con mensaje y versiones de `via` `service`.
+Existing data is marked when migrating: version 1 is `create`, those with the fixed message `Restaurado desde la versión N` ("Restored from version N", the literal the service wrote when this migration was introduced; it now writes it in English) are `restore`, and creations, restorations, versions with a message and versions with `via` `service` are protected.
 
 ### Storage
 
-| Bucket | Clave | Notas |
+| Bucket | Key | Notes |
 | --- | --- | --- |
-| `jiku-docs-content` | `docs/<documentId>/<version>-<sha256>.md` | Objetos inmutables hasta que la compactación borra la versión, el barrido de huérfanos los encuentra sin fila o se purga el documento a los 30 días de borrado; en esos tres casos el objeto pasa por la papelera |
-| `jiku-docs-content` | `papelera/<clave original>` | Papelera: todo objeto de contenido que borra el servicio se copia acá y después se borra el original. Regla de ciclo de vida que la expira a `DOCS_TRASH_RETENTION_DAYS` (default 7). `jiku-docs storage restore-from-trash` devuelve un objeto (y, si viene de la compactación, su fila de versión) |
-| `jiku-docs-content` | `uploads/<contentUploadId>` | Contenido grande en tránsito; regla de ciclo de vida a 24 h; se borra directo, sin papelera |
-| `jiku-docs-attachments` | `att/<attachmentId>` | Sin acceso público; solo URLs prefirmadas |
+| `jiku-docs-content` | `docs/<documentId>/<version>-<sha256>.md` | Immutable objects until compaction deletes the version, the orphan sweep finds them without a row, or the document is purged 30 days after deletion; in those three cases the object goes through the trash |
+| `jiku-docs-content` | `trash/<original key>` | Trash: every content object the service deletes is copied here and then the original is deleted. A lifecycle rule expires it after `DOCS_TRASH_RETENTION_DAYS` (default 7). `jiku-docs storage restore-from-trash` brings an object back (and, if it comes from compaction, its version row) |
+| `jiku-docs-content` | `uploads/<contentUploadId>` | Large content in transit; lifecycle rule at 24 h; deleted directly, without the trash |
+| `jiku-docs-attachments` | `att/<attachmentId>` | No public access; presigned URLs only |
 
-El bucket de contenido no usa versionado: la red de seguridad de lo que borra el servicio es la papelera, con dos reglas de expiración por tiempo (`uploads/` y `papelera/`), que DigitalOcean Spaces soporta; `NoncurrentVersionExpiration` no hace falta. `jiku-docs storage init` crea el bucket, suspende el versionado si estaba activado (las versiones viejas que ya existían no se borran solas), aplica las dos reglas y las relee.
+The content bucket does not use versioning: the safety net for what the service deletes is the trash, with two time-based expiration rules (`uploads/` and `trash/`), which DigitalOcean Spaces supports; `NoncurrentVersionExpiration` is not needed. `jiku-docs storage init` creates the bucket, suspends versioning if it was enabled (old versions that already existed are not deleted on their own), applies the two rules and reads them back.
 
-Solo `jiku-docs` tiene credenciales de los buckets, igual que `core` con los suyos.
+Only `jiku-docs` has credentials for the buckets, just like `core` with its own.
 
-### Indexación
+### Indexing
 
-La búsqueda es por texto completo con PostgreSQL, sin servicios adicionales.
+Search is full-text with PostgreSQL, without additional services.
 
 ```sql
 CREATE EXTENSION IF NOT EXISTS unaccent;
@@ -1017,96 +1017,96 @@ CREATE TABLE index_chunks (
   chunk_no     integer NOT NULL,
   heading_path text[] NOT NULL,
   body         text NOT NULL,
-  tsv          tsvector NOT NULL,   -- título y encabezados con peso A, cuerpo con peso B (es_unaccent)
+  tsv          tsvector NOT NULL,   -- title and headings with weight A, body with weight B (es_unaccent)
   PRIMARY KEY (document_id, chunk_no)
 );
 CREATE INDEX index_chunks_tsv ON index_chunks USING gin (tsv);
 ```
 
-Proceso del indexador por cada `document.created`, `updated`, `moved`, `restored` o `deleted`:
+Indexer process for each `document.created`, `updated`, `moved`, `restored` or `deleted`:
 
-1. Si el documento fue borrado, elimina sus fragmentos y termina.
-2. Lee la versión indicada en el evento (si ya hay una más nueva indexada, descarta el evento).
-3. Quita el frontmatter del texto indexable y divide por encabezados; secciones de más de \~800 palabras se cortan por párrafos.
-4. Calcula el `tsvector` de cada fragmento (título del documento y encabezados con peso A, cuerpo con peso B) y reemplaza los fragmentos del documento en una transacción.
+1. If the document was deleted, it removes its chunks and stops.
+2. It reads the version indicated in the event (if a newer one is already indexed, it discards the event).
+3. It strips the frontmatter from the indexable text and splits by headings; sections of more than \~800 words are cut by paragraphs.
+4. It computes the `tsvector` of each chunk (document title and headings with weight A, body with weight B) and replaces the document's chunks in one transaction.
 
-Búsqueda: la consulta se interpreta con `websearch_to_tsquery('es_unaccent', ...)`, que admite frases entre comillas, `OR` y exclusión con `-`. Los resultados se ordenan por `ts_rank_cd`, se filtran por permisos y metadatos con un `JOIN` a las carpetas legibles por la persona (calculadas una vez por consulta) y el `snippet` se arma con `ts_headline`. Con `es_unaccent`, las variantes de una palabra ("aduana", "aduanas") coinciden y los acentos no importan.
+Search: the query is interpreted with `websearch_to_tsquery('es_unaccent', ...)`, which supports quoted phrases, `OR` and exclusion with `-`. Results are ranked by `ts_rank_cd`, filtered by permissions and metadata with a `JOIN` to the folders readable by the person (computed once per query) and the `snippet` is built with `ts_headline`. With `es_unaccent` (Spanish stemming, since the documentation is written in Spanish), the variants of a word ("aduana", "aduanas") match and accents do not matter.
 
-El índice se regenera completo con un comando de mantenimiento que recorre `documents` y encola un evento sintético por documento. Si más adelante se agrega búsqueda semántica, se suma una columna de vectores a esta tabla y un modelo de embeddings, sin cambiar los contratos.
+The index is fully regenerated with a maintenance command that walks `documents` and enqueues a synthetic event per document. If semantic search is added later, a vector column is added to this table plus an embeddings model, without changing the contracts.
 
-## 12. Cambios en Jiku, seguridad y operación
+## 12. Changes in Jiku, security and operations
 
-Integrar `jiku-docs` requiere cambios de seguridad en el repositorio de Jiku (rol, plantillas y reglas del auth-callout) y nuevas rutas en la `api`. En `core` solo se registra el rol nuevo; nadie toca su base.
+Integrating `jiku-docs` requires security changes in the Jiku repository (role, templates and auth-callout rules) and new routes in the `api`. In `core` only the new role is registered; nobody touches its database.
 
-### Cambios en el auth-callout
+### Auth-callout changes
 
-| Cambio | Archivo | Detalle |
+| Change | File | Detail |
 | --- | --- | --- |
-| Rol `docs-service` | `rules.yaml` + plantilla nueva `templates/docs-service.yaml` | Suscribirse a `{instance}.*.jiku-docs-commands.v1.>` y `.jiku-docs-queries.v1.>` (con queue group); publicar en `{instance}.{su-id}.jiku-queries.v1.>`; publicar en `{instance}.docs-events.v1.>` y `{instance}.*.docs-notify.v1.>`; administrar el stream `JIKU_DOCS_EVENTS`; consumir `JIKU_EVENTS` (opcional) |
-| Plantillas de persona | `templates/<persona>.yaml` | Publicar en `{instance}.{su-id}.jiku-docs-commands.v1.>` y `.jiku-docs-queries.v1.>`; suscribirse a `{instance}.{su-id}.docs-notify.v1.>` |
-| Plantilla de conector | `templates/connector.yaml` | Publicar en los subjects de comandos y consultas de docs; consumir `JIKU_DOCS_EVENTS` con durable propio |
-| Plantilla de la `api` | la que corresponda | Publicar en los subjects de comandos y consultas de docs |
+| `docs-service` role | `rules.yaml` + new template `templates/docs-service.yaml` | Subscribe to `{instance}.*.jiku-docs-commands.v1.>` and `.jiku-docs-queries.v1.>` (with queue group); publish on `{instance}.{own-id}.jiku-queries.v1.>`; publish on `{instance}.docs-events.v1.>` and `{instance}.*.docs-notify.v1.>`; manage the `JIKU_DOCS_EVENTS` stream; consume `JIKU_EVENTS` (optional) |
+| Person templates | `templates/<person>.yaml` | Publish on `{instance}.{own-id}.jiku-docs-commands.v1.>` and `.jiku-docs-queries.v1.>`; subscribe to `{instance}.{own-id}.docs-notify.v1.>` |
+| Connector template | `templates/connector.yaml` | Publish on the docs command and query subjects; consume `JIKU_DOCS_EVENTS` with its own durable |
+| `api` template | whichever applies | Publish on the docs command and query subjects |
 
-### Cambios en core
+### Changes in core
 
-| Cambio | Archivo |
+| Change | File |
 | --- | --- |
-| Entrada `docs-service` en `ROLE_METHODS` con `queries: ALL` y `commands: []` | `core/src/authorize-caller.ts` |
-| `docs-service` en `SERVICE_ROLES` | `core/src/events/auth/identity-type.ts` |
+| `docs-service` entry in `ROLE_METHODS` with `queries: ALL` and `commands: []` | `core/src/authorize-caller.ts` |
+| `docs-service` in `SERVICE_ROLES` | `core/src/events/auth/identity-type.ts` |
 
-### Cambios en la api y los frontends
+### Changes in the api and the frontends
 
-| Cambio | Detalle |
+| Change | Detail |
 | --- | --- |
-| Rutas proxy de documentos | `GET /docs/documents`, `GET /docs/documents/{id}`, `GET /docs/search`, etc., que traducen a consultas y comandos de `jiku-docs` con `actor` |
-| Redirección de adjuntos | `GET /docs/attachments/{id}`: autentica, llama a `attachments.{id}.request-download` y responde 302 |
-| Rutas de links compartidos | `POST /docs/documents/{id}/shares`, `GET /docs/documents/{id}/shares`, `DELETE /docs/shares/{id}`, con `actor` |
-| Ruta pública | `GET /p/docs/{token}` y `GET /p/docs/{token}/attachments/{id}`, sin sesión: llaman a `shares.resolve` / `shares.attachment` sin `actor`, con rate limiting por IP (60 pedidos por minuto por IP) y las cabeceras de la sección 9.8. Servidas en un host propio (`JIKU_PUBLIC_URL`), separado del de la aplicación, para que no compartan cookies |
-| Panel de documentos | En la ficha de proyecto, requisito y tarea de `web`; en `opus-web`, solo documentos `public` |
-| Visor y editor | Visor markdown en `web`; edición con lock y versión base, igual que el CLI; botón "Compartir" con la gestión de links del documento |
+| Document proxy routes | `GET /docs/documents`, `GET /docs/documents/{id}`, `GET /docs/search`, etc., which translate to `jiku-docs` queries and commands with `actor` |
+| Attachment redirection | `GET /docs/attachments/{id}`: authenticates, calls `attachments.{id}.request-download` and answers 302 |
+| Share link routes | `POST /docs/documents/{id}/shares`, `GET /docs/documents/{id}/shares`, `DELETE /docs/shares/{id}`, with `actor` |
+| Public route | `GET /p/docs/{token}` and `GET /p/docs/{token}/attachments/{id}`, without a session: they call `shares.resolve` / `shares.attachment` without `actor`, with per-IP rate limiting (60 requests per minute per IP) and the headers of section 9.8. Served on a host of their own (`JIKU_PUBLIC_URL`), separate from the application's, so they do not share cookies |
+| Documents panel | On the project, requirement and task pages of `web`; in `opus-web`, only `public` documents |
+| Viewer and editor | Markdown viewer in `web`; editing with lock and base version, same as the CLI; "Compartir" (share) button with the document's link management |
 
-### Alta del servicio
+### Service creation
 
-1. Machine user en Zitadel con Access Token Type JWT y rol `docs-service`.
-2. JSON key entregada al servicio; refresco en caliente del token.
-3. Creds del sentinel, URL de NATS y `NATS_INSTANCE`.
-4. Creación idempotente del stream `JIKU_DOCS_EVENTS` y del KV al arrancar.
-5. Manejo de `unknown_caller` al arrancar como señal de reconexión (guía de conectores, §3.4).
+1. Machine user in Zitadel with Access Token Type JWT and the `docs-service` role.
+2. JSON key given to the service; hot token refresh.
+3. Sentinel creds, NATS URL and `NATS_INSTANCE`.
+4. Idempotent creation of the `JIKU_DOCS_EVENTS` stream and of the KV on startup.
+5. Handling of `unknown_caller` on startup as a reconnection signal (connector guide, §3.4).
 
-### Seguridad
+### Security
 
-- Deny-by-default: sin regla no hay acceso; claves desconocidas en payloads son error.
-- Nada de contenido de documentos en logs ni en eventos; solo ids, versiones, `correlationId` y `errorCode`.
-- URLs prefirmadas de 300 s; nunca se guardan ni se envían en eventos.
-- Buckets sin acceso público, cifrado en reposo y credenciales solo en `jiku-docs`.
-- Las notificaciones por persona no revelan relaciones con proyectos que la persona no ve.
-- Los documentos no deben contener secretos. Un detector de patrones de credenciales (claves privadas, tokens con formatos conocidos) marca el documento y avisa a la persona en la respuesta del comando, sin bloquear el guardado.
-- Revocar el acceso de una persona en Zitadel tiene efecto en el bus en su próxima autenticación; para un corte inmediato se fuerza la reconexión, como con cualquier identidad de Jiku.
+- Deny-by-default: without a rule there is no access; unknown keys in payloads are an error.
+- No document content in logs or events; only ids, versions, `correlationId` and `errorCode`.
+- Presigned URLs of 300 s; never stored or sent in events.
+- Buckets without public access, encryption at rest and credentials only in `jiku-docs`.
+- Per-person notifications do not reveal relations with projects the person does not see.
+- Documents must not contain secrets. A credential pattern detector (private keys, tokens with known formats) flags the document and warns the person in the command response, without blocking the save.
+- Revoking a person's access in Zitadel takes effect on the bus at their next authentication; for an immediate cut, a reconnection is forced, as with any Jiku identity.
 
-### Observabilidad
+### Observability
 
-| Señal | Detalle |
+| Signal | Detail |
 | --- | --- |
-| Logs | Estructurados en JSON: método, caller, `correlationId`, duración, `errorCode` |
-| Métricas | Latencia y errores por método; antigüedad del changelog sin publicar; lag del indexador; locks activos; fan-out de notificaciones |
-| Alertas | Changelog sin publicar con más de 60 s; indexador con lag de más de 5 min; tasa de `upstream_unavailable` |
-| Compactación del historial | Log por ejecución (inicio y fin, documentos, versiones borradas, bytes liberados, duración, errores); log por documento solo con `--dry-run` o nivel debug. Métricas `docs_history_versions_pruned_total`, `docs_history_bytes_freed_total`, `docs_history_run_duration_seconds`, `docs_history_pruned_objects_pending`, más `docs_history_runs_total{result}`, `docs_history_last_success_timestamp_seconds` y `docs_history_pruned_objects_oldest_seconds`; `docs_trash_objects_moved_total{source}` cuenta los objetos movidos a la papelera (`compaction`, `orphans`, `deleted-documents`). Alertas: una ejecución que falla o no corre en 48 h; `pruned_objects` con filas de más de 24 h. Ver [`history-compaction-v1.md`](history-compaction-v1.md), sección 6 |
-| Salud | Endpoints de NATS micro (`nats micro info jiku-docs-commands`) |
+| Logs | Structured JSON: method, caller, `correlationId`, duration, `errorCode` |
+| Metrics | Latency and errors per method; age of the unpublished changelog; indexer lag; active locks; notification fan-out |
+| Alerts | Unpublished changelog older than 60 s; indexer lag over 5 min; rate of `upstream_unavailable` |
+| History compaction | Log per run (start and end, documents, versions deleted, bytes freed, duration, errors); per-document log only with `--dry-run` or debug level. Metrics `docs_history_versions_pruned_total`, `docs_history_bytes_freed_total`, `docs_history_run_duration_seconds`, `docs_history_pruned_objects_pending`, plus `docs_history_runs_total{result}`, `docs_history_last_success_timestamp_seconds` and `docs_history_pruned_objects_oldest_seconds`; `docs_trash_objects_moved_total{source}` counts the objects moved to the trash (`compaction`, `orphans`, `deleted-documents`). Alerts: a run that fails or does not run in 48 h; `pruned_objects` with rows older than 24 h. See [`history-compaction-v1.md`](history-compaction-v1.md), section 6 |
+| Health | NATS micro endpoints (`nats micro info jiku-docs-commands`) |
 
-### Respaldo
+### Backup
 
-Backup diario de `jiku_docs` con retención de 30 días. El bucket de contenido no tiene versionado: lo que borra el servicio queda en `papelera/` durante `DOCS_TRASH_RETENTION_DAYS` (default 7) y se recupera con `jiku-docs storage restore-from-trash --key <clave> [--version-row]` (README, "Recuperar una versión compactada por error"). El índice no se respalda; se regenera. Con la compactación del historial, restaurar un backup anterior a una compactación puede dejar filas de versiones cuyo objeto está en la papelera (se devuelve con `restore-from-trash`) o ya venció: el proceso de restauración debe verificar los objetos, devolver los que sigan en la papelera y descartar las filas sin objeto.
+Daily backup of `jiku_docs` with 30-day retention. The content bucket has no versioning: whatever the service deletes stays in `trash/` for `DOCS_TRASH_RETENTION_DAYS` (default 7) and is recovered with `jiku-docs storage restore-from-trash --key <key> [--version-row]` (README, "Recovering a version pruned by mistake"). The index is not backed up; it is regenerated. With history compaction, restoring a backup taken before a compaction can leave version rows whose object is in the trash (it is brought back with `restore-from-trash`) or already expired: the restore process must verify the objects, bring back those still in the trash and discard the rows without an object.
 
-## 13. Módulo opcional y autodescubrimiento
+## 13. Optional module and autodiscovery
 
-`jiku-docs` es un módulo opcional: Jiku funciona igual sin él y, cuando está instalado, lo descubre leyendo una clave en el bus. La primera versión es deliberadamente mínima: saber si el módulo está, cómo se llama su servicio para conectarse y si responde. Jiku no guarda ningún dato de documentación, así que instalar o desinstalar el módulo no deja nada roto.
+`jiku-docs` is an optional module: Jiku works the same without it and, when it is installed, discovers it by reading a key on the bus. The first version is deliberately minimal: knowing whether the module is there, what its service is called in order to connect, and whether it responds. Jiku stores no documentation data, so installing or uninstalling the module leaves nothing broken.
 
-### Registro
+### Registry
 
-El despliegue base de Jiku crea un bucket KV `JIKU_MODULES` (script idempotente, igual que el stream de eventos), aunque no haya módulos. Al arrancar, cuando ya puede atender, `jiku-docs` escribe su clave una vez:
+The base Jiku deployment creates a `JIKU_MODULES` KV bucket (idempotent script, like the events stream), even if there are no modules. On startup, once it can serve, `jiku-docs` writes its key once:
 
 ```jsonc
-// clave: docs
+// key: docs
 {
   "module": "docs",
   "serviceName": "jiku-docs",
@@ -1115,83 +1115,83 @@ El despliegue base de Jiku crea un bucket KV `JIKU_MODULES` (script idempotente,
 }
 ```
 
-| Campo | Para qué |
+| Field | Purpose |
 | --- | --- |
-| `module` | Nombre corto del módulo; es la clave en el KV |
-| `serviceName` | Prefijo de los servicios micro y subjects. Por convención, el módulo atiende `{serviceName}-commands` y `{serviceName}-queries` |
-| `protocol` | Versión de los contratos. Permite distinguir una incompatibilidad de una caída |
-| `registeredAt` | Informativo, para operación |
+| `module` | Short name of the module; it is the key in the KV |
+| `serviceName` | Prefix of the micro services and subjects. By convention, the module serves `{serviceName}-commands` and `{serviceName}-queries` |
+| `protocol` | Version of the contracts. Allows telling an incompatibility from an outage |
+| `registeredAt` | Informational, for operations |
 
-Un apagado normal no borra la clave (un reinicio no es una desinstalación). Para desinstalar: `jiku-docs module deregister` borra la clave y después se detiene el servicio.
+A normal shutdown does not delete the key (a restart is not an uninstallation). To uninstall: `jiku-docs module deregister` deletes the key and then the service is stopped.
 
-### Estado
+### Status
 
-La `api` lee la clave al arrancar y la observa con un watch. Para saber si el módulo responde usa el ping estándar de NATS micro (`$SRV.PING.{serviceName}-queries`) cada 30 s y cada vez que una llamada falla con `no responders`.
+The `api` reads the key on startup and watches it. To know whether the module responds it uses the standard NATS micro ping (`$SRV.PING.{serviceName}-queries`) every 30 s and every time a call fails with `no responders`.
 
-| Estado | Condición | api | Interfaz |
+| Status | Condition | api | Interface |
 | --- | --- | --- | --- |
-| `not_installed` | No existe la clave | Rutas `/docs/*` y `/p/docs/*` responden 404 `module_not_installed` | No aparece nada de documentación |
-| `incompatible` | `protocol` distinto del que soporta la `api` | Igual que `not_installed`, más un log de error | Igual que `not_installed` |
-| `unavailable` | Clave presente, ping sin respuesta | Rutas responden 503 `module_unavailable` | Menú y paneles visibles con un aviso; acciones deshabilitadas |
-| `available` | Clave presente, ping con respuesta | Rutas habilitadas | Todo habilitado |
+| `not_installed` | The key does not exist | `/docs/*` and `/p/docs/*` routes answer 404 `module_not_installed` | Nothing about documentation appears |
+| `incompatible` | `protocol` different from the one the `api` supports | Same as `not_installed`, plus an error log | Same as `not_installed` |
+| `unavailable` | Key present, ping without response | Routes answer 503 `module_unavailable` | Menu and panels visible with a notice; actions disabled |
+| `available` | Key present, ping with response | Routes enabled | Everything enabled |
 
-La web y opus-web consultan `GET /modules` (autenticado) al iniciar sesión, cada 60 s y al recibir `module_unavailable`. Responde `[{ module, status }]`.
+The web and opus-web query `GET /modules` (authenticated) on login, every 60 s and on receiving `module_unavailable`. It answers `[{ module, status }]`.
 
-### Funciones que dependen de configuración
+### Configuration-dependent features
 
-No se anuncian en el registro. Si una función del módulo no está configurada, el comando o la consulta responde un error específico y la interfaz lo muestra:
+They are not announced in the registry. If a module feature is not configured, the command or query answers a specific error and the interface shows it:
 
-| Función | Si no está configurada |
+| Feature | If not configured |
 | --- | --- |
-| Búsqueda semántica o híbrida (no incluida en la v1) | `documents.search` con `mode` distinto de `text` responde `semantic_search_not_configured` |
-| Adjuntos (sin bucket) | `attachments.*` responde `attachments_not_configured` |
-| Links compartidos (sin `JIKU_PUBLIC_URL` en la `api`) | La `api` responde 404 en `/p/docs/*` y la web oculta "Compartir" |
+| Semantic or hybrid search (not included in v1) | `documents.search` with `mode` other than `text` answers `semantic_search_not_configured` |
+| Attachments (no bucket) | `attachments.*` answers `attachments_not_configured` |
+| Share links (no `JIKU_PUBLIC_URL` in the `api`) | The `api` answers 404 on `/p/docs/*` and the web hides "Compartir" (share) |
 
-Si más adelante hace falta que la interfaz sepa esto de antemano, se agrega un campo opcional al registro sin romper la `v1`.
+If later the interface needs to know this in advance, an optional field is added to the registry without breaking `v1`.
 
-### Quién usa el registro
+### Who uses the registry
 
-| Parte | Comportamiento |
+| Part | Behavior |
 | --- | --- |
-| `api` | Watch del KV, ping, `GET /modules` y respuesta de las rutas según el estado |
-| Conectores y agentes | Leen la clave al arrancar; solo exponen herramientas de documentación si existe y el ping responde |
-| Daemon de sync | Si el módulo no responde, sigue offline y reconcilia al volver; si la clave desaparece, deja de sincronizar y avisa, sin borrar archivos |
-| `core` | Sin cambios |
+| `api` | KV watch, ping, `GET /modules` and route responses according to the status |
+| Connectors and agents | Read the key on startup; they only expose documentation tools if it exists and the ping responds |
+| Sync daemon | If the module does not respond, it stays offline and reconciles when it comes back; if the key disappears, it stops syncing and notifies, without deleting files |
+| `core` | Unchanged |
 
-### Permisos en el auth-callout
+### Auth-callout permissions
 
-| Rol | Permiso |
+| Role | Permission |
 | --- | --- |
-| `docs-service` | Escribir y leer solo la clave `docs` del KV `JIKU_MODULES` |
-| `api` | Leer y observar el KV; publicar `$SRV.PING.jiku-docs-queries` |
-| Conectores y personas | Leer y observar el KV |
+| `docs-service` | Write and read only the `docs` key of the `JIKU_MODULES` KV |
+| `api` | Read and watch the KV; publish `$SRV.PING.jiku-docs-queries` |
+| Connectors and people | Read and watch the KV |
 
-Leer y observar un KV implica permisos sobre `$JS.API.DIRECT.GET.KV_JIKU_MODULES.>` y para crear consumidores efímeros sobre `KV_JIKU_MODULES`; escribir una clave implica publicar en `$KV.JIKU_MODULES.<clave>`.
+Reading and watching a KV implies permissions on `$JS.API.DIRECT.GET.KV_JIKU_MODULES.>` and to create ephemeral consumers on `KV_JIKU_MODULES`; writing a key implies publishing on `$KV.JIKU_MODULES.<key>`.
 
-### Contrato
+### Contract
 
-`jiku-modules.yaml` describe el bucket y el esquema de la clave. Pertenece al repositorio de Jiku, porque lo usarán todos los módulos. En el contrato HTTP de la `api`, las rutas `/docs/*`, `/p/docs/*` y `/modules` se marcan con `x-jiku-module: docs` y documentan `module_not_installed` y `module_unavailable`.
+`jiku-modules.yaml` describes the bucket and the key schema. It belongs to the Jiku repository, because every module will use it. In the `api`'s HTTP contract, the `/docs/*`, `/p/docs/*` and `/modules` routes are marked with `x-jiku-module: docs` and document `module_not_installed` and `module_unavailable`.
 
-## 14. Contratos y referencias
+## 14. Contracts and references
 
-Los cuatro contratos AsyncAPI 3.0 se entregan junto con este documento y mandan sobre él ante cualquier diferencia de forma, igual que en Jiku:
+The four AsyncAPI 3.0 contracts are delivered together with this document and prevail over it on any difference of shape, just like in Jiku:
 
-| Archivo | Contenido |
+| File | Content |
 | --- | --- |
-| `jiku-docs-commands.yaml` | 18 comandos con payloads, respuestas, permiso requerido (`x-permission`) y errores posibles (`x-error-codes`) |
-| `jiku-docs-queries.yaml` | 13 consultas con filtros, órdenes, campos, includes y respuestas paginadas |
-| `jiku-docs-events.yaml` | Stream `JIKU_DOCS_EVENTS`, notificaciones `docs-notify` y sus sobres |
+| `jiku-docs-commands.yaml` | 19 commands with payloads, responses, required permission (`x-permission`) and possible errors (`x-error-codes`) |
+| `jiku-docs-queries.yaml` | 14 queries with filters, sorts, fields, includes and paginated responses |
+| `jiku-docs-events.yaml` | `JIKU_DOCS_EVENTS` stream, `docs-notify` notifications and their envelopes |
 
-El cuarto contrato, `jiku-modules.yaml`, describe el registro de módulos (sección 13): el bucket `JIKU_MODULES`, el esquema de la clave y la convención de nombres de servicio. Va en `docs/apis/` del repositorio de Jiku, porque lo comparten todos los módulos.
+The fourth contract, `jiku-modules.yaml`, describes the module registry (section 13): the `JIKU_MODULES` bucket, the key schema and the service naming convention. It goes in `docs/apis/` of the Jiku repository, because all modules share it.
 
-Se sugiere ubicarlos en `docs/apis/` del repositorio de `jiku-docs` y validarlos en CI, como los de `core`.
+It is suggested to place them in `docs/apis/` of the `jiku-docs` repository and validate them in CI, like those of `core`.
 
-### Referencias
+### References
 
-- [Compactación del historial de versiones](history-compaction-v1.md): política de retención del historial; manda sobre este documento donde lo contradice.
+- [Version history compaction](history-compaction-v1.md): history retention policy; it prevails over this document where it contradicts it.
 
-- [Guía para construir un conector de Jiku (v1.6.0)](https://github.com/gravadigital/jiku/tree/v1.6.0)
-- [Contratos de core: `docs/apis/`](https://github.com/gravadigital/jiku/tree/v1.6.0/docs/apis)
-- [Política del auth-callout](https://github.com/gravadigital/jiku/blob/v1.6.0/deploy/nats/auth-callout/README.md)
-- [Implementación de referencia de subjects e inbox](https://github.com/gravadigital/jiku/blob/v1.6.0/packages/nats-protocol/src/index.ts)
-- [Consumidor de eventos de referencia](https://github.com/gravadigital/jiku/blob/v1.6.0/core/tests/tools/events-test-consumer.ts)
+- [Guide to building a Jiku connector (v1.6.0)](https://github.com/gravadigital/jiku/tree/v1.6.0)
+- [core contracts: `docs/apis/`](https://github.com/gravadigital/jiku/tree/v1.6.0/docs/apis)
+- [Auth-callout policy](https://github.com/gravadigital/jiku/blob/v1.6.0/deploy/nats/auth-callout/README.md)
+- [Reference implementation of subjects and inbox](https://github.com/gravadigital/jiku/blob/v1.6.0/packages/nats-protocol/src/index.ts)
+- [Reference event consumer](https://github.com/gravadigital/jiku/blob/v1.6.0/core/tests/tools/events-test-consumer.ts)

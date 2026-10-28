@@ -1,162 +1,164 @@
-# jiku-docs: decisiones de integración (addendum a la especificación v1)
+# jiku-docs: integration decisions (addendum to the v1 specification)
 
-Fecha: 2026-10-24. Este documento **manda sobre `specification-v1.md`** donde se contradicen. Los
-contratos de `docs/apis/` siguen siendo la fuente de verdad de forma; donde una decisión de acá cambie
-una forma, el repo `jiku-docs` actualiza el contrato y lo anota en su CHANGELOG.
+Date: 2026-10-24. This document **overrides `specification-v1.md`** wherever they contradict each other. The
+contracts in `docs/apis/` remain the source of truth for shape; where a decision here changes a shape, the
+`jiku-docs` repo updates the contract and records it in its CHANGELOG.
 
-Repos involucrados (rutas locales):
+Repos involved (local paths):
 
-| Repo | Ruta | Rama de trabajo |
+| Repo | Path | Working branch |
 | --- | --- | --- |
-| jiku-docs (servicio nuevo, Go) | `/home/lautaro/Documentos/proyectos/interno/gestor/conectores/jiku-docs` | `dev` |
-| jiku (monorepo, grava-workflow) | `/home/lautaro/Documentos/proyectos/interno/gestor/jiku` | `feat/jiku-docs` (desde `dev`) |
-| jiku-go (librería + CLI, **público**) | `/home/lautaro/Documentos/proyectos/interno/gestor/jiku-go` | `feat/jiku-docs` (desde `dev`) |
+| jiku-docs (new service, Go) | `/home/lautaro/Documentos/proyectos/interno/gestor/conectores/jiku-docs` | `dev` |
+| jiku (monorepo, grava-workflow) | `/home/lautaro/Documentos/proyectos/interno/gestor/jiku` | `feat/jiku-docs` (from `dev`) |
+| jiku-go (library + CLI, **public**) | `/home/lautaro/Documentos/proyectos/interno/gestor/jiku-go` | `feat/jiku-docs` (from `dev`) |
 
-Nadie hace `git push`. Las credenciales viven en `jiku-docs/.local/` (ignorada) y nunca se commitean ni se
-copian a otro repo.
+Nobody runs `git push`. Credentials live in `jiku-docs/.local/` (ignored) and are never committed or copied
+to another repo.
 
-## D-1. Identidad del servicio: rol `docs` + `internal-app`
+## D-1. Service identity: `docs` role + `internal-app`
 
-- El machine user `jiku_docs` (userId `396604660191854594`) tiene **dos roles** en Zitadel: `internal-app`
-  y `docs`.
-- **core no cambia por esto.** Para core es un `internal-app` más: clase `connector` (sin recorte de filas),
-  `identity_type = service`, `queries: ALL`, `commands: ALL`. El rol `docs` es desconocido para core y se
-  ignora (verificar que un rol desconocido en `users.roles` no rompa `authorize-caller`, `caller-class` ni
-  `identity-type`; si rompe, se corrige en jiku con test).
-- **auth-callout:** nueva regla `match: docs` **por encima** de `internal-app` en `rules.yaml`, con plantilla
-  nueva `templates/docs.yaml` = permisos de `connector.yaml` (para llamar a core) **más** los de servidor:
-  - sub `{instance}.*.jiku-docs-commands.v1.>` y `{instance}.*.jiku-docs-queries.v1.>` (queue group), `$SRV.>`;
-  - `response` como `core.yaml`;
-  - pub `{instance}.docs-events.v1.>` y `{instance}.*.docs-notify.v1.>`;
-  - administrar el stream `JIKU_DOCS_EVENTS` (`$JS.API.STREAM.*.JIKU_DOCS_EVENTS`, etc.);
-  - escribir y leer solo la clave `docs` de `KV_JIKU_MODULES`.
-  Verificar cómo matchea el callout con varios roles (primera regla que coincide con cualquiera de los roles).
-- Donde la especificación dice `docs-service`, leer `docs`.
+- The machine user `jiku_docs` (userId `396604660191854594`) has **two roles** in Zitadel: `internal-app`
+  and `docs`.
+- **core does not change because of this.** For core it is just another `internal-app`: class `connector` (no
+  row trimming), `identity_type = service`, `queries: ALL`, `commands: ALL`. The `docs` role is unknown to core
+  and is ignored (verify that an unknown role in `users.roles` does not break `authorize-caller`, `caller-class`
+  or `identity-type`; if it does, it is fixed in jiku with a test).
+- **auth-callout:** new rule `match: docs` **above** `internal-app` in `rules.yaml`, with a new template
+  `templates/docs.yaml` = the permissions of `connector.yaml` (to call core) **plus** the server ones:
+  - sub `{instance}.*.jiku-docs-commands.v1.>` and `{instance}.*.jiku-docs-queries.v1.>` (queue group), `$SRV.>`;
+  - `response` as in `core.yaml`;
+  - pub `{instance}.docs-events.v1.>` and `{instance}.*.docs-notify.v1.>`;
+  - manage the `JIKU_DOCS_EVENTS` stream (`$JS.API.STREAM.*.JIKU_DOCS_EVENTS`, etc.);
+  - write and read only the `docs` key of `KV_JIKU_MODULES`.
+  Verify how the callout matches with several roles (first rule that matches any of the roles).
+- Where the specification says `docs-service`, read `docs`.
 
-## D-2. Quién puede hablar con jiku-docs
+## D-2. Who can talk to jiku-docs
 
-- `connector.yaml` (`internal-app`: la api y cualquier conector) suma: pub en
-  `{instance}.{user_id}.jiku-docs-commands.v1.>` y `.jiku-docs-queries.v1.>`, consumir `JIKU_DOCS_EVENTS` con
-  durable propio, leer/observar `KV_JIKU_MODULES` y `$SRV.PING.>` (o `$SRV.PING.jiku-docs-queries`). Aceptado:
-  cualquier `internal-app` es clase `service` en jiku-docs y lee todo.
-- `person-internal.yaml`: pub comandos y consultas de docs bajo su `user_id`, sub
-  `{instance}.{user_id}.docs-notify.v1.>`, leer/observar el KV.
-- `person-external.yaml`: solo consultas de docs bajo su `user_id`, leer/observar el KV. Sin notify.
-- Permisos exactos de lectura/observación del KV que necesita jiku-go (lo verificó su implementación):
+- `connector.yaml` (`internal-app`: the api and any connector) adds: pub on
+  `{instance}.{user_id}.jiku-docs-commands.v1.>` and `.jiku-docs-queries.v1.>`, consume `JIKU_DOCS_EVENTS` with
+  its own durable, read/watch `KV_JIKU_MODULES` and `$SRV.PING.>` (or `$SRV.PING.jiku-docs-queries`). Accepted:
+  any `internal-app` is class `service` in jiku-docs and reads everything.
+- `person-internal.yaml`: pub docs commands and queries under its `user_id`, sub
+  `{instance}.{user_id}.docs-notify.v1.>`, read/watch the KV.
+- `person-external.yaml`: only docs queries under its `user_id`, read/watch the KV. No notify.
+- Exact KV read/watch permissions that jiku-go needs (verified by its implementation):
   `$JS.API.STREAM.INFO.KV_JIKU_MODULES`, `$JS.API.DIRECT.GET.KV_JIKU_MODULES.$KV.JIKU_MODULES.>`,
-  `$JS.API.CONSUMER.CREATE.KV_JIKU_MODULES` y `$JS.API.CONSUMER.CREATE.KV_JIKU_MODULES.>`,
-  `$JS.FC.KV_JIKU_MODULES.>` (pub) y `$SRV.PING.jiku-docs-queries` (request). Van en `connector.yaml`,
-  `person-internal.yaml`, `person-external.yaml` y `docs.yaml`.
-- **La api se distingue por `user-id`**: jiku-docs recibe `JIKU_API_USER_ID` (local: `390014149763006466`,
-  el `userId` de `jiku/local/api-su.json`). Solo ese caller puede mandar `actor` y usar `shares.resolve` /
+  `$JS.API.CONSUMER.CREATE.KV_JIKU_MODULES` and `$JS.API.CONSUMER.CREATE.KV_JIKU_MODULES.>`,
+  `$JS.FC.KV_JIKU_MODULES.>` (pub) and `$SRV.PING.jiku-docs-queries` (request). They go in `connector.yaml`,
+  `person-internal.yaml`, `person-external.yaml` and `docs.yaml`.
+- **The api is identified by `user-id`**: jiku-docs receives `JIKU_API_USER_ID` (local: `390014149763006466`,
+  the `userId` of `jiku/local/api-su.json`). Only that caller can send `actor` and use `shares.resolve` /
   `shares.attachment`.
 
-## D-3. Adjuntos: servicio de archivos de core (no hay bucket de adjuntos en jiku-docs)
+## D-3. Attachments: core's file service (there is no attachments bucket in jiku-docs)
 
-- jiku-docs **no** tiene bucket ni credenciales de adjuntos. Los comandos `attachments.*` de jiku-docs mantienen
-  su forma en el contrato, pero por dentro delegan en core, actuando como el servicio `jiku_docs` (sin `actor`):
-  - `attachments.request-upload` → verifica `write` en el documento → `files.request-upload` en core → guarda
-    `attachments(id, document_id, core_file_id, …, status=pending)` → responde `uploadUrl` de core.
-  - `attachments.{id}.confirm` → pide `files.{fileId}.request-download` a core, descarga el objeto y verifica el
-    SHA-256 declarado → `ready`. (core no verifica bytes.)
-  - `attachments.{id}.request-download` / `shares.attachment` → verifica permisos en jiku-docs →
-    `files.{fileId}.request-download` en core → devuelve la URL prefirmada.
-  - `attachments.{id}.delete` → lógico en jiku-docs.
-- Política de tipos y tamaños: la de core (`system_settings`); jiku-docs no duplica la allowlist y traduce los
-  errores de core a `attachment_type_not_allowed` / `attachment_too_large`. Core caído → `upstream_unavailable`.
-- La columna `attachments.storage_key` pasa a `core_file_id`. `attachments_not_configured` no se emite en v1
-  (queda en el catálogo por compatibilidad).
-- **A verificar en jiku:** que core no purgue `files` sin vincular a una entidad de Jiku (los de docs nunca se
-  vinculan a requisitos/tareas). Si existe esa purga o la política lo impide, el REQ de jiku incluye el ajuste
-  mínimo en core (p. ej. marcar el archivo como propiedad de un servicio externo).
+- jiku-docs has **no** attachments bucket or credentials. The jiku-docs `attachments.*` commands keep their shape
+  in the contract, but internally they delegate to core, acting as the `jiku_docs` service (without `actor`):
+  - `attachments.request-upload` → checks `write` on the document → `files.request-upload` in core → stores
+    `attachments(id, document_id, core_file_id, …, status=pending)` → returns core's `uploadUrl`.
+  - `attachments.{id}.confirm` → asks core for `files.{fileId}.request-download`, downloads the object and checks
+    the declared SHA-256 → `ready`. (core does not verify bytes.)
+  - `attachments.{id}.request-download` / `shares.attachment` → checks permissions in jiku-docs →
+    `files.{fileId}.request-download` in core → returns the presigned URL.
+  - `attachments.{id}.delete` → logical, in jiku-docs.
+- Type and size policy: core's (`system_settings`); jiku-docs does not duplicate the allowlist and translates
+  core's errors to `attachment_type_not_allowed` / `attachment_too_large`. Core down → `upstream_unavailable`.
+- The `attachments.storage_key` column becomes `core_file_id`. `attachments_not_configured` is not emitted in v1
+  (it stays in the catalog for compatibility).
+- **To verify in jiku:** that core does not purge `files` not linked to a Jiku entity (the docs ones are never
+  linked to requirements/tasks). If such a purge exists or the policy prevents it, the jiku REQ includes the
+  minimal adjustment in core (e.g. marking the file as owned by an external service).
 
-## D-4. Storage de contenido: S3 propio (DigitalOcean Spaces en prod, MinIO en local)
+## D-4. Content storage: own S3 (DigitalOcean Spaces in prod, MinIO locally)
 
-- Un solo bucket propio de jiku-docs para el contenido versionado y las subidas grandes
-  (`docs/<documentId>/<version>-<sha256>.md`, `uploads/<contentUploadId>`). En prod es un Space de
-  DigitalOcean con credenciales propias; en local, bucket `jiku-docs-content` en el **MinIO del stack de jiku**
-  (`http://172.28.0.1:9000` desde contenedores / `http://localhost:9000` desde el host, `jiku-local` /
-  `jiku-local-secret`, path-style). El compose de jiku-docs crea el bucket de forma idempotente.
+- A single bucket owned by jiku-docs for versioned content and large uploads
+  (`docs/<documentId>/<version>-<sha256>.md`, `uploads/<contentUploadId>`). In prod it is a DigitalOcean Space
+  with its own credentials; locally, the `jiku-docs-content` bucket in the **MinIO of the jiku stack**
+  (`http://172.28.0.1:9000` from containers / `http://localhost:9000` from the host, `jiku-local` /
+  `jiku-local-secret`, path-style). The jiku-docs compose creates the bucket idempotently.
 
-## D-5. Enlaces a adjuntos y ruta pública
+## D-5. Attachment links and public route
 
-- La api valida Bearer tokens; el navegador no le habla directo. Por eso el **link estable** que se pega en el
-  markdown es relativo a la web: `{JIKU_WEB_URL}/docs/attachments/{id}`. La web lo atiende con un route handler
-  (sesión → api `GET /api/docs/attachments/{id}` con Bearer → reenvía el 302), igual que
-  `web/src/app/api/attachments/[id]/download/route.ts`. Los visores de web y opus-web reconocen ese patrón (y el
-  path relativo `/docs/attachments/{id}`) y lo reescriben a su propio proxy. jiku-docs arma el `link` con
+- The api validates Bearer tokens; the browser does not talk to it directly. That is why the **stable link** pasted
+  into the markdown is relative to the web: `{JIKU_WEB_URL}/docs/attachments/{id}`. The web serves it with a route
+  handler (session → api `GET /api/docs/attachments/{id}` with Bearer → forwards the 302), just like
+  `web/src/app/api/attachments/[id]/download/route.ts`. The web and opus-web viewers recognise that pattern (and
+  the relative path `/docs/attachments/{id}`) and rewrite it to their own proxy. jiku-docs builds the `link` with
   `JIKU_WEB_URL`.
-- Links compartidos: `url = {JIKU_PUBLIC_URL}/p/docs/{token}`; jiku-docs recibe `JIKU_PUBLIC_URL`. La ruta pública
-  la sirve la api sin sesión (sección 9.8 de la especificación). En local, `JIKU_PUBLIC_URL=http://127.0.0.1:3100`
-  (host distinto de `localhost`, sin cookies compartidas). Si en algún deploy la api no es pública, se documenta
-  cómo exponer solo `/p/docs/*`.
+- Share links: `url = {JIKU_PUBLIC_URL}/p/docs/{token}`; jiku-docs receives `JIKU_PUBLIC_URL`. The public route is
+  served by the api without a session (section 9.8 of the specification). Locally,
+  `JIKU_PUBLIC_URL=http://127.0.0.1:3100` (a host different from `localhost`, no shared cookies). If in some
+  deployment the api is not public, it is documented how to expose only `/p/docs/*`.
 
-## D-6. Registro de módulos
+## D-6. Module registry
 
-- jiku crea el KV `JIKU_MODULES` de forma idempotente (script como `create-events-stream.sh`, invocado por
-  `deploy/local.sh up`) y lo documenta en `docs/apis/jiku-modules.yaml` (copiado de este repo).
-- jiku-docs solo escribe su clave `docs` al arrancar; `jiku-docs module deregister` la borra.
-- jiku-docs crea su stream `JIKU_DOCS_EVENTS` al arrancar (idempotente).
+- jiku creates the `JIKU_MODULES` KV idempotently (a script like `create-events-stream.sh`, invoked by
+  `deploy/local.sh up`) and documents it in `docs/apis/jiku-modules.yaml` (copied from this repo).
+- jiku-docs only writes its `docs` key on startup; `jiku-docs module deregister` deletes it.
+- jiku-docs creates its `JIKU_DOCS_EVENTS` stream on startup (idempotent).
 
-## D-7. Despliegue local de jiku-docs
+## D-7. Local deployment of jiku-docs
 
-- jiku-docs tiene su propio `docker-compose.local.yml` (Postgres 16 propio + el servicio + un init que crea el
-  bucket) unido a la red externa del stack de jiku (`jiku-local_jiku`, verificar nombre real). No modifica el
-  compose de jiku.
-- Variables (nombres finales los decide el repo jiku-docs, documentados en su `.env.dist`): instancia NATS
-  (`dev`), URL de NATS, creds del sentinel (`jiku/deploy/nats/creds/sentinel-client.creds`), key del machine user
-  en base64 (`DOCS_SERVICE_USER_KEY_B64`), issuer y project id de Zitadel (los de `jiku/deploy/.env`),
-  `JIKU_API_USER_ID`, `JIKU_WEB_URL`, `JIKU_PUBLIC_URL`, S3 de contenido, DSN de Postgres.
-- CI de jiku-docs: tests, build de imagen Docker y publicación en Docker Hub (`gravadigital/jiku-docs`), con el
-  mismo esquema que `jiku/.github/workflows/{ci,dev-images,release}.yml`. El repo de GitHub todavía no existe:
-  se deja listo y se valida localmente (tests + `docker build`).
+- jiku-docs has its own `docker-compose.local.yml` (its own Postgres 16 + the service + an init that creates the
+  bucket) attached to the external network of the jiku stack (`jiku-local_jiku`, verify the real name). It does
+  not modify the jiku compose.
+- Variables (final names are decided by the jiku-docs repo, documented in its `.env.dist`): NATS instance
+  (`dev`), NATS URL, sentinel creds (`jiku/deploy/nats/creds/sentinel-client.creds`), machine user key in base64
+  (`DOCS_SERVICE_USER_KEY_B64`), Zitadel issuer and project id (those in `jiku/deploy/.env`),
+  `JIKU_API_USER_ID`, `JIKU_WEB_URL`, `JIKU_PUBLIC_URL`, content S3, Postgres DSN.
+- jiku-docs CI: tests, Docker image build and publication to Docker Hub (`gravadigital/jiku-docs`), with the
+  same scheme as `jiku/.github/workflows/{ci,dev-images,release}.yml`. The GitHub repo does not exist yet: it is
+  left ready and validated locally (tests + `docker build`).
 
-## D-8. Usuarios de prueba (keys en `jiku-docs/.local/`)
+## D-8. Test users (keys in `jiku-docs/.local/`)
 
-| Archivo | Rol | userId |
+| File | Role | userId |
 | --- | --- | --- |
 | `jiku_docs.service_user.json` | `internal-app` + `docs` | `396604660191854594` |
 | `testing_admin.service_user.json` | `admin` | `396554146460729346` |
 | `testing_user.service_user.json` | `user` | `396554027241832450` |
 | `testing_external_user.service_user.json` | `external-user` | `396554218317545474` |
 
-## D-9. Importación desde HedgeDoc
+## D-9. Import from HedgeDoc
 
-- Dump MariaDB en `jiku-docs/.local/codimd-2026-10-24.sql` (HedgeDoc 1.10, tablas `Notes`, `Users`, …). Las
-  imágenes están en un Space público (`grava-internal-01/docs-grava-io`) y se bajan por URL.
-- El importador vive en jiku-docs (`jiku-docs import hedgedoc` o script Go): lee una base MariaDB local cargada con
-  el dump, aplica una planilla de mapeo (CSV nota → carpeta; sin asignar → `/importado/`, solo admin), crea los
-  documentos con `documents.new` como servicio, sube las imágenes como adjuntos (D-3), reescribe los enlaces y
-  emite un informe de notas con posibles secretos. El dump nunca se commitea ni se copia fuera de `.local/`.
+- MariaDB dump in `jiku-docs/.local/codimd-2026-10-24.sql` (HedgeDoc 1.10, tables `Notes`, `Users`, …). The
+  images are in a public Space (`grava-internal-01/docs-grava-io`) and are downloaded by URL.
+- The importer lives in jiku-docs (`jiku-docs import hedgedoc` or a Go script): it reads a local MariaDB database
+  loaded with the dump, applies a mapping sheet (CSV note → folder; unassigned → `/imported/`, admin only),
+  creates the documents with `documents.new` as a service, uploads the images as attachments (D-3), rewrites the
+  links and emits a report of notes with possible secrets. The dump is never committed or copied outside
+  `.local/`.
 
-## D-10. Roles e identidad del caller desde core (seguimiento en jiku)
+## D-10. Caller roles and identity from core (follow-up in jiku)
 
-- jiku-docs clasifica al caller con `users.list {filter:{id}, include:["roles","identityType"]}`. Hoy
-  `core/src/queries/users/users-spec.ts` excluye a propósito `roles` e `identityType` (CA-7: un externo podría
-  enumerar quién es admin).
-- Decisión: core los declara **incluibles solo para la clase `connector`** (roles `internal-app`, y por lo tanto
-  `docs`). Para personas internas y externas siguen sin existir (`invalid_fields`), así CA-7 se mantiene. Ni filtro
-  ni orden, solo `include`. Test que pruebe ambos lados.
-- Va como REQ-017 de seguimiento en jiku. Los enlaces entre documentos usan la ruta que ya sirve la web,
-  `{JIKU_WEB_URL}/docs/{id}`; el importador de HedgeDoc los reescribe a ese formato.
+- jiku-docs classifies the caller with `users.list {filter:{id}, include:["roles","identityType"]}`. Today
+  `core/src/queries/users/users-spec.ts` deliberately excludes `roles` and `identityType` (CA-7: an external
+  person could enumerate who is an admin).
+- Decision: core declares them **includable only for the `connector` class** (roles `internal-app`, and therefore
+  `docs`). For internal and external people they still do not exist (`invalid_fields`), so CA-7 holds. No filter
+  and no sort, only `include`. A test that covers both sides.
+- It goes as follow-up REQ-017 in jiku. Links between documents use the route the web already serves,
+  `{JIKU_WEB_URL}/docs/{id}`; the HedgeDoc importer rewrites them to that format.
 
-## D-11. La api manda el `actor` completo y jiku-docs usa sus roles
+## D-11. The api sends the full `actor` and jiku-docs uses its roles
 
-- Problema (prueba e2e en navegador): core actualiza los roles de una persona en `users` solo cuando esa persona ejecuta
-  un comando de core o se conecta directo a NATS. Un usuario web que solo lee queda con roles viejos o sin fila, y
-  jiku-docs le responde `caller_not_authorized` / `unknown_caller`.
-- Decisión: la api manda a jiku-docs el mismo `actor` que manda a core (`buildActor`):
-  `{ id, roles, name?, username?, email? }`, con `roles` tomados del token web ya verificado. Solo la api puede mandar
-  `actor` (se identifica por `JIKU_API_USER_ID`). jiku-docs, cuando el caller es la api y el `actor` trae `roles`,
-  clasifica a la persona con esos roles (`admin`/`user` → `person-internal`, `external-user` → `person-external`,
-  otro → sin acceso) y no consulta `users.list` para ese dato. Los `project-permissions` del externo se siguen
-  consultando a core.
-- Contrato: el esquema `Actor` de los tres contratos de jiku-docs pasa a `{ id (req), roles (req, array de string),
+- Problem (end-to-end browser test): core updates a person's roles in `users` only when that person runs a core
+  command or connects directly to NATS. A web user who only reads is left with stale roles or no row, and
+  jiku-docs answers `caller_not_authorized` / `unknown_caller`.
+- Decision: the api sends jiku-docs the same `actor` it sends to core (`buildActor`):
+  `{ id, roles, name?, username?, email? }`, with `roles` taken from the already verified web token. Only the api
+  can send `actor` (it is identified by `JIKU_API_USER_ID`). When the caller is the api and the `actor` carries
+  `roles`, jiku-docs classifies the person with those roles (`admin`/`user` → `person-internal`, `external-user` →
+  `person-external`, anything else → no access) and does not query `users.list` for that data. The
+  `project-permissions` of an external person are still queried from core.
+- Contract: the `Actor` schema of the three jiku-docs contracts becomes `{ id (req), roles (req, array of string),
   name?, username?, email? }`, `additionalProperties: false`.
-  En `jiku-docs-events.yaml` el esquema `Actor` es otro: describe al autor de un evento (`{ id, name, via }`), no lo
-  que manda la api, y no cambia; el `actor` de entrada solo existe en comandos y consultas.
-- La api **no** acepta tokens de machine users (decisión del dueño, 2026-10-25): las pruebas HTTP se hacen con
-  usuarios humanos vía navegador.
-- Además: un `person-external` recibe el contenido de `documents.get` **sin frontmatter** (contiene ids internos de
-  requisitos y tareas); opus-web muestra como texto los enlaces a documentos (`/docs/{id}`) en lugar de enlazar a la
-  web interna.
+  In `jiku-docs-events.yaml` the `Actor` schema is a different one: it describes the author of an event
+  (`{ id, name, via }`), not what the api sends, and it does not change; the input `actor` only exists in commands
+  and queries.
+- The api does **not** accept machine user tokens (owner's decision, 2026-10-25): HTTP tests are done with human
+  users through the browser.
+- Also: a `person-external` receives the content of `documents.get` **without frontmatter** (it contains internal
+  ids of requirements and tasks); opus-web shows links to documents (`/docs/{id}`) as text instead of linking to
+  the internal web.

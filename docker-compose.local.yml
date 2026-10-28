@@ -1,15 +1,15 @@
-# jiku-docs junto al stack local de Jiku (D-7).
+# jiku-docs next to Jiku's local stack (D-7).
 #
-# Requisitos: el stack de Jiku levantado (jiku/deploy/local.sh up), que crea la red
-# `jiku-local_jiku`, NATS con el auth-callout, MinIO y el KV JIKU_MODULES. Este compose no toca
-# nada de Jiku: suma un Postgres propio, un init que crea el bucket de contenido en el MinIO de
-# Jiku y el servicio.
+# Requirements: Jiku's stack running (jiku/deploy/local.sh up), which creates the
+# `jiku-local_jiku` network, NATS with the auth-callout, MinIO and the JIKU_MODULES KV. This compose
+# touches nothing of Jiku: it adds its own Postgres, an init that creates the content bucket in
+# Jiku's MinIO, and the service.
 #
-#   cp .env.dist .env   # completar la key del machine user y DOCS_SECRET_KEY
+#   cp .env.dist .env   # fill in the machine user key and DOCS_SECRET_KEY
 #   docker compose -f docker-compose.local.yml up -d --build
 #
-# Puertos en el host (sin chocar con Jiku: 5432, 4222, 9000, 3000-3100):
-#   5442 -> Postgres de jiku-docs, 8090 -> /healthz, /readyz, /metrics
+# Host ports (without clashing with Jiku: 5432, 4222, 9000, 3000-3100):
+#   5442 -> jiku-docs Postgres, 8090 -> /healthz, /readyz, /metrics
 
 name: jiku-docs-local
 
@@ -20,7 +20,7 @@ services:
     environment:
       - POSTGRES_DB=jiku_docs
       - POSTGRES_USER=jiku_docs
-      - POSTGRES_PASSWORD=${DOCS_DATABASE_PASSWORD:?definí DOCS_DATABASE_PASSWORD en .env}
+      - POSTGRES_PASSWORD=${DOCS_DATABASE_PASSWORD:?set DOCS_DATABASE_PASSWORD in .env}
     ports:
       - "127.0.0.1:5442:5432"
     volumes:
@@ -33,8 +33,8 @@ services:
     networks:
       - jiku
 
-  # Crea (idempotente) el bucket jiku-docs-content en el MinIO de Jiku, sin versionado (lo suspende
-  # si estaba activado), con las reglas de ciclo de vida de uploads/ y papelera/.
+  # Creates (idempotently) the jiku-docs-content bucket in Jiku's MinIO, without versioning (it
+  # suspends it if it was enabled), with the lifecycle rules for uploads/ and trash/.
   docs-storage-init:
     build:
       context: .
@@ -51,7 +51,7 @@ services:
   jiku-docs:
     image: gravadigital/jiku-docs:local
     container_name: jiku-docs-local
-    # Corre con el uid del host: las creds del sentinel de Jiku son 0600 del usuario que las generó.
+    # Runs with the host uid: Jiku's sentinel creds are 0600, owned by the user who generated them.
     user: "${LOCAL_UID:-1000}:${LOCAL_GID:-1000}"
     env_file: .env
     environment:

@@ -1,168 +1,170 @@
-# Migración desde HedgeDoc: definiciones, estado y preguntas abiertas
+# Migration from HedgeDoc: definitions, status and open questions
 
-Estado al 2026-10-25. Documento de trabajo: reúne lo definido hasta ahora y lo que falta decidir antes de la
-migración real. No contiene contenido de notas; los datos (dump, planillas, informes) viven en `.local/`, que
-no se versiona.
+Status as of 2026-10-25. Working document: it gathers what has been defined so far and what remains to be decided before
+the real migration. It contains no note content; the data (dump, sheets, reports) live in `.local/`, which
+is not versioned.
 
-## 1. Origen
+## 1. Source
 
-| Dato | Valor |
+| Item | Value |
 | --- | --- |
-| Instancia | HedgeDoc 1.10 (`docs.grava.io`), dockerizado en una VM. Deploy: repo `herramientas-externas/codimd` |
-| Base | MariaDB `codimd`. Contenido de cada nota en la tabla `Notes`; autores en `Users` |
-| Imágenes | Space de DigitalOcean `grava-internal-01`, carpeta `docs-grava-io`, **con acceso público** (`CMD_S3_PUBLIC_FILES=true`) |
-| Acceso | Anónimo habilitado (`CMD_ALLOW_ANONYMOUS=true`): hasta hoy todas las notas fueron públicas |
-| Export usado | `mysqldump` completo del 2026-10-24 (`.local/codimd-2026-10-24.sql`, ~377 MB) |
+| Instance | HedgeDoc 1.10 (`docs.grava.io`), dockerised on a VM. Deploy: repo `herramientas-externas/codimd` |
+| Database | MariaDB `codimd`. Content of each note in the `Notes` table; authors in `Users` |
+| Images | DigitalOcean Space `grava-internal-01`, folder `docs-grava-io`, **with public access** (`CMD_S3_PUBLIC_FILES=true`) |
+| Access | Anonymous enabled (`CMD_ALLOW_ANONYMOUS=true`): until today all notes were public |
+| Export used | Full `mysqldump` of 2026-10-24 (`.local/codimd-2026-10-24.sql`, ~377 MB) |
 
-Comando para generar el export en la VM:
+Command to generate the export on the VM:
 
 ```sh
 docker exec codimd-database sh -c 'mysqldump -u root -p"$MYSQL_ROOT_PASSWORD" codimd' > codimd-$(date +%F).sql
 ```
 
-## 2. Volumen
+## 2. Volume
 
-| Conjunto | Notas |
+| Set | Notes |
 | --- | --- |
-| Notas totales en el dump | ~12.000 |
-| Notas anónimas (sin dueño) | ~10.290; la muestra revisada es casi toda spam de casinos. Quedan fuera salvo `--include-anonymous` |
-| Notas de usuarios (alcance actual) | 1.709 |
-| Imágenes referenciadas por esas notas | 1.880 (1 da 404 en el Space de origen) |
-| Notas con posibles credenciales | 104 |
-| Enlaces entre notas sin resolver | 13 |
+| Total notes in the dump | ~12,000 |
+| Anonymous notes (no owner) | ~10,290; the sample reviewed is almost all casino spam. Left out unless `--include-anonymous` |
+| User notes (current scope) | 1,709 |
+| Images referenced by those notes | 1,880 (1 returns 404 in the source Space) |
+| Notes with possible credentials | 104 |
+| Unresolved links between notes | 13 |
 
-## 3. Cómo funciona el importador (hoy)
+## 3. How the importer works (today)
 
-Subcomando `jiku-docs import hedgedoc` (código en `internal/importer/hedgedoc`; uso en el README).
+Subcommand `jiku-docs import hedgedoc` (code in `internal/importer/hedgedoc`; usage in the README).
 
-1. Lee una MariaDB cargada con el dump (`HEDGEDOC_MYSQL_DSN`).
-2. `--export-mapping <csv>` genera la planilla base, con una fila por nota.
-3. Una planilla de mapeo decide, nota por nota:
-   - `folder`: carpeta destino;
-   - `fileName`: nombre de archivo;
-   - `skip`: no importar la nota.
+1. It reads a MariaDB loaded with the dump (`HEDGEDOC_MYSQL_DSN`).
+2. `--export-mapping <csv>` generates the base sheet, with one row per note.
+3. A mapping sheet decides, note by note:
+   - `folder`: destination folder;
+   - `fileName`: file name;
+   - `skip`: do not import the note.
 
-   Una fila sin `folder`, `fileName` ni `skip` se ignora. Las notas sin asignar van a `/importado/`, que solo ve admin.
-4. Crea cada documento como **servicio** con `documents.new`:
-   - frontmatter con el título y la fecha original (`createdAt`);
-   - el autor original en el `message` de la versión 1;
-   - ids deterministas, así que reimportar no duplica.
-5. Baja cada imagen del Space público y la sube como adjunto a través de `files.*` de core (decisión D-3).
-6. Reescribe los enlaces:
-   - imágenes a `{JIKU_WEB_URL}/docs/attachments/{id}`;
-   - enlaces entre notas a `{JIKU_WEB_URL}/docs/{id}`.
-7. Corre el detector de secretos. El informe en `.local/` lista regla y línea, nunca el valor.
-8. Tiene `--dry-run`. Una reimportación saltea los adjuntos ya subidos y marca `unchanged` las notas sin cambios.
+   A row without `folder`, `fileName` or `skip` is ignored. Unassigned notes go to `/imported/`, which only admin sees.
+4. It creates each document as a **service** with `documents.new`:
+   - frontmatter with the title and the original date (`createdAt`);
+   - the original author in the `message` of version 1;
+   - deterministic ids, so reimporting does not duplicate.
+5. It downloads each image from the public Space and uploads it as an attachment through core's `files.*` (decision D-3).
+6. It rewrites the links:
+   - images to `{JIKU_WEB_URL}/docs/attachments/{id}`;
+   - links between notes to `{JIKU_WEB_URL}/docs/{id}`.
+7. It runs the secret detector. The report in `.local/` lists rule and line, never the value.
+8. It has `--dry-run`. A reimport skips the attachments already uploaded and marks unchanged notes as `unchanged`.
 
-**Relaciones y temas (commit `e32cb09`; todavía sin reimportar en local).**
+**Relations and topics (commit `e32cb09`; not yet reimported locally).**
 
-- **Columnas nuevas de la planilla**, después de `skip`:
-  - `projects`, `clients`, `requirements` y `tasks`: ids separados por `;` o `,`;
-  - `topics`: temas separados por `;`.
-- **Dónde se escriben:** el importador los vuelca al bloque `jiku:` y a `topics` del frontmatter de la versión 1. Sin relaciones, **ninguna nota importada aparece en la card "Documentación"** de la ficha de proyecto, requisito o tarea: las relaciones salen solo del frontmatter (especificación, sección 3). La importación local del 2026-10-24 se hizo antes de este cambio, así que no tiene ninguna.
-- **Ids inexistentes:** una relación con un id que no existe en Jiku se descarta y la nota se importa igual. El descarte queda en la columna `droppedRelations` del informe.
-- **Validación previa:** `--dry-run --check-relations` valida los ids contra core sin escribir nada.
-- **Reimportación:** una nota con contenido nuevo se actualiza (`updated`) solo si la última versión la escribió el importador. Si alguien la editó en jiku-docs, queda `exists` y no se pisa.
+- **New sheet columns**, after `skip`:
+  - `projects`, `clients`, `requirements` and `tasks`: ids separated by `;` or `,`;
+  - `topics`: topics separated by `;`.
+- **Where they are written:** the importer puts them into the `jiku:` block and into `topics` of the version 1 frontmatter. Without relations, **no imported note appears in the "Documentación" (documentation) card** of the project, requirement or task page: relations come only from the frontmatter (specification, section 3). The local import of 2026-10-24 was done before this change, so it has none.
+- **Non-existent ids:** a relation with an id that does not exist in Jiku is dropped and the note is imported anyway. The drop is recorded in the `droppedRelations` column of the report.
+- **Prior validation:** `--dry-run --check-relations` validates the ids against core without writing anything.
+- **Reimport:** a note with new content is updated (`updated`) only if the last version was written by the importer. If someone edited it in jiku-docs, it stays `exists` and is not overwritten.
 
-Dry-run con la planilla actual: 1.709 notas en total.
+Dry-run with the current sheet: 1,709 notes in total.
 
-| Cobertura | Notas |
+| Coverage | Notes |
 | --- | --- |
-| Con proyecto | 1.175 |
-| Con cliente | 931 (el cliente se dedujo por el prefijo del nombre del proyecto, porque casi ningún proyecto de Jiku tiene `client_id`) |
-| Con temas | 1.409 |
-| Con requisitos o tareas | ninguna |
-| Relaciones descartadas | 0 |
+| With a project | 1,175 |
+| With a client | 931 (the client was inferred from the prefix of the project name, because almost no Jiku project has a `client_id`) |
+| With topics | 1,409 |
+| With requirements or tasks | none |
+| Dropped relations | 0 |
 
-La planilla anterior quedó en `.local/hedgedoc-mapping.prev.csv`.
+The previous sheet was kept in `.local/hedgedoc-mapping.prev.csv`.
 
-## 4. Árbol de carpetas y permisos usados en la prueba local
+## 4. Folder tree and permissions used in the local test
 
-El árbol se organiza por **quién debe ver**, no por tema (especificación, sección 3).
+The tree is organised by **who should see**, not by topic (specification, section 3).
 
-| Carpeta | Permisos | Marcas |
+| Folder | Permissions | Flags |
 | --- | --- | --- |
-| `/infra/` | `admin: manage`, `user: read`; sin herencia | `externalBlocked`, `sharingBlocked` |
-| `/interno/` | `user: write` | `sharingBlocked` |
-| `/buenas-practicas/` | `user: write` | — |
-| `/clientes/<cliente>/<proyecto>/{reuniones,tecnico}/` | `user: write` (heredado de `/clientes/`) | — |
-| `/importado/` | solo `admin: manage`; sin herencia | — |
+| `/infra/` | `admin: manage`, `user: read`; no inheritance | `externalBlocked`, `sharingBlocked` |
+| `/internal/` | `user: write` | `sharingBlocked` |
+| `/best-practices/` | `user: write` | — |
+| `/clients/<client>/<project>/{meetings,technical}/` | `user: write` (inherited from `/clients/`) | — |
+| `/imported/` | only `admin: manage`; no inheritance | — |
 
-El importador crea las carpetas que faltan **heredando los permisos del padre**. Por eso hay que crear antes la estructura raíz con sus permisos.
+The importer creates the missing folders **inheriting the parent's permissions**. That is why the root structure has to be created beforehand with its permissions.
 
-## 5. Clasificación usada en la primera pasada
+(The folder names are given in English, as the tree will be created for the real migration; the local test and the mapping sheet in `.local/` used the Spanish equivalents: `/interno/`, `/buenas-practicas/`, `/clientes/`, `reuniones`, `tecnico`, `/importado/`.)
 
-Reglas por palabras clave sobre el título (o el primer encabezado), aplicadas en este orden:
+## 5. Classification used in the first pass
 
-1. Temas sensibles (sueldos, despidos, costos) → `/importado/`.
-2. Comunicación, marca y web → `/interno/comunicacion/`.
-3. Infra (accesos, servidores, runbooks) → `/infra/...`, aunque sea de un cliente.
-4. Grava Workflow → `/buenas-practicas/grava-workflow/`.
-5. Cliente o proyecto de Jiku nombrado en el título → `/clientes/<cliente>/<proyecto>/{reuniones|tecnico}/`.
-6. Proyectos internos → `/interno/proyectos/<proyecto>/`.
-7. Plantillas, estándares y guías → `/buenas-practicas/`.
-8. Equipo, administración, procesos, comercial → su carpeta en `/interno/`.
-9. Sin coincidencia por título: el proyecto que más aparece en el contenido.
-10. Resto → `/importado/`.
+Keyword rules on the title (or the first heading), applied in this order:
 
-Las notas con posible secreto nunca van a carpetas de clientes: van a `/infra/` o `/importado/`.
+1. Sensitive topics (salaries, layoffs, costs) → `/imported/`.
+2. Communication, brand and web → `/internal/communication/`.
+3. Infra (access, servers, runbooks) → `/infra/...`, even if it belongs to a client.
+4. Grava Workflow → `/best-practices/grava-workflow/`.
+5. Jiku client or project named in the title → `/clients/<client>/<project>/{meetings|technical}/`.
+6. Internal projects → `/internal/projects/<project>/`.
+7. Templates, standards and guides → `/best-practices/`.
+8. Team, administration, processes, sales → their folder in `/internal/`.
+9. No match by title: the project that appears most in the content.
+10. Rest → `/imported/`.
 
-Resultado de esa pasada:
+Notes with a possible secret never go to client folders: they go to `/infra/` or `/imported/`.
 
-| Destino | Notas | Confianza alta | media | baja |
+Result of that pass:
+
+| Destination | Notes | High confidence | medium | low |
 | --- | ---: | ---: | ---: | ---: |
-| `/clientes/` (31 clientes) | 861 | 706 | 78 | 77 |
-| `/interno/` | 403 | 252 | 139 | 12 |
-| `/importado/` | 193 | 0 | 9 | 184 |
+| `/clients/` (31 clients) | 861 | 706 | 78 | 77 |
+| `/internal/` | 403 | 252 | 139 | 12 |
+| `/imported/` | 193 | 0 | 9 | 184 |
 | `/infra/` | 175 | 65 | 97 | 13 |
-| `/buenas-practicas/` | 77 | 7 | 68 | 2 |
-| **Total** | **1.709** | **1.030** | **391** | **288** |
+| `/best-practices/` | 77 | 7 | 68 | 2 |
+| **Total** | **1,709** | **1,030** | **391** | **288** |
 
-Hay 39 notas con `sugerir_skip` (casi vacías o solo imágenes) que no se marcaron como `skip`.
+There are 39 notes with `sugerir_skip` (suggest skip; almost empty or only images) that were not marked as `skip`.
 
-## 6. Prueba local realizada
+## 6. Local test performed
 
-La importación local terminó sin errores: 1.709 notas en 9 min, 1.879 de 1.880 imágenes, y los conteos coinciden con la planilla en las 118 carpetas.
+The local import finished without errors: 1,709 notes in 9 min, 1,879 of 1,880 images, and the counts match the sheet in the 118 folders.
 
-Verificado:
-- autor y fecha originales;
-- enlaces reescritos;
-- búsqueda respetando permisos;
-- reimportación idempotente.
+Verified:
+- original author and date;
+- rewritten links;
+- search respecting permissions;
+- idempotent reimport.
 
-**Lo que salió mal:** sin relaciones con Jiku (ver sección 3).
+**What went wrong:** no relations with Jiku (see section 3).
 
-## 7. Riesgos y tareas previas a la migración real
+## 7. Risks and tasks before the real migration
 
-- **Rotar credenciales:** hay que rotar las credenciales de las 104 notas marcadas. Fueron públicas en HedgeDoc. El informe del dry-run indica la nota, la regla y la línea.
-- **Imágenes públicas:** siguen accesibles en el Space mientras no se cierre. Decidir si se cierra o se borra después de migrar.
-- **Apagado de HedgeDoc:** definir fecha, si queda en solo lectura un tiempo y si se redirigen las URLs viejas (`docs.grava.io/<id>`) a los documentos nuevos.
-- **Clientes sin cargar en Jiku:** 26 de los 31 clientes de la planilla no existen en Jiku. En Jiku solo están EXO, Verifarma, Chiatib, Tesisler y Grava. Sus notas no se pueden vincular hasta que existan.
+- **Rotate credentials:** the credentials of the 104 flagged notes have to be rotated. They were public in HedgeDoc. The dry-run report indicates the note, the rule and the line.
+- **Public images:** they remain accessible in the Space as long as it is not closed. Decide whether it is closed or deleted after migrating.
+- **HedgeDoc shutdown:** define the date, whether it stays read-only for a while, and whether the old URLs (`docs.grava.io/<id>`) are redirected to the new documents.
+- **Clients not loaded in Jiku:** 26 of the 31 clients in the sheet do not exist in Jiku. Only EXO, Verifarma, Chiatib, Tesisler and Grava are in Jiku. Their notes cannot be related until they exist.
 
-## 8. Preguntas abiertas
+## 8. Open questions
 
-1. **Clasificación:**
-   - **Opción A:** un agente lee cada nota y propone carpeta, proyecto, cliente y temas, con una justificación. Más preciso, pero más lento y costoso.
-   - **Opción B:** corregir las reglas por palabras clave.
-   - En los dos casos, ¿quién revisa las 679 notas de confianza media o baja?
-2. **Clientes que no están en Jiku:** ¿se cargan en Jiku antes de migrar, o esas notas quedan solo por carpeta, sin vínculo?
-3. **Estructura de carpetas:** ¿se mantiene el árbol de la sección 4? ¿Qué subcarpetas por proyecto (`reuniones`, `tecnico`, otras)?
-4. **Descarte:**
-   - ¿Qué se hace con las 39 notas casi vacías?
-   - ¿Y con las ~10.290 anónimas (spam)? Una opción es ignorarlas y borrarlas con HedgeDoc.
-5. **Nombres de archivo:** ¿el título de la nota en kebab-case, o se conserva el título original?
-6. **Visibilidad:** ¿alguna nota migrada debe quedar `public` para clientes externos, o todas `internal` y se publica después a mano?
-7. **Notas sensibles:** ¿qué se hace con las 6 notas de RRHH y sueldos que hoy van a `/importado/`?
-8. **Propuestas comerciales:** ¿las que quedaron en `/clientes/.../tecnico/` deben verlas los equipos de proyecto?
-9. **Autoría:** ¿alcanza con dejar el autor original en el mensaje de la versión 1? ¿O hay que mapear usuarios de HedgeDoc a usuarios de Jiku?
-10. **Los 13 enlaces sin resolver** entre notas: ¿se dejan como están o se corrigen a mano?
-11. **Procedimiento:** ¿la migración real va como servicio a la instancia productiva en un solo corte, o por tandas (un cliente por vez) con revisión de cada equipo?
+1. **Classification:**
+   - **Option A:** an agent reads each note and proposes folder, project, client and topics, with a justification. More precise, but slower and more costly.
+   - **Option B:** fix the keyword rules.
+   - In both cases, who reviews the 679 notes of medium or low confidence?
+2. **Clients not in Jiku:** are they loaded into Jiku before migrating, or do those notes stay by folder only, without a relation?
+3. **Folder structure:** is the tree of section 4 kept? Which subfolders per project (`meetings`, `technical`, others)?
+4. **Discarding:**
+   - What is done with the 39 almost empty notes?
+   - And with the ~10,290 anonymous ones (spam)? One option is to ignore them and delete them along with HedgeDoc.
+5. **File names:** the note title in kebab-case, or is the original title kept?
+6. **Visibility:** should any migrated note be `public` for external clients, or all `internal` and published later by hand?
+7. **Sensitive notes:** what is done with the 6 HR and salary notes that today go to `/imported/`?
+8. **Sales proposals:** should the project teams see the ones that ended up in `/clients/.../technical/`?
+9. **Authorship:** is it enough to leave the original author in the message of version 1? Or do HedgeDoc users have to be mapped to Jiku users?
+10. **The 13 unresolved links** between notes: are they left as they are or fixed by hand?
+11. **Procedure:** does the real migration go as a service to the production instance in a single cutover, or in batches (one client at a time) with a review by each team?
 
-## 9. Archivos (en `.local/`, no versionados)
+## 9. Files (in `.local/`, not versioned)
 
-| Archivo | Qué es |
+| File | What it is |
 | --- | --- |
-| `codimd-2026-10-24.sql` | Dump de HedgeDoc |
-| `hedgedoc-mapping.csv` | Planilla de mapeo con las columnas de revisión (`confianza`, `motivo`, `posible_secreto`, sugerencias de proyecto y cliente) |
-| `hedgedoc-mapping-resumen.md` | Conteos, reglas y la lista de notas con posible secreto |
-| `hedgedoc-import-*-report.csv` | Informes de dry-run, importación y reimportación |
+| `codimd-2026-10-24.sql` | HedgeDoc dump |
+| `hedgedoc-mapping.csv` | Mapping sheet with the review columns (`confianza` — confidence, `motivo` — reason, `posible_secreto` — possible secret, project and client suggestions) |
+| `hedgedoc-mapping-resumen.md` | Counts, rules and the list of notes with a possible secret |
+| `hedgedoc-import-*-report.csv` | Dry-run, import and reimport reports |
