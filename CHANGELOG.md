@@ -2,6 +2,37 @@
 
 Formato: [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/). Versionado: [SemVer](https://semver.org/lang/es/).
 
+## Política de versionado
+
+El servicio tiene un solo número de versión, el del tag `vX.Y.Z`. No está escrito en ningún archivo de
+código: el binario lo recibe al compilar (`ARG VERSION` del `Dockerfile`) y `jiku-docs version` lo
+imprime. Los contratos de `docs/apis/` tienen su propio `info.version`, que se mueve con cada cambio de
+forma y no con las releases; el bus además lleva el segmento `v1` en los subjects, que es lo que permite
+que consumidores viejos y nuevos convivan durante una migración.
+
+| Bump      | Cuándo |
+| --------- | ------ |
+| **major** | Un cambio incompatible en el contrato del bus (comandos, consultas, eventos, notificaciones), en el protocolo de módulos, o una migración de datos destructiva. |
+| **minor** | Funcionalidad nueva, compatible hacia atrás. |
+| **patch** | Arreglos y cambios internos sin efecto en ningún contrato. |
+
+El esquema de la base no se versiona aparte: las migraciones de `internal/store/migrations/` corren al
+arrancar (`serve` o `migrate`) y se espera que sean aditivas.
+
+### Cortar una release
+
+Se mueve `[Unreleased]` a una sección `## [X.Y.Z] - AAAA-MM-DD`, se commitea, se lleva a `main` y se
+taguea:
+
+```sh
+git tag vX.Y.Z && git push origin vX.Y.Z
+```
+
+Pushear el tag es lo que publica. `release.yml` verifica que el CHANGELOG tenga la sección del tag, corre
+vet, lint y la suite completa, y recién entonces publica `gravadigital/jiku-docs` en Docker Hub con los
+tags `X.Y.Z`, `X.Y` y `latest`. Un tag sin su sección falla antes de compilar nada. El paso a paso para
+agentes está en [CLAUDE.md](CLAUDE.md#cortar-una-release).
+
 ## [Unreleased]
 
 ### Security
