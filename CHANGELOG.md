@@ -35,189 +35,99 @@ agentes está en [CLAUDE.md](CLAUDE.md#cortar-una-release).
 
 ## [Unreleased]
 
-### Security
+## [1.0.0] - 2026-10-27
 
-- P-1, documentación sin carpetas (`docs/p1/servicio.md`, contratos 1.3.0): los permisos los deciden la clase del
-  caller y la visibilidad del documento, no la ACL de carpetas. Visibilidad nueva `restricted`: solo `admin` y
-  servicios; para un `user` o un externo no existe por ninguna vía (`list`, `count`, `get` con y sin `version`,
-  `search` y fragmentos, `changes`, `versions.list`, `topics.list` y sus conteos, `attachments.*`, `shares.*` incluida
-  la ruta pública de un link anterior, `docs-notify`, `suggest-relations`). Solo `admin` (o un servicio) pone o quita
-  `restricted` en `new`, `update`, `restore` y `relations.update`. Pasar a `restricted` revoca los links activos
-  (`revokeReason: restricted`), y un `restricted` no admite links (`sharing_blocked`).
-- Migración de datos de P-1, al arrancar y antes de atender, una sola vez: todo documento que un `user` no podía leer
-  con la ACL vigente pasa a `restricted`; todo `public` bajo un `externalBlocked` efectivo pasa a `internal`; cada
-  cambio es una versión del servicio con mensaje. A un externo, `clients`/`projects` de los ítems e
-  `include: [relations]` solo traen sus propios proyectos.
-
-### Changed
-
-- Personas internas (`admin`, `user`) leen y escriben todos los documentos `internal` y `public`, en cualquier carpeta;
-  marcar `public` ya no exige `manage`. Cualquier persona interna crea, lista y revoca links. `unlock` con `force`:
-  solo `admin` o servicio. `folders.*` (comandos): solo `admin` y servicios (`permission_denied` para un `user`); las
-  personas internas ven todas las carpetas. **Obsoletos, sin efecto:** reglas ACL (`acl.replace`, `inheritAcl`,
-  `include: [acl]`), `externalBlocked` y `sharingBlocked`.
-- `documents.new`: `folderId` y `fileName` opcionales; el servidor genera la carpeta de las relaciones
-  (`/clientes/<cliente>/<proyecto>/`, `/clientes/<cliente>/general/`, `/general/`) y el nombre desde el título. La
-  respuesta trae `folderId` y `fileName`.
-- `document_locked` trae `holderName` en `errorDetails`. Labels de visibilidad en `meta.describe`: Interno, Visible para
-  el cliente, Restringido.
-- Importador de HedgeDoc: las notas sin mapeo (`/importado/`) se importan `restricted`.
-- `access.changed` (sin detalle) a cada `user` cuando un documento pasa a `restricted`, y a los externos afectados
-  cuando deja de ser `public`.
+Primera versión. Módulo opcional de documentación markdown para Jiku, que reemplaza a HedgeDoc. Atiende por el bus
+NATS de Jiku, sin HTTP de negocio; los frontends llegan por la api de Jiku y las personas, agentes y servicios
+directo al bus (cliente oficial: `jiku-go`). Contratos en `docs/apis/`: comandos, consultas y eventos en 1.3.0,
+registro de módulos en 1.0.0.
 
 ### Added
 
-- Comando `documents.{id}.relations.update` (`{ baseVersion, add?, remove?, sessionId? }`): reescribe solo el bloque
-  `jiku:`, agrega el cliente de un proyecto agregado, versión con mensaje automático; idempotente.
-- Consulta `documents.suggest-relations` (`{ id }` → hasta 5 `{ projectId, clientId, score, reason }`; `projectId`
-  `null` en un candidato solo de cliente).
-- Filtros `hasProject`, `hasClient` y `hasTopic` en `documents.list` y `documents.search`; `projectMatch`
-  (`direct`/`indirect`) con `filter.projectId`; campos `createdByName`, `updatedByName`, `clients`, `projects`
-  (ítems de `list`, `get`, `search`), `authorName` (`versions.list`) y `lock.holderName`.
-- Migración `0005`: `restricted`, columnas de nombres, `revoke_reason = restricted`. Los nombres existentes se
-  completan desde core en segundo plano.
-- Contratos 1.3.0 (`jiku-docs-commands`, `-queries`, `-events`).
-
-### Fixed
-
-- JIKU-WEB-5: lo que una persona escribía desde la web quedaba sin nombre (`createdByName`, `updatedByName`,
-  `authorName`, `lock.holderName` en `null`; la web mostraba "Otra persona"), porque el `actor` de la api no trae
-  `name` ni `username`. Ahora el nombre se busca en `users.list` de core al escribir, y al leer se completa desde core
-  todo nombre `null` guardado (sin escribirlo), también en el `errorDetails.holderName` de `document_locked`. Es
-  best-effort: caché en memoria con TTL y, si core no responde, el nombre queda `null` sin fallar la operación. Sin
-  cambios de forma en los contratos.
-- El janitor dejaba de correr hasta reiniciar: si la sentencia que toma un advisory lock de sesión fallaba después de
-  concederlo (un `statement_timeout` con la base cargada), la conexión volvía al pool con el lock tomado y otro
-  componente (el outbox) la seguía usando; el `pg_try_advisory_lock` del janitor fallaba en silencio en cada vuelta.
-  Los locks de sesión (janitor, outbox, compactación, migraciones, P-1) pasan por `store.AdvisoryLock`: conexión
-  dedicada mientras dura la tarea, unlock en esa misma conexión (también ante error o panic) y, si la toma o la
-  liberación fallan, la conexión se cierra en vez de volver al pool. Las claves están centralizadas en
-  `internal/store/advisory.go`; el janitor registra el fallo de la toma.
-
-### Changed
-
-- Compactación del historial de versiones (`docs/compactacion-historial-v1.md`): un proceso diario (desde
-  `DOCS_HISTORY_COMPACTION_HOUR` en `DOCS_HISTORY_TIMEZONE`, una sola réplica por advisory lock) borra las
-  versiones intermedias viejas: todas las de menos de 24 h se conservan; hasta 30 días, la última de cada bloque
-  de edición; después, la última de cada día. Nunca borra la actual, la creación, restauraciones, versiones con
-  `message`, de `via: service` ni las fijadas por un link `pinned` activo. Las de `via: agent` no se protegen por
-  su origen. Además de los documentos con actividad nueva o con un link fijado que venció o se revocó, procesa
-  los que tienen alguna versión no protegida que cruzó el umbral de 24 h o el de 30 días desde su última
-  compactación (la sesión del día anterior se compacta en la corrida siguiente al cruce de 24 h). Los objetos
-  van a `papelera/` después del commit vía `pruned_objects`. Comando `jiku-docs history compact [--document <id>] [--dry-run]`. Migración `0003`: `kind` y `protected` en
-  `document_versions` (con backfill), `last_compacted_at` y `pruned_versions_count` en `documents`, tabla
-  `pruned_objects`.
-- Contratos 1.2.0: `documents.versions.list` devuelve `kind` (`create`, `update`, `restore`) y `protected`, y los
-  acepta como filtros (también en `meta.describe`); la numeración puede tener huecos. `documents.get` devuelve
-  `prunedVersionsCount` como campo base (no a externos).
-- Código de error `version_pruned` (`errorDetails`: `requestedVersion`, `previousAvailable`, `nextAvailable`) en
-  `documents.get` con `version`, `documents.{id}.restore` y `shares.new` con `mode: pinned`.
-- `PurgeOrphans` pasa a un barrido semanal y paginado (1.000 objetos por minuto) con cursor en `service_state`;
-  los objetos de versiones compactadas los mueve `pruned_objects`.
-- Papelera en lugar del versionado del bucket (DigitalOcean Spaces no confirma `NoncurrentVersionExpiration`):
-  todo objeto de contenido que borra el servicio (compactación, `PurgeOrphans`, purga de documentos borrados a
-  los 30 días) se copia a `papelera/<clave original>` y después se borra el original (`DeleteObjects` en
-  lotes). Una fila de `pruned_objects` se elimina recién cuando el objeto quedó en la papelera y el original
-  no existe; la copia guarda la fila de la versión como metadata (migración `0004`: `pruned_objects.version_row`).
-- `jiku-docs storage init` ya no activa el versionado: si el bucket lo tiene activado, lo suspende y lo avisa en
-  el log (las versiones viejas no se borran solas). Aplica y relee dos reglas de expiración por tiempo:
-  `uploads/` a 1 día y `papelera/` a `DOCS_TRASH_RETENTION_DAYS` (default 7). Ya no hay regla de versiones no
-  actuales.
-- Comando `jiku-docs storage restore-from-trash --key <clave> [--version-row]`: devuelve un objeto desde la
-  papelera y, con `--version-row`, vuelve a poner en el historial la versión compactada (protegida).
-- Variables `DOCS_HISTORY_*` y `DOCS_TRASH_RETENTION_DAYS`; métricas `docs_history_*` y
-  `docs_trash_objects_moved_total{source}`. El reporte de `history compact` informa `objectsTrashed` (antes
-  `objectsDeleted`).
+- **Servicio `jiku-docs` en Go 1.25** con dos servicios NATS micro y queue group propio: `jiku-docs-commands`
+  (19 comandos) y `jiku-docs-queries` (14 consultas). La identidad sale del subject, garantizada por el
+  auth-callout; clases de caller `person-internal`, `person-external`, `service` y la api de Jiku con `actor`
+  (`{ id, roles, name?, username?, email? }`).
+- **Documentos** con frontmatter, versiones, locks de edición y borrado lógico: `documents.new` (sin carpeta: la
+  ubicación la genera el servidor a partir de las relaciones y el título), `update`, `move`, `delete`, `restore`,
+  `lock`/`unlock`, subida de contenido grande por URL prefirmada (`request-content-upload`), `relations.update`
+  (reescribe solo el bloque `jiku:`, idempotente) y `suggest-relations` (hasta 5 proyectos o clientes sugeridos
+  por título y contenido).
+- **Lectura con la gramática de core**: filtros (escalar, lista, rango, un nivel de `or`), orden con `id` como
+  desempate, paginación keyset con presupuesto de bytes, `fields`, `include`, `count` y `meta.describe` derivado
+  de las mismas fichas que validan. Filtros `hasProject`, `hasClient` y `hasTopic`; `projectMatch`
+  (`direct`/`indirect`) con `filter.projectId`; ítems con `clients`, `projects`, `createdByName`,
+  `updatedByName`; `topics.list` con conteos.
+- **Búsqueda full-text** en PostgreSQL (`es_unaccent`), un resultado por documento con el mejor fragmento.
+- **Historial de versiones** (`documents.versions.list` con `kind`, `protected` y `authorName`) y **compactación
+  diaria**: se conservan todas las versiones de menos de 24 h, la última de cada bloque de edición hasta 30 días y
+  después la última de cada día. Nunca se compactan la actual, la creación, las restauraciones, las versiones con
+  mensaje, las de servicios ni las fijadas por un link activo. Error `version_pruned` al pedir una compactada;
+  `prunedVersionsCount` en `documents.get`. Comando `jiku-docs history compact [--document <id>] [--dry-run]`.
+- **Papelera** en el bucket: todo objeto que el servicio borra pasa por `papelera/` (7 días por defecto) y se
+  recupera con `jiku-docs storage restore-from-trash --key <clave> [--version-row]`. El bucket no usa versionado.
+- **Adjuntos** delegados en el servicio de archivos de core (`attachments.*`), con link estable
+  `{JIKU_WEB_URL}/docs/attachments/{id}`.
+- **Links compartidos** de solo lectura (`shares.*`, token `jds_`, modos `latest` y `pinned`), HTML sanitizado,
+  reintento idempotente de 5 min y auditoría de accesos con la IP en HMAC. Detector de secretos: aviso
+  `possible_secret_detected` y confirmación obligatoria para compartir.
+- **Eventos** por outbox transaccional hacia el stream JetStream `JIKU_DOCS_EVENTS` (`Nats-Msg-Id = eventId`):
+  `document.*`, `attachment.*`, `share.*`, `folder.*`. **Notificaciones** por persona en
+  `{instance}.{userId}.docs-notify.v1.*`, incluido `access.changed`. Feed de cambios `documents.changes` para
+  sincronizar.
+- **Nombres de autor** (`createdByName`, `updatedByName`, `authorName`, `lock.holderName`): los del actor o,
+  si no los trae, los de `users.list` de core, con caché en memoria; si core no responde quedan `null` sin
+  fallar la operación.
+- **Registro en el KV `JIKU_MODULES`** (clave `docs`) al estar listo, y `jiku-docs module deregister` para
+  desinstalar.
+- **Importador de HedgeDoc** (`jiku-docs import hedgedoc`): planilla de mapeo a carpetas y relaciones, temas desde
+  los `tags`, reescritura de enlaces entre notas, adjuntos, `--dry-run` y `--check-relations`, informe por nota y
+  reimportación idempotente que no pisa lo editado en jiku-docs. Las notas sin mapeo entran `restricted`.
+- **Operación**: subcomandos `serve`, `migrate`, `reindex`, `storage init`, `healthcheck` y `version`; logs JSON
+  sin contenido, métricas Prometheus, `/healthz`, `/readyz` y `/metrics`. Indexador (durable
+  `jiku-docs-indexer`), vencimiento de locks, purgas y revisión diaria de relaciones contra core.
+- Imagen `gravadigital/jiku-docs` (distroless, sin root), `docker-compose.local.yml` sobre el stack local de Jiku
+  y workflows de CI, imágenes dev y release.
 
 ### Security
 
-- Un externo (`person-external`) recibe `documents.get` sin frontmatter, en `content` y en `contentUrl`
-  (copia derivada bajo `renders/`): el frontmatter tiene ids internos de requisitos y tareas (D-11). En esa
-  respuesta y en `documents.versions.list`, `checksum` y `sizeBytes` son los del cuerpo que recibe.
-- Un externo ya no lee versiones anteriores de un documento público (`documents.get` con `version`, y
-  `documents.versions.list`): podían ser de cuando era `internal` y tener lo que se quitó para publicarlo.
-  Responde `document_not_found` sin `errorDetails` (antes traía `version`), y nunca `version_pruned`.
+- **Permisos por clase de caller y visibilidad**, deny-by-default. Las personas internas (`admin`, `user`) leen y
+  escriben todo lo `internal` y `public`; un externo solo lee lo `public` vinculado a los proyectos de sus
+  `project-permissions`. Lo que no se puede ver responde `*_not_found`, y nunca se concede acceso si core no
+  responde (`upstream_unavailable`).
+- **Visibilidad `restricted`**: solo `admin` y servicios. Para un `user` o un externo no existe por ninguna vía
+  (`list`, `count`, `get` con y sin `version`, `search` y fragmentos, `changes`, `versions.list`, `topics.list`,
+  `attachments.*`, `shares.*`, `docs-notify` ni `suggest-relations`). Solo `admin` o un servicio la ponen o la
+  quitan. Pasar un documento a `restricted` revoca sus links, y un `restricted` no admite links
+  (`sharing_blocked`).
+- Un externo recibe los documentos sin frontmatter (tiene ids internos de requisitos y tareas) y no puede leer
+  versiones anteriores, que podían ser de cuando el documento era `internal`.
+- Ni contenido, ni tokens, ni URLs prefirmadas en logs o eventos.
 
-### Added
+### Deprecated
 
-- Importador de HedgeDoc: columnas `projects`, `clients`, `requirements`, `tasks` y `topics` en la planilla;
-  la versión 1 sale con el bloque `jiku:` y los temas en el frontmatter, fusionados con los que ya tenga. Ante
-  `invalid_relation` la nota se reintenta sin esa relación y el informe la registra (`droppedRelations`);
-  `--dry-run --check-relations` las valida contra core antes de importar. El resumen cuenta notas con
-  proyecto, cliente, requisito, tarea y temas.
-- La reimportación actualiza con `documents.{id}.update` (estado `updated`) las notas cuyo contenido cambió
-  mientras la última versión sea del importador; las editadas, movidas o borradas en jiku-docs no se pisan.
-- Servicio `jiku-docs` en Go 1.25: servicios NATS micro `jiku-docs-commands` (18 comandos) y
-  `jiku-docs-queries` (13 consultas) con queue group propio, identidad desde el subject, clases de caller
-  (`person-internal`, `person-external`, `service`, la `api` con `actor`), ACL heredable por carpeta,
-  validación deny-by-default y `*_not_found` para lo no visible.
-- Gramática de lectura de core: filtros (escalar, lista, rango, un nivel de `or`), orden con `id` como
-  desempate, paginación keyset con presupuesto de bytes, `fields`, `include`, `count` y `meta.describe`
-  derivado de las mismas fichas que validan.
-- PostgreSQL 16 propio con migraciones embebidas y búsqueda full-text `es_unaccent` (coincidencia por
-  documento, mejor fragmento como snippet).
-- Outbox (LISTEN/NOTIFY + barrido de 5 s) hacia JetStream `JIKU_DOCS_EVENTS` (creado idempotente,
-  `Nats-Msg-Id = eventId`) y notificaciones `docs-notify` por persona con `read`.
-- Indexador (durable `jiku-docs-indexer`), vencimiento de locks, purgas y revisión diaria de relaciones.
-- Adjuntos delegados en el servicio de archivos de core (D-3); bucket S3 propio solo para contenido (D-4).
-- Links compartidos con token `jds_`, reintento idempotente de 5 min (token cifrado), HTML sanitizado,
-  auditoría de accesos con IP en HMAC.
-- Detector de secretos (aviso `possible_secret_detected`, confirmación obligatoria para compartir).
-- Registro en el KV `JIKU_MODULES` (clave `docs`) y `jiku-docs module deregister`.
-- Subcomandos `migrate`, `reindex`, `storage init`, `healthcheck` e `import hedgedoc` (D-9).
-- Logs JSON sin contenido, métricas Prometheus, `/healthz` y `/readyz`.
-- Dockerfile (distroless, no root), `docker-compose.local.yml` sobre la red `jiku-local_jiku`, `.env.dist`
-  y workflows de CI, imágenes dev y release (`gravadigital/jiku-docs`).
-- Tests unitarios, de contrato y de integración (PostgreSQL 16 y MinIO reales, NATS embebido, doble de core).
+- **ACL de carpetas**: `folders.acl.replace`, `inheritAcl`, `include: [acl]`, `externalBlocked` y
+  `sharingBlocked` siguen en el contrato pero no tienen efecto: los permisos los decide la visibilidad. Las
+  carpetas solo ordenan los archivos (CLI y sync); `folders.*` es solo para `admin` y servicios.
 
-### Changed (contratos 1.0.0 → 1.1.0)
+### Notas para instalaciones nuevas
 
-- `jiku-docs-queries.yaml`
-  - `meta.describe` acepta `resources` (como core): omitido describe todos, vacío o desconocido es `invalid_fields`.
-  - Filtro `path` (exacto, sin distinguir mayúsculas) en `documents.list` y `folders.list`; en carpetas
-    acepta la ruta con o sin `/` final y `"/"` trae la raíz.
-  - Formato de rutas fijado: la `path` de una carpeta empieza y termina con `/`; la de un documento es la de
-    su carpeta más el nombre de archivo.
-  - `documents.changes`: `nextSeq` es el último seq examinado o `sinceSeq` si no hubo nada; `sinceSeq: 0`
-    nunca responde `invalid_cursor`; cada item lleva `checksum`.
-  - `shares.resolve` / `shares.attachment` aceptan `client: { ip, userAgent }` para la auditoría de accesos
-    (la especificación pide IP en hash y agente de usuario, que solo la api conoce); un token mal formado
-    responde `share_not_found`, como cualquier link inválido.
-  - `folders.get` con `include: [acl]` sin `manage` responde `permission_denied`.
-  - `page.limit` mayor a 200 se recorta en silencio (como core) en vez de ser inválido.
-  - Notas: los externos no ven carpetas; `documents.search` devuelve un resultado por documento;
-    `documents.get` con `version` devuelve los metadatos de esa versión.
-  - `Actor` (D-11): `{ id, roles, name?, username?, email? }` (`id` y `roles` obligatorios), el mismo sobre
-    que la api manda a core. La clase de la persona y las reglas ACL por rol salen de `actor.roles`; la api
-    con `actor` ya no consulta `users.list` (un usuario web que solo lee tenía roles viejos en el espejo de
-    core). Un `actor` sin `roles` es `invalid_fields`; con roles sin producto, `caller_not_authorized`
-    (antes, un id sin fila en `users` era `unknown_caller`).
-  - Nota: un externo recibe `documents.get` sin frontmatter; `checksum`/`sizeBytes` de esa respuesta son
-    los del cuerpo. En `documents.list`, `documents.changes` y eventos, `checksum` identifica la versión guardada.
-- `jiku-docs-commands.yaml`
-  - `Actor` (D-11): mismo esquema que en consultas; autoría siempre `actor.id`.
-  - `link` de adjuntos: `{JIKU_WEB_URL}/docs/attachments/{id}` (D-5).
-  - Adjuntos delegados en core (D-3): `attachments_not_configured` ya no figura en las operaciones;
-    se agregan `upstream_unavailable` y, en `confirm`, `permission_denied`.
-  - `via` de servicios: siempre `service` en versiones y eventos; en `documents.lock` el `via` del lock se
-    guarda tal como llega.
-  - Subida de contenido: el `PUT` prefirmado no firma `Content-Type` (recomendado `text/markdown`).
-  - `shares.new`: `version` con `mode: latest` es `invalid_fields`.
-- `jiku-docs-events.yaml`
-  - `docs-events` y `docs-notify` son subjects fijos, no derivan de `serviceName`.
-  - `folder.updated` también se notifica como `access.changed`.
-  - `changes.reason` (`released` / `forced` / `expired`) en `document.unlocked`; `changes.folderId` en
-    `document.moved`; `snapshot.sharingBlocked` en eventos de carpeta.
-- `jiku-modules.yaml`: `serviceName` solo nombra los servicios micro; permisos de lectura/observación del KV
-  que necesitan los lectores.
-- `especificacion-v1.md`: los links de adjuntos usan `JIKU_WEB_URL` (D-5).
+No hay instalaciones anteriores. Para instalar:
 
-### Decisiones de implementación
-
-- Quien crea una carpeta sin herencia (o la apaga) conserva una regla `manage` explícita, para evitar
-  carpetas inalcanzables.
-- `documents.{id}.move` no crea versión nueva (el contenido no cambia); la respuesta trae la versión actual.
-- Carpetas con borrado lógico (para que borrar dos veces sea `success`).
-- El importador omite por defecto las notas anónimas de HedgeDoc (spam) salvo que estén mapeadas.
-- En una reimportación de HedgeDoc las notas ya importadas figuran `unchanged` y los adjuntos ya confirmados
-  no se vuelven a descargar (la primera corrida real tardó 9 min y la segunda 7 solo por re-descargar).
+- **Requiere una versión de Jiku que todavía no está publicada**: la de la rama `feat/jiku-docs` del repo de
+  Jiku (REQ-016 a REQ-022). Core tiene que exponer `roles` e `identityType` en `users.list` a los conectores y no
+  purgar los `files` sin vínculo; el auth-callout necesita la regla `match: docs` con su plantilla; la api y la
+  web traen las pantallas de documentación. Detalle en "Requisitos en Jiku" del README.
+- **Zitadel**: crear el rol `docs` en el proyecto y un machine user (Access Token Type JWT) con los roles
+  `internal-app` y `docs`; su JSON key va en `DOCS_SERVICE_USER_KEY_B64` (o `_FILE`).
+- **Infraestructura propia**: un PostgreSQL 16 (`DATABASE_URL`; las migraciones corren solas al arrancar) y un
+  bucket S3 para el contenido (en producción, un Space de DigitalOcean con `DOCS_S3_FORCE_PATH_STYLE=false`).
+  Correr `jiku-docs storage init` una vez para crearlo y aplicar las reglas de ciclo de vida.
+- **Variables obligatorias** para `serve`: `NATS_CREDS`, `ZITADEL_PROJECT_ID`, `DOCS_SERVICE_USER_KEY_B64` (o
+  `_FILE`), `JIKU_API_USER_ID` (el `sub` del service user de la api de Jiku), `JIKU_WEB_URL`, `JIKU_PUBLIC_URL`,
+  `DATABASE_URL`, `DOCS_S3_ENDPOINT`, `DOCS_S3_BUCKET`, `DOCS_S3_ACCESS_KEY`, `DOCS_S3_SECRET_KEY` y
+  `DOCS_SECRET_KEY` (32 bytes en base64: `openssl rand -base64 32`). Todas, con las opcionales, en `.env.dist`.
+- El KV `JIKU_MODULES` lo crea el despliegue de Jiku; sin él jiku-docs arranca igual pero la web y los clientes
+  no lo ven instalado.
+- La primera vez que jiku-docs se conecta a una base de Jiku nueva, core puede rechazar su primera consulta
+  mientras crea la ficha del usuario de servicio; el arranque sigue y al reiniciar queda bien.
